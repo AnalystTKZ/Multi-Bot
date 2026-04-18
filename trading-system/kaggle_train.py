@@ -15,9 +15,17 @@ Then in the next cell:
 
     %run /kaggle/working/Multi-Bot/trading-system/kaggle_train.py
 
-== ON KAGGLE, ONLY STEPS 5-8 RUN ==
-Steps 0-4 produce processed_data/ which is already committed to the repo.
-The pipeline skips any step whose done-check output already exists.
+== DATA SOURCES (split-dataset setup) ==
+Two Kaggle datasources are merged at runtime:
+  1. GitHub clone (this file)   — code only, no raw data
+  2. Kaggle dataset             — training_data/ + processed_data/ (read-only mount)
+
+Steps 0-5 are skipped when their outputs already exist in the mounted dataset.
+Steps 7a, 6, 7b always re-run (training + backtest + quality/RL retraining).
+
+All constructed outputs (weights, logs, journals, backtest results) are saved to
+trading-engine/weights/ and trading-engine/logs/ inside the working clone, then
+copied back to /kaggle/working/outputs/processed_data/ for dataset update.
 """
 from __future__ import annotations
 import os
@@ -51,10 +59,20 @@ if env["on_kaggle"]:
 label = "KAGGLE" if env["on_kaggle"] else "LOCAL"
 print(f"Environment : {label}")
 print(f"  base      -> {env['base']}")
+print(f"  data      -> {env['data']}")
 print(f"  processed -> {env['processed']}")
 print(f"  ml_train  -> {env['ml_training']}")
 print(f"  weights   -> {env['weights']}")
 print(f"  output    -> {env['output']}")
+if env["on_kaggle"]:
+    import os as _os
+    kaggle_input = env["base"].parent.parent.parent / "input"  # /kaggle/input
+    if not kaggle_input.exists():
+        kaggle_input = Path("/kaggle/input")
+    print(f"  kaggle/input -> {kaggle_input}")
+    if kaggle_input.exists():
+        for d in sorted(kaggle_input.iterdir()):
+            print(f"    dataset: {d.name}  (has training_data={( d / 'training_data').exists()}, processed_data={(d / 'processed_data').exists()})")
 
 # Verify pipeline scripts exist
 pipeline_dir = env["pipeline"]
@@ -67,20 +85,27 @@ missing_scripts = [s for s in required_scripts if not (pipeline_dir / s).exists(
 if missing_scripts:
     raise FileNotFoundError(f"Missing pipeline scripts: {missing_scripts}")
 
-# Verify required input data
+# Verify required input data — histdata parquets are the only hard requirement.
+# train.parquet is built by step 5 (not pre-existing). Macro CSVs are optional.
 required_data = [
     env["processed"] / "histdata" / "EURUSD_5M.parquet",
     env["processed"] / "histdata" / "XAUUSD_1D.parquet",
-    env["ml_training"] / "datasets" / "train.parquet",
-    env["base"] / "training_data" / "indices" / "VIX_1d.csv",
-    env["base"] / "training_data" / "fundamental" / "macro_releases.csv",
 ]
 missing_data = [p for p in required_data if not p.exists()]
 if missing_data:
-    print("\nMissing required data:")
+    print("\nMissing required histdata parquets (provide via Kaggle dataset):")
     for p in missing_data:
         print(f"  {p}")
-    raise FileNotFoundError("Required data files not found.")
+    raise FileNotFoundError("Required histdata parquets not found.")
+
+# Optional data — warn but continue if absent
+optional_data = [
+    env["data"] / "indices" / "VIX_1d.csv",
+    env["data"] / "fundamental" / "macro_releases.csv",
+]
+for p in optional_data:
+    if not p.exists():
+        print(f"  WARNING: optional file missing (macro features reduced): {p}")
 
 print("\nAll scripts and inputs verified.")
 
@@ -128,13 +153,28 @@ for step_name, script_file, done_check in PIPELINE_STEPS:
 
 print("\n=== Pipeline complete ===")
 
-# Copy weights to /kaggle/working for download after session
-output_weights = env["output"] / "trained_weights"
-if env["weights"].exists():
-    shutil.copytree(env["weights"], output_weights, dirs_exist_ok=True)
-    print(f"Weights saved to: {output_weights}")
+# ── Save outputs to dataset update directory ─────────────────────────────────
+# Copy weights + logs into /kaggle/working/outputs/processed_data/
+# so they can be uploaded as a new version of the Kaggle dataset.
+if env["on_kaggle"]:
+    save_root = env["output"] / "outputs" / "processed_data"
+    save_root.mkdir(parents=True, exist_ok=True)
+
+    if env["weights"].exists():
+        shutil.copytree(str(env["weights"]), str(save_root / "weights"), dirs_exist_ok=True)
+        print(f"Weights saved to: {save_root / 'weights'}")
+
+    engine_logs = env["engine"] / "logs"
+    if engine_logs.exists():
+        shutil.copytree(str(engine_logs), str(save_root / "logs"), dirs_exist_ok=True)
+        print(f"Logs saved to: {save_root / 'logs'}")
+
+    print(f"\nDataset update bundle: {save_root}")
+    print("Download /kaggle/working/outputs/ and re-upload as the dataset version.")
 else:
-    print("No weights directory found after training.")
+    # Local: just report weights location
+    if env["weights"].exists():
+        print(f"Weights at: {env['weights']}")
 
 # ── Step 8: Push training outputs to GitHub ───────────────────────────────────
 push_script = env["base"] / "step8_push_to_github.py"
