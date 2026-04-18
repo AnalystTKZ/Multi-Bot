@@ -1,0 +1,55 @@
+# Core
+pandas>=2.1.0
+numpy>=1.26.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Async + HTTP
+aiohttp>=3.9.0
+httpx>=0.26.0
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Redis
+redis>=5.0.0
+
+# Data
+yfinance>=0.2.36
+# pandas-ta not required on Python 3.11+ (indicators built in-house in market_structure.py)
+
+# ML — Gradient Boosting
+lightgbm>=4.3.0
+xgboost>=2.0.3
+scikit-learn>=1.4.0
+
+# Vector similarity search (embedding index in VectorStore)
+# CPU wheel for Docker engine container.
+# On Kaggle T4 use faiss-gpu instead: conda install -c pytorch faiss-gpu
+faiss-cpu>=1.8.0
+
+# ML — Deep Learning (GRU-LSTM) — PyTorch CPU only (replaces tensorflow-cpu, ~700MB vs ~1.5GB)
+# Install via: pip install torch --index-url https://download.pytorch.org/whl/cpu
+# The Dockerfile handles the index-url so pip resolves the CPU wheel, not CUDA.
+
+# ML — NLP Sentiment: FinBERT (ProsusAI/finbert) primary, VADER fallback
+# torch is already installed above (CPU wheel) — transformers reuses it, no CUDA pulled
+transformers>=4.40.0
+vaderSentiment>=3.3.2
+
+# RL
+stable-baselines3>=2.3.0
+gymnasium>=0.29.1
+
+# Scheduling + utilities
+apscheduler>=3.10.4
+pytz>=2024.1
+
+# Monitoring
+prometheus-client>=0.20.0
+
+# Broker
+requests>=2.31.0
+
+# Logging
+structlog>=24.1.0

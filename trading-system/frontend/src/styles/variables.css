@@ -1,0 +1,17 @@
+:root {
+  --bg-primary: #0b1220;
+  --bg-secondary: #111a2e;
+  --bg-tertiary: #18243a;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5f5;
+  --accent: #26e0b8;
+  --accent-soft: rgba(38, 224, 184, 0.12);
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --success: #10b981;
+  --card-glow: 0 18px 45px rgba(16, 185, 129, 0.08);
+  --border-soft: rgba(148, 163, 184, 0.2);
+  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.4);
+  --font-heading: 'Space Grotesk', sans-serif;
+  --font-body: 'IBM Plex Sans', sans-serif;
+}

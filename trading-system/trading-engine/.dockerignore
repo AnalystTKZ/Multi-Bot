@@ -1,0 +1,36 @@
+# Version control
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node (shouldn't exist here but just in case)
+node_modules/
+modules/
+
+# Logs
+logs/
+*.log
+
+# Training & research — not needed at runtime
+training_data/
+backtest_results/
+
+
+# Test files
+tests/
+*_test.py
+test_*.py

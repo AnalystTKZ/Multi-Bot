@@ -1,0 +1,25 @@
+# Local tooling
+.git
+.gitignore
+.claude/
+.env
+.env.*
+
+# Dependency folders
+node_modules/
+modules/
+.venv/
+venv/
+
+# Build and cache output
+dist/
+build/
+coverage/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+logs/
+*.log

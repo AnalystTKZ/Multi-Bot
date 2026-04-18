@@ -1,0 +1,64 @@
+{
+  "completed_at": "2026-04-18T13:03:23.573709+00:00",
+  "n_rounds": 3,
+  "bt_start": "2021-01-01",
+  "bt_end": "2024-08-27",
+  "rounds": [
+    {
+      "total_trades": 2712,
+      "avg_win_rate": 0.455,
+      "avg_profit_factor": 1.988,
+      "avg_sharpe": 3.502,
+      "traders": {
+        "ml_trader": {
+          "trades": 2712,
+          "win_rate": 0.455,
+          "profit_factor": 1.988,
+          "total_return": 20.0656,
+          "max_drawdown": 0.0272,
+          "sharpe": 3.502
+        }
+      },
+      "round": 1
+    },
+    {
+      "total_trades": 2722,
+      "avg_win_rate": 0.4493,
+      "avg_profit_factor": 1.931,
+      "avg_sharpe": 3.425,
+      "traders": {
+        "ml_trader": {
+          "trades": 2722,
+          "win_rate": 0.4493,
+          "profit_factor": 1.931,
+          "total_return": 18.0648,
+          "max_drawdown": 0.0245,
+          "sharpe": 3.425
+        }
+      },
+      "round": 2
+    },
+    {
+      "total_trades": 2769,
+      "avg_win_rate": 0.4485,
+      "avg_profit_factor": 1.929,
+      "avg_sharpe": 3.398,
+      "traders": {
+        "ml_trader": {
+          "trades": 2769,
+          "win_rate": 0.4485,
+          "profit_factor": 1.929,
+          "total_return": 18.0149,
+          "max_drawdown": 0.0245,
+          "sharpe": 3.398
+        }
+      },
+      "round": 3
+    }
+  ],
+  "improvement": {
+    "win_rate_delta": -0.0065,
+    "profit_factor_delta": -0.059,
+    "sharpe_delta": -0.104
+  }
+}

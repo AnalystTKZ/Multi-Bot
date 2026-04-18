@@ -1,0 +1,25 @@
+# Version control
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+
+# Dependencies — npm ci re-installs from package-lock.json
+node_modules/
+modules/
+
+# Build output — built fresh in the Docker build stage
+dist/
+build/
+
+# Test files — not needed at build/runtime
+tests/
+coverage/
+
+# Dev docs
+README.md
+
+# Logs
+*.log

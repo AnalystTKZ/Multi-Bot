@@ -1,0 +1,202 @@
+services:
+  # ==================== DATABASES ====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: trading_postgres
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./trading-engine/database/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - trading_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== CACHE ====================
+  redis:
+    image: redis:7-alpine
+    container_name: trading_redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - trading_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== BACKEND SERVICES ====================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trading_backend
+    environment:
+      BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
+      BACKEND_PORT: ${BACKEND_PORT:-3000}
+      PORT: ${BACKEND_PORT:-3000}
+      ENV: development
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      TRADING_ENGINE_URL: http://trading-engine:8000
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_EXPIRES_MINUTES: ${JWT_EXPIRES_MINUTES:-60}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./trading-engine/logs:/app/trading-engine/logs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - trading_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== TRADING ENGINE ====================
+  trading-engine:
+    build:
+      context: ./trading-engine
+      dockerfile: Dockerfile
+    container_name: trading_engine_main
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - PAPER_TRADING=${PAPER_TRADING:-true}
+      - LOG_LEVEL=INFO
+      - BROKER_API_KEY=${BROKER_API_KEY}
+      - BROKER_SECRET=${BROKER_SECRET}
+      - SMTP_SERVER=${SMTP_SERVER}
+      - SMTP_PORT=${SMTP_PORT}
+      - ALERT_EMAIL_USERNAME=${ALERT_EMAIL_USERNAME}
+      - ALERT_EMAIL_PASSWORD=${ALERT_EMAIL_PASSWORD}
+      - ALERT_FROM_EMAIL=${ALERT_FROM_EMAIL}
+      - ALERT_TO_EMAILS=${ALERT_TO_EMAILS}
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./trading-engine/logs:/app/logs
+      - ./trading-engine/config:/app/config:ro
+    networks:
+      - trading_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+  # ==================== FRONTEND ====================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000/api}
+        VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:3000}
+    container_name: trading_frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+    networks:
+      - trading_network
+
+  # ==================== CONTINUOUS LEARNING ====================
+<<<<<<< HEAD
+  # Retrain schedule:
+  #   Quality + RL  — every Sunday 02:00 UTC  (weekly,  warm-start fine-tune)
+  #   Regime + GRU  — 1st Sunday of month 03:00 UTC (monthly, warm-start fine-tune)
+  # Full cold-start retraining is done manually on Kaggle (step7a) when new data arrives.
+=======
+>>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
+  model-retrainer:
+    build:
+      context: ./trading-engine
+      dockerfile: Dockerfile
+    container_name: trading_model_retrainer
+    entrypoint: []
+    command: ["python", "/app/scripts/retrain_scheduler.py"]
+    environment:
+      - LOG_LEVEL=INFO
+<<<<<<< HEAD
+      # Weekly window: Quality + RL
+      - RETRAIN_QUALITY_DAY=${RETRAIN_QUALITY_DAY:-sunday}
+      - RETRAIN_QUALITY_HOUR=${RETRAIN_QUALITY_HOUR:-2}
+      # Monthly window: Regime + GRU (1st Sunday)
+      - RETRAIN_MONTHLY_HOUR=${RETRAIN_MONTHLY_HOUR:-3}
+      # Min journal entries before triggering retrain
+      - MIN_JOURNAL_QUALITY=${MIN_JOURNAL_QUALITY:-200}
+      - MIN_JOURNAL_RL=${MIN_JOURNAL_RL:-500}
+      # Check interval (seconds) — 15 min default
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-900}
+=======
+      - RETRAIN_DAY=${RETRAIN_DAY:-sunday}
+      - RETRAIN_HOUR=${RETRAIN_HOUR:-2}
+>>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ./trading-engine/weights:/app/weights
+      - ./trading-engine/logs:/app/logs
+<<<<<<< HEAD
+      # Regime + GRU monthly retrain needs processed OHLCV parquet files
+      - ./processed_data:/app/../processed_data:ro
+=======
+      - ./trading-engine/training_data:/app/training_data:ro
+>>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
+    networks:
+      - trading_network
+    depends_on:
+      trading-engine:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  trading_network:
+    driver: bridge

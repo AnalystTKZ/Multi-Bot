@@ -1,0 +1,45 @@
+{
+<<<<<<< HEAD
+  "trained_at": "2026-04-13T22:35:53.946417+00:00",
+  "models": {
+    "regime": {
+      "error": "timeout",
+=======
+  "trained_at": "2026-04-18T12:30:29.668199+00:00",
+  "models": {
+    "regime": {
+      "success": true,
+>>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
+      "model": "regime"
+    },
+    "gru": {
+      "success": true,
+<<<<<<< HEAD
+      "model": "gru",
+      "stdout": ""
+    },
+    "quality": {
+      "success": true,
+      "model": "quality",
+      "stdout": ""
+    },
+    "rl": {
+      "success": true,
+      "model": "rl",
+      "stdout": ""
+    },
+    "history": {
+      "records": 122
+    }
+  },
+  "journal_path": "/home/tybobo/Desktop/Multi-Bot/trading-system/trading-engine/logs/trade_journal_detailed.jsonl"
+=======
+      "model": "gru"
+    },
+    "history": {
+      "records": 5
+    }
+  },
+  "journal_path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/logs/trade_journal_detailed.jsonl"
+>>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
+}

@@ -1,0 +1,52 @@
+.app-shell {
+  display: flex;
+  min-height: 100dvh;
+  overflow: hidden;
+  color: var(--text-primary);
+}
+
+/* sidebar + main split */
+.layout-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.content-area {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px 20px 32px;
+}
+
+.auth-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.page-title {
+  font-size: 1.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.section-card {
+  background: rgba(17, 26, 46, 0.85);
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  padding: 16px;
+  box-shadow: var(--shadow-soft);
+}
+
+.soft-text {
+  color: var(--text-secondary);
+}
