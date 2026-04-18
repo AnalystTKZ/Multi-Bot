@@ -359,17 +359,10 @@ def run_retrain(round_num: int) -> dict:
         return {"error": f"retrain script not found: {script}"}
 
     # GRU excluded: trained on 7.4M sequences — fine-tuning on ~3k trades causes catastrophic forgetting.
-<<<<<<< HEAD
     # Regime and quality warm-start from existing weights (low LR), building on what was learned
     # from 7 years of data rather than re-initialising from scratch each round.
     results = {}
     for model in ["regime", "quality", "rl"]:
-=======
-    # Regime excluded: trained on 7-year full history — re-fitting on journal data degrades R3 performance.
-    # Only quality benefits from journal retraining (it directly learns from trade outcomes).
-    results = {}
-    for model in ["quality", "rl"]:
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
         logger.info("Round %d — retraining %s...", round_num, model)
         cmd = [sys.executable, str(script), "--model", model]
         try:
