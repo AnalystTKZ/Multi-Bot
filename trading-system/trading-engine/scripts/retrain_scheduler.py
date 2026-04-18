@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """
-<<<<<<< HEAD
 retrain_scheduler.py — Model retraining scheduler.
 
 Schedule (all times UTC):
@@ -21,12 +20,6 @@ Env vars:
   RETRAIN_RL_HOUR        UTC hour,     default: 2  (offset by 30 min in practice — same hour)
   RETRAIN_MONTHLY_HOUR   UTC hour,     default: 3
   CHECK_INTERVAL         seconds,      default: 900 (check every 15 min)
-=======
-retrain_scheduler.py — Pure Python weekly scheduler.
-
-Fires retrain_incremental.py every Sunday at 02:00 UTC.
-Runs as the model-retrainer container entrypoint.
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
 """
 
 from __future__ import annotations
@@ -37,7 +30,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-<<<<<<< HEAD
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -53,22 +45,12 @@ WEEKLY_DAY   = os.environ.get("RETRAIN_QUALITY_DAY", "sunday").lower()
 WEEKLY_HOUR  = int(os.environ.get("RETRAIN_QUALITY_HOUR", "2"))
 MONTHLY_HOUR = int(os.environ.get("RETRAIN_MONTHLY_HOUR", "3"))
 CHECK_SECS   = int(os.environ.get("CHECK_INTERVAL", "900"))
-=======
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("scheduler")
-
-RETRAIN_DAY = os.environ.get("RETRAIN_DAY", "sunday").lower()
-RETRAIN_HOUR = int(os.environ.get("RETRAIN_HOUR", "2"))
-CHECK_INTERVAL_SECONDS = 3600  # check every hour
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
 
 _DAY_MAP = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
     "friday": 4, "saturday": 5, "sunday": 6,
 }
 
-<<<<<<< HEAD
 MIN_JOURNAL_ENTRIES_QUALITY = int(os.environ.get("MIN_JOURNAL_QUALITY", "200"))
 MIN_JOURNAL_ENTRIES_RL      = int(os.environ.get("MIN_JOURNAL_RL",      "500"))
 
@@ -167,48 +149,6 @@ def main() -> None:
             _run("gru",    "GRU (monthly warm-start)")
 
         time.sleep(CHECK_SECS)
-=======
-
-def _should_retrain(now: datetime) -> bool:
-    """True if it's the scheduled retrain day and hour."""
-    target_day = _DAY_MAP.get(RETRAIN_DAY, 6)
-    return now.weekday() == target_day and now.hour == RETRAIN_HOUR
-
-
-def _run_retrain() -> None:
-    logger.info("Starting scheduled retrain (all models)")
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrain_incremental.py")
-    try:
-        result = subprocess.run(
-            [sys.executable, script, "--model", "all"],
-            capture_output=True, text=True, timeout=3600,
-        )
-        if result.returncode == 0:
-            logger.info("Retrain succeeded:\n%s", result.stdout[-2000:])
-        else:
-            logger.error("Retrain failed (rc=%d):\n%s", result.returncode, result.stderr[-2000:])
-    except subprocess.TimeoutExpired:
-        logger.error("Retrain timed out after 1 hour")
-    except Exception as exc:
-        logger.error("Retrain error: %s", exc)
-
-
-def main():
-    logger.info(
-        "Retrain scheduler started — will fire every %s at %02d:00 UTC",
-        RETRAIN_DAY, RETRAIN_HOUR,
-    )
-    last_fired_day = -1
-
-    while True:
-        now = datetime.now(timezone.utc)
-
-        if _should_retrain(now) and now.day != last_fired_day:
-            _run_retrain()
-            last_fired_day = now.day
-
-        time.sleep(CHECK_INTERVAL_SECONDS)
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
 
 
 if __name__ == "__main__":

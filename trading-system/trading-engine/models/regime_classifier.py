@@ -851,7 +851,6 @@ class RegimeClassifier(BaseModel):
             if len(X_tr) < 50 or len(X_va) < 10:
                 return {"error": "Not enough data after split"}
 
-<<<<<<< HEAD
             # ── Build/warm-start model ────────────────────────────────────────
             n_feat = X.shape[1]
             _feature_mismatch = (self._model is not None and self._n_features != n_feat)
@@ -870,17 +869,6 @@ class RegimeClassifier(BaseModel):
             if DEVICE.type == "cuda" and torch.cuda.device_count() > 1:
                 if not isinstance(self._model, torch.nn.DataParallel):
                     self._model = torch.nn.DataParallel(self._model)
-=======
-            # ── Build/reset model ─────────────────────────────────────────────
-            n_feat = X.shape[1]
-            if self._model is not None and self._n_features != n_feat:
-                logger.warning("RegimeClassifier: feature count changed %d→%d, resetting",
-                               self._n_features, n_feat)
-            self._model      = _build_mlp(n_feat, N_CLASSES).to(DEVICE)
-            self._n_features = n_feat
-            if DEVICE.type == "cuda" and torch.cuda.device_count() > 1:
-                self._model = torch.nn.DataParallel(self._model)
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
                 logger.info("RegimeClassifier: DataParallel across %d GPUs",
                             torch.cuda.device_count())
 
@@ -954,7 +942,6 @@ class RegimeClassifier(BaseModel):
                 return weighted_ce - entropy_term
 
             # ── Optimiser + scheduler ─────────────────────────────────────────
-<<<<<<< HEAD
             # Fine-tuning uses a lower LR to preserve learned structure.
             # Cold start gets full LR; warm start gets 5× lower to avoid
             # blowing away weights that took 7 years of data to learn.
@@ -965,13 +952,6 @@ class RegimeClassifier(BaseModel):
             scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimiser,
                 max_lr=_train_lr,
-=======
-            optimiser = torch.optim.AdamW(self._model.parameters(),
-                                          lr=3e-4, weight_decay=5e-2)
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimiser,
-                max_lr=3e-4,
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
                 epochs=50,
                 steps_per_epoch=steps_per_epoch,
                 pct_start=0.2,
