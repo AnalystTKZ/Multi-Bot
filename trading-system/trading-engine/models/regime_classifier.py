@@ -471,7 +471,7 @@ class RegimeClassifier(BaseModel):
         #   2. TRENDING_UP — highest drift among remaining (most positive momentum)
         #   3. TRENDING_DOWN — lowest drift among remaining (most negative momentum)
         #   4. RANGING     — the leftover cluster (low vol, low drift, low autocorr)
-        remaining = list(range(4))
+        remaining = list(range(5))
         cluster_labels: dict[int, int] = {}
 
         # 1. VOLATILE: highest (vol - eff) — chaotic expansion, low directional efficiency
