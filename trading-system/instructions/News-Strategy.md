@@ -1,6 +1,13 @@
 # News Momentum Strategy — Trader 4
 
-Updated 2026-04-02. Implementation: `trading-engine/traders/trader_4_news_momentum.py`
+Updated 2026-04-02. **SUPERSEDED 2026-04-19.**
+
+> `trader_4_news_momentum.py` has been deleted. News sentiment is now encoded as
+> `sentiment_score` (QUALITY_FEATURES index 6) fed to the QualityScorer, and as news
+> proximity flags (`news_in_30min`, `news_in_15min`) in the feature pipeline.
+> This document is retained as historical context only.
+
+Implementation: `trading-engine/traders/trader_4_news_momentum.py`
 
 ---
 

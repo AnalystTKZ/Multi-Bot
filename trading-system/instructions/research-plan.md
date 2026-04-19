@@ -1,6 +1,10 @@
 # Research & Implementation Plan
 
-Updated 2026-04-06. This file reflects the current implemented state and remaining research directions.
+Updated 2026-04-06. **SUPERSEDED 2026-04-19.**
+
+> The 5 ICT rule-based traders described below have been removed. ICT concepts are now
+> encoded as numeric features in `SEQUENCE_FEATURES` (74 features) and learned by the GRU-LSTM.
+> This file is retained as background context. For current architecture see `docs/system_architecture.md`.
 
 ---
 

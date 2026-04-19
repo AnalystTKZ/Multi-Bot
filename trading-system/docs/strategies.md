@@ -1,182 +1,104 @@
-# Trading Strategies Reference
+# Signal Generation Reference
 
 Last updated: 2026-04-19.
 
-All traders inherit from `BaseTrader` (`traders/base_trader.py`). Each runs independently
-with its own capital allocation, session window, and risk limits. ICT/SMC conditions
-determine WHERE to trade. ML models (EV gate) determine WHETHER to trade.
+The 5 ICT rule-based traders have been removed. `traders/__init__.py` is empty.
+Signal generation is unified in `scripts/run_backtest._compute_backtest_signal()`
+with `trader_id="ml_trader"` running on all 11 symbols.
 
 ---
 
-## BaseTrader — 8 Guards
+## How Signals Are Generated
 
-Every signal passes through these in order. Any returning `None` rejects the trade.
+ICT/SMC logic is **encoded as numeric features** in `SEQUENCE_FEATURES`. The GRU
+learns from those features; it decides direction and confidence. There are no rule
+branches, no regime hard-gates, no per-symbol exclusions.
 
-| Guard | Condition |
-|-------|-----------|
-| 0 | Symbol in `EXCLUDED_SYMBOLS` → reject |
-| 1 | Outside `SESSION_START_UTC` to `SESSION_END_UTC` → reject |
-| 2 | Dead zone 12:00–13:00 UTC → reject (all traders) |
-| 3 | Symbol in cooldown (`COOLDOWN_MINUTES`) → reject |
-| 4 | `trades_today[symbol] ≥ MAX_TRADES_PER_SESSION` → reject |
-| 5 | Circuit breaker: daily loss > 2% OR drawdown > 8% → reject |
-| 6 | Spread: XAUUSD > 50 pips OR Forex > 3 pips → reject |
-| 7 | EV gate: `ev < MIN_EV_THRESHOLD (0.10)` OR `expected_variance > 0.80` OR `p_dir < ML_DIRECTION_THRESHOLD` → reject |
-| 8 | RL gate: PPO does not approve this trader OR EV < RL selectivity threshold → reject |
+```
+Per 15M bar:
+  ① _precompute_ml_cache (done once per symbol, GPU-batched):
+      RegimeClassifier(4H) → regime_4h + conf
+      RegimeClassifier(1H) → regime_1h + conf
+      → injected into each timestep of 30-bar sequence
+      GRU-LSTM(30 bars × 74 features) → p_bull, p_bear, expected_move, expected_variance
 
-**EV is mandatory when `ML_ENABLED=true`.** Missing `ev` key raises `RuntimeError`.
+  ② Bar loop:
+      expected_variance > 0.80               → reject
+      max(p_bull, p_bear) < 0.58             → reject
+      side = "buy" if p_bull > p_bear else "sell"
 
-**Position sizing:** ATR-based, 1% of allocated capital per trade. `CAPITAL_PER_TRADER=0.20`
-means each trader controls 20% of the account.
+  ③ Level computation (ATR-based):
+      SL  = entry ± (atr × SL_ATR_MULT)
+      TP1 = entry ± (sl_distance × TP1_MULT)
+      TP2 = entry ± (sl_distance × TP2_MULT)
 
----
+  ④ PM enrichment:
+      Size = risk_amount / sl_distance
+      TP1 partial close (50%) → SL to break-even
+      Correlation cap: max 2 concurrent positions per directional group
 
-## Trader 1 — NY EMA Trend Pullback
-
-**File:** `traders/trader_1_ny_ema.py`  **ID:** `trader_1`
-
-### Session
-13:00–17:00 UTC (hard close 17:00)
-
-### Symbols
-All except EURGBP (EURGBP excluded — consistently mean-reverts against EMA entries)
-
-### Signal Logic
-1. 1H EMA stack bullish (for longs) or bearish (for shorts)
-2. ADX > 20 (trending, not oscillating)
-3. Price has pulled back to EMA zone
-4. Candle body ratio > 0.25 (genuine momentum candle, not a doji)
-5. **Regime: TRENDING_UP (for longs) or TRENDING_DOWN (for shorts) required**
-   — raises `RuntimeError` if regime missing when `ML_ENABLED=true`
-
-### Additional Filters
-- XAUUSD: ATR ratio > 0.7 (enough volatility to cover spread)
-- Forex: round number filter ±15 pips (avoid stop clusters)
-
-### Parameters
-- `MAX_TRADES_PER_SESSION = 2`
-- `COOLDOWN_MINUTES = 10`
-- `ML_DIRECTION_THRESHOLD = 0.55`
+  ⑤ QualityScorer (post-PM — uses actual rr_ratio):
+      ev < 0.10                              → reject
+```
 
 ---
 
-## Trader 2 — Structure Break + FVG Continuation
+## ICT Features in the GRU Input
 
-**File:** `traders/trader_2_fvg_bos.py`  **ID:** `trader_2`
+These are the numeric encodings of ICT concepts that used to be hard rules.
 
-### Session
-London 07:00–12:00 + NY 13:00–18:00 UTC (dead zone 12–13 blocked by Guard 2)
-
-### Symbols
-All 11
-
-### Signal Logic
-1. 4H BOS establishes directional bias (bullish or bearish structure)
-2. Open FVG exists in registry (max 20 bars old)
-3. Price returns to fill the FVG
-4. R:R pre-check: TP/SL ratio ≥ 2.0 before computing entry
-5. News block: no high-impact event within 15 min
-
-### Parameters
-- `MAX_TRADES_PER_SESSION = 2`
-- `COOLDOWN_MINUTES = 15`
-- `ML_DIRECTION_THRESHOLD = 0.62`
-
----
-
-## Trader 3 — London Breakout + Liquidity Sweep
-
-**File:** `traders/trader_3_london_bo.py`  **ID:** `trader_3`
-
-### Session
-07:00–10:00 UTC (hard close 12:00)
-
-### Symbols
-All except USDJPY
-
-### Signal Logic
-1. Asian range identified (02:00–07:00 UTC high/low)
-2. Liquidity sweep of Asian range extreme: wick-to-body ratio > 1.5 (strong rejection)
-3. Volume on breakout bar > 20-bar SMA × 1.3
-4. ADX > 20
-5. **Regime: TRENDING_UP or TRENDING_DOWN only** — RANGING/VOLATILE blocked at signal level
-   (returns None, not a RuntimeError)
-
-### Additional Filters
-- `breakout_strength`: ATR-normalized range of breakout bar
-- `fakeout_prob`: > 55% → reject
-- `range_compression`: tight Asian range increases breakout reliability
-
-### Parameters
-- `MAX_TRADES_PER_SESSION = 1`
-- `COOLDOWN_MINUTES = 5`
-- `ML_DIRECTION_THRESHOLD = 0.55`
+| Feature | Index | What it encodes |
+|---------|-------|-----------------|
+| `bos_bull_flag`, `bos_bear_flag` | 12–13 | Binary: BOS on current bar |
+| `fvg_bull_open`, `fvg_bear_open` | 14–15 | Binary: open FVG on current bar |
+| `ema_pullback_zone` | 41 | Price position in EMA21-50 band, ATR-normalised |
+| `ema21_slope_15m`, `ema21_slope_1h` | 42–43 | EMA21 slope normalised by ATR |
+| `ema_stack_15m` | 44 | EMA21 > EMA50 score |
+| `bos_bull_bars_ago`, `bos_bear_bars_ago` | 45–46 | Age of last BOS / 40 |
+| `bos_bull_strength`, `bos_bear_strength` | 47–48 | BOS move size / ATR |
+| `fvg_bull_dist_atr`, `fvg_bear_dist_atr` | 49–50 | Distance to nearest open FVG / ATR |
+| `fvg_bull_fill_ratio`, `fvg_bear_fill_ratio` | 51–52 | How far price has entered FVG |
+| `sweep_wick_depth_atr` | 53 | Wick beyond range extreme / ATR |
+| `body_recovery_ratio` | 54 | Candle body recovery after sweep |
+| `dist_to_recent_high_atr`, `dist_to_recent_low_atr` | 55–56 | Proximity to 20-bar extremes |
+| `asian_range_width_atr` | 57 | Asian session range width / ATR |
+| `price_vs_asian_high_atr`, `price_vs_asian_low_atr` | 58–59 | Price vs Asian high/low |
 
 ---
 
-## Trader 4 — News Structural Breakout
+## Regime Context
 
-**File:** `traders/trader_4_news_momentum.py`  **ID:** `trader_4`
+Regime is not a hard gate. It is injected as one-hot + confidence into every GRU timestep:
 
-### Session
-Any time (no session restriction)
+| Features | Indices | Source |
+|----------|---------|--------|
+| `regime_4h_0..4` + `regime_4h_conf` | 26–31 | RegimeClassifier (4H bias) |
+| `regime_1h_0..4` + `regime_1h_conf` | 32–37 | RegimeClassifier (1H structure) |
 
-### Symbols
-EURUSD, GBPUSD, XAUUSD
+**5 classes per level:** TRENDING_UP=0, TRENDING_DOWN=1, RANGING=2, VOLATILE=3, CONSOLIDATION=4
 
-### Signal Logic
-1. `sentiment_score ≥ 0.65` **hard gate** (FinBERT primary, VADER fallback)
-2. Structural breakout in direction of sentiment (NOT a fade)
-3. Hard close 60 min post-news
-4. Max 1 trade per session
-
-### Parameters
-- `MAX_TRADES_PER_SESSION = 1`
-- `COOLDOWN_MINUTES = 30`
-- `ML_DIRECTION_THRESHOLD = 0.55`
-- `SENTIMENT_THRESHOLD = 0.65`
+The GRU learns `P(direction | sequence, regime_4h, regime_1h)` — regime context
+gives it the ability to weight the same price structure differently in trending vs ranging markets.
 
 ---
 
-## Trader 5 — Asian Range Mean Reversion
+## Symbols
 
-**File:** `traders/trader_5_asian_mr.py`  **ID:** `trader_5`
+All 11 symbols run on `ml_trader`:
+`EURUSD GBPUSD USDJPY AUDUSD NZDUSD USDCAD USDCHF EURGBP EURJPY GBPJPY XAUUSD`
 
-### Session
-02:00–06:45 UTC (hard close 06:45)
-
-### Symbols
-USDJPY, EURJPY, AUDJPY, EURUSD, AUDUSD (XAUUSD and GBPJPY excluded)
-
-### Signal Logic
-1. **Regime: RANGING required** — raises `RuntimeError` if missing when `ML_ENABLED=true`
-2. `volatility_stable`: ATR expansion ratio < 1.3× (not a breakout setup)
-3. Price at Asian range extreme (near high or low)
-4. Dual oscillator confirmation: RSI + Stochastic oversold/overbought
-5. `distance_from_mean_atr`: price stretched from range midpoint
-
-### Parameters
-- `MAX_TRADES_PER_SESSION = 2`
-- `COOLDOWN_MINUTES = 30`
-- `ML_DIRECTION_THRESHOLD = 0.52`
+No per-symbol exclusions. No session-based symbol filtering.
 
 ---
 
-## Symbol Coverage
+## Session Windows
 
-| Symbol | T1 | T2 | T3 | T4 | T5 |
-|--------|----|----|----|----|-----|
-| EURUSD | ✓ | ✓ | ✓ | ✓ | ✓ |
-| GBPUSD | ✓ | ✓ | ✓ | ✓ | — |
-| USDJPY | ✓ | ✓ | — | — | ✓ |
-| AUDUSD | ✓ | ✓ | ✓ | — | ✓ |
-| NZDUSD | ✓ | ✓ | ✓ | — | — |
-| USDCAD | ✓ | ✓ | ✓ | — | — |
-| USDCHF | ✓ | ✓ | ✓ | — | — |
-| EURGBP | — | ✓ | ✓ | — | — |
-| EURJPY | ✓ | ✓ | ✓ | — | ✓ |
-| GBPJPY | ✓ | ✓ | ✓ | — | — |
-| XAUUSD | ✓ | ✓ | ✓ | ✓ | — |
+Sessions are encoded as features (`is_asian`, `is_london`, `is_ny` at indices 9–11) and as
+continuous timing features (`mins_since_london_open`, `mins_since_ny_open` at indices 68–69).
+The GRU learns session patterns from data — no hard session gates remain.
+
+**Dead zone 12:00–13:00 UTC** is still applied as a hard skip in the bar loop.
+**Cooldown** of 10 bars since last trade on the same symbol is still enforced.
 
 ---
 
@@ -184,40 +106,27 @@ USDJPY, EURJPY, AUDJPY, EURUSD, AUDUSD (XAUUSD and GBPJPY excluded)
 
 ```
 ACCOUNT_BALANCE    = 10000.0
-CAPITAL_PER_TRADER = 0.20     (20% each × 5 = 100%)
-RISK_PER_TRADE     = 0.01     (1% of allocated capital per trade)
-MAX_DAILY_LOSS_PCT = 0.02     (2% daily loss → circuit breaker)
-MAX_DRAWDOWN_PCT   = 0.08     (8% drawdown → circuit breaker)
+CAPITAL_PER_TRADER = 0.20     (single ml_trader uses 100%)
+RISK_PER_TRADE     = 0.01     (1% per trade)
+MAX_DAILY_LOSS_PCT = 0.02     (2% daily loss cap)
+MAX_DRAWDOWN_PCT   = 0.08     (8% portfolio halt)
+MAX_CONCURRENT_POSITIONS = 2
 ```
 
 Position size: `risk_amount / (|entry - sl| in price)`
-ATR-scaled stop loss. Take profit at `entry ± (sl_distance × rr_ratio)`.
+ATR-scaled stop loss. TP1 at 2× risk, TP2 at 4× risk (PM-adjusted by confidence).
 
 ---
 
-## How Strategies Interact with ML
+## Gate Summary
 
-ICT logic runs inside `_compute_signal()` — it produces entry/stop/target levels.
-ML gates run in `analyze_market()` after the signal is produced.
-
-```
-_compute_signal()          ← ICT: where to trade, what levels
-Guard 7 (EV gate)          ← QualityScorer: is this setup worth trading?
-Guard 8 (RL gate)          ← RLAgent: should this trader trade right now?
-Ensemble scoring           ← final confidence: (ict × 0.5 + ml × 0.5 + sentiment) × regime_mult
-```
-
-Regime affects both the ICT logic (some traders require specific regimes) and the ensemble
-multiplier (TRENDING aligned ×1.2, TRENDING against ×0.9, RANGING ×0.9, VOLATILE ×0.85).
-
-**EV label tiers** (QualityScorer learns to aim for tp2):
-
-| Exit | EV label |
-|---|---|
-| `tp2` | `+rr_ratio` (best) |
-| `tp1` | `+rr × 0.75` |
-| `be_or_trail` | `+rr × 0.4` |
-| `sl_*` | `-1.0` |
-| `time_exit` | skipped |
-
-Exit reasons are preserved raw in the journal — never collapsed to `tp/sl`.
+| Gate | Value | Applied in |
+|------|-------|-----------|
+| GRU uncertainty | `expected_variance ≤ 0.80` | `_compute_backtest_signal` |
+| GRU direction | `max(p_bull, p_bear) ≥ 0.58` | `_compute_backtest_signal` |
+| EV threshold | `ev ≥ 0.10` | `_backtest_trader` (post-PM) |
+| Dead zone | 12:00–13:00 UTC | `_backtest_trader` |
+| Cooldown | 10 bars | `_backtest_trader` |
+| Daily loss cap | 2% | `_backtest_trader` |
+| Portfolio drawdown | 8% | `_backtest_trader` |
+| Correlation cap | max 2 per group | `PortfolioManager` |

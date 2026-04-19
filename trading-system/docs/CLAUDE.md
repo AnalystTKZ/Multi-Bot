@@ -1,11 +1,19 @@
 # Multi-Bot Trading System — Claude Reference
 
-Last updated: 2026-04-17. Reflects current ML-native architecture.
-
-Last updated: 2026-04-18. All models are PyTorch on GPU — LightGBM/XGBoost removed.
+Last updated: 2026-04-19. Reflects ML-native architecture (5 rule-based traders removed).
 
 For full ML pipeline details see `docs/system_architecture.md`.
 For training and backtest runbook see `docs/TRAINING_AND_BACKTEST.md`.
+
+---
+
+## Current System State
+
+**The 5 ICT rule-based traders are gone.** `traders/__init__.py` contains only a comment.
+Signal generation happens in a single unified ML path in `run_backtest._compute_backtest_signal`.
+
+`main.py` and `signal_pipeline.py` still reference the old traders — they are **broken for live trading**.
+The working execution path is the offline pipeline (`pipeline/` + `scripts/run_backtest.py`).
 
 ---
 
@@ -13,26 +21,28 @@ For training and backtest runbook see `docs/TRAINING_AND_BACKTEST.md`.
 
 ```
 trading-system/
-├── .env                              ← single source of truth (all services read from here)
+├── .env                              ← single source of truth
 ├── docker-compose.dev.yml
-├── env_config.py                     ← path resolver (_ENV dict) used by all scripts
+├── env_config.py                     ← path resolver (_ENV dict)
 ├── docs/
 │   ├── CLAUDE.md                     ← this file
-│   ├── system_architecture.md        ← full ML pipeline, model details, causal integrity
-│   ├── TRAINING_AND_BACKTEST.md      ← training + backtest runbook
+│   ├── system_architecture.md
+│   ├── TRAINING_AND_BACKTEST.md
 │   ├── strategies.md
 │   └── models.md
-├── pipeline/                         ← 9-step offline data pipeline
-│   ├── step0_resample.py             ← M1 histdata → 5 MTF parquets per symbol
+├── pipeline/                         ← 9-step offline pipeline
+│   ├── step0_resample.py
 │   ├── step1_inventory.py
 │   ├── step2_clean.py
 │   ├── step3_align.py
 │   ├── step4_features.py
 │   ├── step5_split.py
-│   ├── step6_backtest.py
-│   ├── step7_train.py
+│   ├── step6_backtest.py             ← runs run_backtest.py, builds journal
+│   ├── step7a_train.py               ← trains Regime + GRU
+│   ├── step7b_train.py               ← trains Quality + RL (needs journal)
 │   └── step8_validate.py
 ├── run_pipeline.py                   ← orchestrates pipeline; skips completed steps
+├── kaggle_train.py                   ← Kaggle entry point (step7a → step6 → step7b)
 ├── processed_data/
 │   ├── histdata/                     ← {SYMBOL}_{5M|15M|1H|4H|1D}.parquet (step 0)
 │   └── ...
@@ -40,124 +50,110 @@ trading-system/
 │   ├── datasets/                     ← train/val/test.parquet + split_summary.json
 │   └── metrics/
 ├── training_data/
-│   ├── forex/                        ← *_m1_histdata.csv (2016–2026, ~187 MB each)
+│   ├── forex/                        ← *_m1_histdata.csv (2016–2026)
 │   ├── indices/                      ← *_1d.csv (ASX200, DAX, DXY, VIX, etc.)
 │   └── fundamental/                  ← treasury_10yr.csv, treasury_2yr.csv
 ├── backend/
-│   ├── Dockerfile                    ← python:3.11-slim
 │   └── src/
 │       ├── main.py                   ← FastAPI app + CORS
-│       ├── routes/
-│       │   ├── auth.py               ← JWT login (username OR email)
-│       │   ├── traders.py            ← /api/traders/ (trailing slash required)
-│       │   ├── positions.py
-│       │   ├── analytics.py
-│       │   ├── monitors.py
-│       │   └── system.py             ← /api/system/, /api/backtest/, /api/training/, /api/ml/
-│       └── services/
-│           ├── state_reader.py       ← reads Redis state from trading-engine
-│           └── trading_engine_client.py
-├── frontend/
-│   ├── Dockerfile                    ← node:20-alpine build → nginx:1.27-alpine
-│   └── src/
-│       ├── services/api.js           ← Axios; auto Bearer; 401 guard
-│       └── store/slices/
-│           ├── authSlice.js          ← loginUser thunk
-│           ├── positionsSlice.js     ← closePosition filters by meta.arg.id
-│           └── tradersSlice.js       ← performance keyed by trader_id
+│       └── routes/
+│           ├── auth.py
+│           ├── traders.py
+│           ├── positions.py
+│           ├── analytics.py
+│           ├── monitors.py
+│           └── system.py
 └── trading-engine/
-    ├── main.py                       ← ProductionTradingEngine; health server port 8000
+    ├── main.py                       ← BROKEN — imports deleted trader classes
     ├── config/settings.py            ← Pydantic BaseSettings
     ├── indicators/market_structure.py ← all vectorized; no .at[i] indexing
     ├── services/
-    │   ├── feature_engine.py         ← all feature vectors; SEQUENCE_FEATURES, REGIME_FEATURES,
-    │   │                               QUALITY_FEATURES, RL_STATE_DIM
-    │   ├── signal_pipeline.py        ← ML inference + 5-trader signal generation
-    │   ├── data_fetcher.py           ← Capital.com REST; raises on session failure
+    │   ├── feature_engine.py         ← all feature vectors (SEQUENCE_FEATURES=74,
+    │   │                               REGIME_4H_FEATURES=31, REGIME_1H_FEATURES=15,
+    │   │                               QUALITY_FEATURES=17, RL_STATE_DIM=43)
+    │   ├── signal_pipeline.py        ← BROKEN — calls deleted trader.analyze_market()
+    │   ├── data_fetcher.py
     │   ├── broker_connector.py
     │   ├── order_executor.py
     │   ├── risk_engine.py
-    │   └── trade_journal.py          ← CSV + JSONL; source of QualityScorer labels
+    │   └── trade_journal.py
     ├── models/
-    │   ├── base_model.py             ← BaseModel(ABC); reload_if_updated() mtime check
-    │   ├── regime_classifier.py      ← PyTorch MLP 5-class; GMM labels; group-aware; 8-feature GMM with autocorr+hurst_proxy
-    │   ├── gru_lstm_predictor.py     ← PyTorch GRU 3-head; regime-conditioned
-    │   ├── quality_scorer.py         ← PyTorch MLP EV regressor; Huber loss
+    │   ├── base_model.py
+    │   ├── regime_classifier.py      ← dual-cascade: 4H bias (31 feat) + 1H structure (15 feat)
+    │   ├── gru_lstm_predictor.py     ← GRU(64)→LSTM(128)→3 heads; 74 SEQUENCE_FEATURES
+    │   ├── quality_scorer.py         ← EV regressor; Huber loss; 17 QUALITY_FEATURES
     │   ├── sentiment_model.py        ← FinBERT primary; VADER fallback
     │   ├── rl_agent.py               ← PPO via SB3; 43-dim state; 16 actions
-    │   └── weights/                  ← cwd-relative; run scripts from trading-engine/
+    │   └── weights/
     │       ├── gru_lstm/model.pt
-    │       ├── regime_classifier.pkl
+    │       ├── regime_4h.pkl         ← 4H bias classifier
+    │       ├── regime_1h.pkl         ← 1H structure classifier
     │       ├── quality_scorer.pkl
-    │       ├── rl_ppo/
-    │       └── backups/
+    │       └── rl_ppo/
     ├── traders/
-    │   ├── base_trader.py            ← 8 guards; EV gate (Guard 7); RL gate (Guard 8)
-    │   ├── trader_1_ny_ema.py        ← NY EMA Trend Pullback (13–17 UTC)
-    │   ├── trader_2_fvg_bos.py       ← Structure Break + FVG (London + NY)
-    │   ├── trader_3_london_bo.py     ← London Breakout + Sweep (07–10 UTC)
-    │   ├── trader_4_news_momentum.py ← News Momentum (any time)
-    │   └── trader_5_asian_mr.py      ← Asian Range MR (02–06:45 UTC)
+    │   └── __init__.py               ← empty; all trader files deleted
+    ├── monitors/
+    │   └── portfolio_manager.py      ← sizing, TP1/trailing, correlation cap
     └── scripts/
-        ├── run_backtest.py           ← batched GPU inference + 5-trader bar loop
+        ├── run_backtest.py           ← single ml_trader; GPU-batched inference
         ├── retrain_incremental.py    ← --model gru|regime|quality|rl|all
         └── retrain_scheduler.py     ← fires Sunday 02:00 UTC
 ```
 
 ---
 
-## Current ML Architecture (as of 2026-04-18)
+## ML Architecture
 
-**This is an ML-native system.** ICT/SMC conditions determine entry levels. ML models determine whether to trade. All models are PyTorch on GPU.
+| Model | Role | Output | Weights |
+|-------|------|--------|---------|
+| RegimeClassifier (4H) | Bias layer — macro regime from 4H+1D data | 5-class + confidence | `weights/regime_4h.pkl` |
+| RegimeClassifier (1H) | Structure layer — intraday regime from 1H+4H | 5-class + confidence | `weights/regime_1h.pkl` |
+| GRU-LSTM | Direction + magnitude + uncertainty | `p_bull`, `p_bear`, `expected_move`, `expected_variance` | `weights/gru_lstm/model.pt` |
+| QualityScorer | EV in R-multiples (runs post-signal with real rr_ratio) | `ev`, `quality_score` | `weights/quality_scorer.pkl` |
+| SentimentModel | News headline scoring | `sentiment_score`, `sentiment_label` | pre-trained |
+| RLAgent | Selectivity tier selection | action 0–15 | `weights/rl_ppo/` |
 
-| Model | Role | Output | Latest |
-|-------|------|--------|--------|
-| RegimeClassifier | Labels market state (5 classes) | `regime`, `regime_id`, `proba[5]`, `regime_confidence` | 4H 48.8% / 1H 41.1% acc (4-class baseline; 5-class cold-start required) |
-| GRU-LSTM | Predicts direction + magnitude + uncertainty | `p_bull`, `p_bear`, `expected_move`, `expected_variance` | 7.45M samples, 44 combos |
-| QualityScorer | Predicts EV in R-multiples | `ev`, `quality_score` | 8,203 journal trades |
-| SentimentModel | News sentiment | `sentiment_score`, `sentiment_label` | Pre-trained (FinBERT) |
-| RLAgent | Selects trader + selectivity tier | `(trader_id, ev_threshold)` | 16 actions, warm-start |
-
-**Key architectural facts:**
-- GRU receives `prev_regime_onehot` (4 dims) + `regime_confidence` at every sequence timestep
-- Regime computed BEFORE GRU in backtest — `_precompute_ml_cache` order matters
-- QualityScorer: EV regressor (class-weighted Huber loss, `rr_ratio` labels, NOT `pnl/risk_staked`)
-- EV gate in Guard 7: `ev ≥ 0.10` AND `expected_variance ≤ 0.80` AND `p_dir ≥ ML_DIRECTION_THRESHOLD`
-- GRU excluded from per-round warm-start loop (catastrophic forgetting on ~3k trades vs 7.4M sequences)
-- All retrains are warm-start: existing weights + 5× lower LR, not reinitialised from scratch
-- No fallback values — all failures raise and propagate
-
-**Feature counts (fixed contract — changing breaks saved weights):**
+**Feature counts — fixed contract. Changing order or length breaks saved weights.**
 
 | List | Length | Model |
 |------|--------|-------|
-| `SEQUENCE_FEATURES` | 74 | GRU |
-| `REGIME_FEATURES` | 61 | RegimeClassifier |
+| `SEQUENCE_FEATURES` | 74 | GRU-LSTM |
+| `REGIME_4H_FEATURES` | 31 | RegimeClassifier (4H) |
+| `REGIME_1H_FEATURES` | 15 | RegimeClassifier (1H) |
 | `QUALITY_FEATURES` | 17 | QualityScorer |
 | `RL_STATE_DIM` | 43 | RLAgent |
 
-**Known issues (2026-04-18):**
-- Quality score = 0.0 on all backtest trades — scorer trained but output not reaching inference path (P0)
-- RL action = 1 for all trades — policy collapsed, needs more journal data + `ent_coef=0.01`
+---
+
+## Signal Generation (Working Path)
+
+`scripts/run_backtest.py` — `_compute_backtest_signal()` with `trader_id="ml_trader"`:
+
+```
+Per 15M bar:
+  1. GRU uncertainty pre-gate: expected_variance > 0.80 → reject
+  2. GRU direction gate: max(p_bull, p_bear) ≥ 0.58 → side = buy if p_bull, else sell
+  3. ATR-based entry/SL/TP levels computed
+  4. PM enrichment (size, TP1/TP2, correlation cap)
+  5. QualityScorer: run with actual trader_id + side + rr_ratio → ev
+  6. EV gate: ev < 0.10 → reject
+  7. Trade simulated
+```
+
+Regime is **encoded as features** in the GRU input (indices 26–37 of SEQUENCE_FEATURES), not applied as a hard gate.
 
 ---
 
-## Guard 7 — EV Gate (current)
+## Gates
 
-```python
-# Guard 7 in base_trader.py
-ev = ml_predictions.get("ev")
-if ev is None:
-    raise RuntimeError("EV model output missing — ensure QualityScorer is trained")
-if float(ev) < self.MIN_EV_THRESHOLD:       # default 0.10, env: MIN_EV_THRESHOLD
-    return None
-uncertainty = float(ml_predictions.get("expected_variance", 0.0))
-if uncertainty > self.MAX_UNCERTAINTY:       # default 0.80, env: MAX_UNCERTAINTY
-    return None
-# then direction gate: p_bull/p_bear ≥ ML_DIRECTION_THRESHOLD
-```
-
-`ML_QUALITY_THRESHOLD` has been removed from all traders — EV is the only gate.
+| Gate | Default | Env override |
+|------|---------|--------------|
+| GRU uncertainty `expected_variance` | `≤ 0.80` | `MAX_UNCERTAINTY` |
+| GRU direction | `≥ 0.58` | — |
+| EV threshold | `≥ 0.10` | `MIN_EV_THRESHOLD` |
+| Daily loss cap | `2%` | — |
+| Max drawdown halt | `8%` | — |
+| Cooldown | `10 bars` | — |
 
 ---
 
@@ -173,10 +169,8 @@ if uncertainty > self.MAX_UNCERTAINTY:       # default 0.80, env: MAX_UNCERTAINT
 | trading_influxdb | 8086 | |
 | trading_grafana | 3002 | dashboards |
 | trading_prometheus | 9090 | |
-| trading_engine_main | 8000 (expose only) | trading engine |
+| trading_engine_main | 8000 (expose only) | trading engine (BROKEN for live) |
 | trading_model_retrainer | — | retrain_scheduler.py |
-
-Engine port 8000 is `expose` only — backend reaches it via `http://trading-engine:8000`, not `localhost:8000`.
 
 ---
 
@@ -188,14 +182,12 @@ Engine port 8000 is `expose` only — backend reaches it via `http://trading-eng
 - JWT: `JWT_SECRET`, `JWT_ALGORITHM=HS256`, `JWT_EXPIRES_MINUTES=60`
 
 ### Broker
-- `BROKER_TYPE=capital` — Capital.com REST API (not MT5; Linux-incompatible)
+- `BROKER_TYPE=capital` — Capital.com REST API
 - `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_PASSWORD`, `CAPITAL_ENV=demo`
-- Base URL: `https://api-demo.capital.com`
-- yfinance is data fallback (not order execution)
 
 ### Trading
-- `PAPER_TRADING=true` (default) — no live orders
-- `ML_ENABLED=true` — default; models must be trained before first run
+- `PAPER_TRADING=true` (default)
+- `ML_ENABLED=true` — all 4 models must be trained before first run
 - `ACCOUNT_BALANCE=10000.0`; `CAPITAL_PER_TRADER=0.20`; `RISK_PER_TRADE=0.01`
 - `MIN_EV_THRESHOLD=0.10`; `MAX_UNCERTAINTY=0.80`
 
@@ -210,28 +202,21 @@ All 11: `EURUSD GBPUSD USDJPY AUDUSD NZDUSD USDCAD USDCHF EURGBP EURJPY GBPJPY X
 # All containers
 cd trading-system && docker compose up -d
 
-# Engine only
-docker compose build trading-engine && docker compose up -d trading-engine
-
-# Logs
-docker compose logs trading-engine --tail=50 -f
-
-# Backtest (GPU — runs on 2× T4 in Kaggle)
-docker exec trading_engine_main python /app/scripts/run_backtest.py
-
-# Retrain
-docker exec trading_engine_main python /app/scripts/retrain_incremental.py --model regime
-docker exec trading_engine_main python /app/scripts/retrain_incremental.py --model gru
-docker exec trading_engine_main python /app/scripts/retrain_incremental.py --model all
-
-# Local (from trading-engine/ directory — weights paths are cwd-relative)
+# Backtest only (from trading-engine/)
 cd trading-system/trading-engine
-python scripts/retrain_incremental.py --model regime
 python scripts/run_backtest.py
+
+# Retrain (from trading-engine/)
+python scripts/retrain_incremental.py --model regime
+python scripts/retrain_incremental.py --model gru
+python scripts/retrain_incremental.py --model all
 
 # Offline pipeline (from trading-system/)
 export PYTHONPATH="/home/tybobo/Desktop/Multi-Bot/trading-system:/home/tybobo/Desktop/Multi-Bot/trading-system/trading-engine"
 python3 run_pipeline.py
+
+# Kaggle full training run
+python3 kaggle_train.py
 
 # View journal
 tail -f trading-engine/logs/trade_journal.csv
@@ -240,90 +225,18 @@ tail -f trading-engine/logs/trade_journal_detailed.jsonl | python -m json.tool
 
 ---
 
-## Redis Key Contracts
+## Known Issues
 
-**Engine writes (`state_manager.py`):**
+| Issue | Severity | File |
+|-------|----------|------|
+| `main.py` broken — imports `Trader1NYEMA` etc. (deleted) | P0 | `trading-engine/main.py` |
+| `signal_pipeline.py` broken — calls `trader.analyze_market()` | P0 | `services/signal_pipeline.py` |
+| RL always action=1 — policy collapsed | P1 | `models/rl_agent.py` |
+| Regime accuracy low (4H ~49%, 1H ~41%) | P2 | `models/regime_classifier.py` |
 
-| Key | Content |
-|-----|---------|
-| `engine:status` | `running` / `stopped` / `error` |
-| `engine:mode` | `paper` / `live` |
-| `engine:heartbeat` | ISO timestamp, every 30s |
-| `trader:{id}:state` | `{status, trades_today, pnl_today, win_rate, last_signal}` |
-| `strategy_allocations:{id}` | `{is_active, allocated_capital, used_capital, current_risk}` |
-| `ml:model:{id}:status` | `{name, status, accuracy}` |
-| `positions:open` | JSON list |
-
-**Engine publishes (`event_bus.py`):**
-
-| Channel | When |
-|---------|------|
-| `SIGNAL_GENERATED` | Signal passes all guards + ensemble gate |
-| `TRADE_EXECUTED` | Execution complete |
-| `MARKET_DATA` | Every bar |
-
----
-
-## Trade Journal
-
-**CSV** (`logs/trade_journal.csv`): `timestamp, trader, symbol, side, size, entry, stop_loss, take_profit, rr_ratio, confidence, pnl, commission`
-
-**JSONL** (`logs/trade_journal_detailed.jsonl`): all CSV fields + `strategy, session, exit_reason, correlation_id, state_at_entry[42], rl_action, ml_model_scores, signal_metadata, ev, expected_variance`
-
-The JSONL is the source of truth for QualityScorer retraining. Each record needs `pnl`, `entry`, `stop_loss`, `size`, and `exit_reason` containing "tp" or "sl".
-
----
-
-## API Routes
-
-All require `Authorization: Bearer <token>` except `/api/auth/login` and `/health`.
-
-| Prefix | Notes |
-|--------|-------|
-| `/api/auth` | login, logout |
-| `/api/traders/` | GET collection (trailing slash required — FastAPI 307 strips auth header) |
-| `/api/positions` | GET, POST `/{ticket}/close` |
-| `/api/analytics` | |
-| `/api/system` | status, mode |
-| `/api/backtest` | reads `backtest_results/*.json` |
-| `/api/training` | status, start |
-| `/api/ml/models` | model list from Redis + filesystem |
-
----
-
-## Indicators (`indicators/market_structure.py`)
-
-All vectorized — no `.at[i]` integer indexing.
-
-**Causal:** `compute_ema`, `compute_atr`, `compute_rsi`, `compute_adx`, `compute_stochastic`, `compute_bollinger_bands`, `compute_ema_stack_score`, `detect_fair_value_gaps`, `detect_liquidity_sweeps`, `detect_order_blocks`
-
-**Lookahead (do not use for regime features or sequence features):**
-- `detect_break_of_structure` — uses `rolling(center=True)`, reads 5 future bars
-- `detect_sr_zones` — uses `rolling(center=True)`, reads 5 future bars
-
-These are currently zeroed in all feature arrays. They can be used in `_compute_signal()` for entry/exit logic (live bar has no future) but must not appear in training features.
-
----
-
-## Known Issues / Next Steps
-
-**Validation required before trusting backtest numbers:**
-1. Regime sanity: mean_return + volatility + avg_duration per regime (expect TU > 0, TD < 0, separation)
-2. EV distribution: histogram should show most trades 0.0–0.5 EV, tail to 2.0+ (not centered at 0)
-3. Trade frequency: trades per day per regime (if too high = overfitting)
-4. PnL by regime: if regimes don't differentiate PnL → regime model is useless
-
-**Pending work (in priority order):**
-- P0: Fix quality score pipeline — trace `ev`/`quality_score` from `quality_scorer.predict()` through `_run_ml_inference()` into Guard 7
-- P0: Fix RL policy collapse — add `ent_coef=0.01`, accumulate ≥500 journal trades before next retrain
-- P1: Monitor Round 2→3 PF decay across future runs (currently ~0.5pp; expected to stabilise)
-- P2: Raise `ML_DIRECTION_THRESHOLD` for EURUSD (currently 37% WR vs 47–57% for other pairs)
-- P3: Test `min_confidence=0.90` filter — 67% WR identified on 291 trades
-- Regime transition probabilities: 4×4 matrix flattened → add to GRU sequence features
-- `detect_break_of_structure` and `detect_sr_zones`: rewrite to use non-centered rolling
-  so BOS/sweep/S/R features can be re-enabled in training
-
-**Not pending (deliberately excluded):**
-- More models
-- More features beyond what's already planned
-- Backwards-compatibility shims for old LightGBM / XGBoost weights (deleted)
+**Pending work:**
+- Fix `main.py` + `signal_pipeline.py` to use unified ML signal path (no trader classes)
+- RL entropy tuning after journal reaches ≥ 200 trades
+- EV calibration: isotonic regression on validation set
+- Regime transition matrix as additional GRU sequence features
+- Rewrite `detect_break_of_structure` / `detect_sr_zones` to non-centered rolling (re-enable zeroed BOS/SR features)

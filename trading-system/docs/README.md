@@ -1,22 +1,28 @@
-# Multi-Bot ICT/Smart Money Trading System
+# ML-Native Forex/Gold Trading System
 
 Updated 2026-04-19.
 
-A production-grade, fully containerised automated trading system implementing Inner Circle Trader (ICT) and Smart Money Concepts (SMC) across Forex and Gold. Five independent strategy bots run concurrently against a Capital.com account with a Hybrid ML + RL signal layer trained on Kaggle T4 × 2 GPUs.
+A production-grade, fully containerised automated trading system for Forex and Gold.
+Signal generation is driven entirely by ML — ICT/SMC concepts are encoded as numeric
+features fed to a GRU-LSTM model. There are no rule-based traders.
+
+> **Note:** The live trading engine (`main.py`) is currently broken — it still imports
+> the deleted trader classes. The working path is the offline pipeline + backtest.
+> See [Known Issues](#known-issues).
 
 ---
 
 ## What It Does
 
-- **5 trading bots** each running a distinct session-aware strategy (NY trend, FVG/BOS, London breakout, news momentum, Asian mean reversion)
-- **Paper trading mode** with realistic slippage, commission, and execution delay simulation
-- **PortfolioManager** — per-trade TP1/TP2 targets, SL→breakeven, trailing stop, correlation cap, streak-based size scaling
-- **PPO RL agent** (stable-baselines3) that selects which strategy to activate per bar — runs on CPU (MLP policy is faster on CPU per SB3 guidance)
-- **4 ML models** that hot-reload without container restarts (GRU-LSTM PyTorch, PyTorch RegimeClassifier, PyTorch QualityScorer EV regressor, PPO RL)
-- **Tiered retraining** via `retrain_scheduler.py`: Quality + RL weekly (Sun 02:00 UTC), Regime + GRU monthly (1st Sun 03:00 UTC)
-- **Two trade journals** — a clean CSV and a detailed JSONL — that feed back into the ML training pipeline
-- **Event-driven architecture** over Redis pub/sub (zero shared state between bots)
-- **Kaggle split-dataset** training: code cloned from GitHub, OHLCV data from a separate Kaggle dataset, weights pushed back to GitHub post-training
+- **Single unified ML signal generator** — one `ml_trader` across all 11 symbols
+- **Dual-cascade RegimeClassifier** — 4H macro bias + 1H intraday structure, both injected into every GRU timestep
+- **GRU-LSTM** — 30-bar × 74-feature sequences → direction, magnitude, uncertainty
+- **QualityScorer** — EV regressor in R-multiples, runs post-signal with actual rr_ratio
+- **PPO RL agent** — selectivity tier selection (currently requires ≥200 journal trades to converge)
+- **PortfolioManager** — TP1/TP2 targets, SL→breakeven, trailing stop, correlation cap, streak scaling
+- **Tiered retraining** — Quality + RL weekly, Regime + GRU monthly
+- **Two trade journals** — clean CSV + detailed JSONL feeding the ML training pipeline
+- **Kaggle split-dataset training** on T4 × 2 GPUs
 
 ---
 
@@ -28,16 +34,14 @@ A production-grade, fully containerised automated trading system implementing In
 | Backend API | FastAPI |
 | Frontend | React 18, Vite, Redux Toolkit, MUI |
 | Broker | Capital.com REST API (demo + live) |
-| Data fallback | yfinance |
 | Message bus | Redis pub/sub |
 | Persistence | PostgreSQL 15, Redis 7 |
-| ML — time series | PyTorch GPU (GRU-LSTM, 256 hidden, 2 layers, 3 heads) |
-| ML — tabular | PyTorch GPU (RegimeClassifier MLP, QualityScorer EV regressor) |
+| ML — sequences | PyTorch GPU (GRU(64)→LSTM(128)→3 heads, 74 features) |
+| ML — regime | PyTorch GPU (dual MLP cascade: 4H bias + 1H structure) |
+| ML — EV | PyTorch GPU (MLP 17→64→32→1, Huber loss) |
 | ML — RL | stable-baselines3 PPO (CPU) |
 | Training hardware | Kaggle T4 × 2 GPUs (DataParallel) |
 | Infrastructure | Docker Compose |
-
-> LightGBM and XGBoost have been fully replaced by PyTorch models.
 
 ---
 
@@ -101,11 +105,11 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=changeme
 
 # Optional
-NEWS_API_KEY=                     # improves Trader 4 event awareness
+NEWS_API_KEY=                     # enriches sentiment features
 TELEGRAM_BOT_TOKEN=               # trade alerts
 TELEGRAM_CHAT_ID=
 
-# EV and uncertainty gates (Guard 7)
+# ML gates
 MIN_EV_THRESHOLD=0.10
 MAX_UNCERTAINTY=0.80
 
@@ -117,7 +121,7 @@ MIN_JOURNAL_QUALITY=200
 MIN_JOURNAL_RL=500
 ```
 
-> **`ML_ENABLED=true` is the default.** All model weights must be present in `trading-engine/weights/` before starting the engine. Models raise `ModelNotTrainedError` (no silent fallback) if weights are missing.
+> **`ML_ENABLED=true` is the default.** All model weights must exist in `trading-engine/weights/` before starting. Models raise `ModelNotTrainedError` (no silent fallback) if weights are missing.
 
 ---
 
@@ -128,171 +132,127 @@ MIN_JOURNAL_RL=500
 | `trading_postgres` | 5432 | Trade journal, state |
 | `trading_redis` | 6379 | Event bus, state cache |
 | `trading_backend` | 3000 | FastAPI — REST + WebSocket |
-| `trading_engine_main` | 8000 (internal) | 5 traders, ML inference |
+| `trading_engine_main` | 8000 (internal) | Trading engine (currently broken for live) |
 | `trading_frontend` | 3001 | React dashboard (Nginx) |
 | `trading_model_retrainer` | — | `retrain_scheduler.py` |
 
 ---
 
-## Architecture
+## Architecture (Backtest / Working Path)
 
 ```
-Capital.com REST API → DataFetcher.get_ohlcv(symbol, tf, bars=300)
+processed_data/histdata/{SYMBOL}_{TF}.parquet
         │
-        ▼  MARKET_DATA (Redis pub/sub)
-  SignalPipeline.process_bar()
+        ▼
+  _precompute_ml_cache(symbol) — GPU-batched, once per symbol
+        ├── RegimeClassifier (4H, 31 features) → regime_4h + conf
+        ├── RegimeClassifier (1H, 15 features) → regime_1h + conf
+        ├── Build 74-feature sequence matrix (regime injected per timestep)
+        └── GRU-LSTM (30×74, batched 1024) → p_bull, p_bear, expected_variance
         │
-        ├── Step 1: ML inference (load-bearing order)
-        │     RegimeClassifier  → TRENDING_UP/DOWN/RANGING/VOLATILE
-        │     GRULSTMPredictor  → p_bull, p_bear, entry_depth, expected_variance
-        │     QualityScorer     → ev (R-multiples), quality_score
-        │     SentimentModel    → score [-1,1], label, backend
+        ▼
+  Bar loop (dict lookup + gate evaluation)
+        ├── expected_variance > 0.80 → skip
+        ├── max(p_bull, p_bear) < 0.58 → skip
+        ├── Dead zone 12:00–13:00 UTC / cooldown / daily cap / drawdown → skip
+        ├── ATR-based entry / SL / TP levels
+        ├── PortfolioManager: size, TP1/TP2, correlation cap
+        ├── QualityScorer (17 features, uses actual rr_ratio) → ev
+        ├── ev < 0.10 → skip
+        └── Simulate trade → TradeJournal
         │
-        ├── Step 2: All 5 traders → BaseTrader.analyze_market()
-        │     8 guards → _compute_signal() → EV gate → RL gate
+        ▼
+  Trade journal (CSV + JSONL)
         │
-        ├── Step 3: Ensemble score
-        │     score = (ict × 0.5 + ml × 0.5 + sentiment_bonus) × regime_mult
-        │
-        ├── Step 4: Confidence gate ≥ 0.55
-        └── Step 5: SIGNAL_GENERATED → Redis pub/sub
-                │
-                ▼
-        RiskEngine.check_pre_trade()
-                │
-                ▼
-        PortfolioManager.enrich_signal()
-          — TP1/TP2, R:R ≥ 2.0, correlation cap, vol scalar, streak scalar
-                │
-                ▼
-        ExecutionEngine → PaperTradingService / BrokerConnector
-                │
-                ▼  TRADE_EXECUTED
-        PortfolioManager.manage_open_positions()
-          — partial close @ TP1, SL→breakeven, trailing stop @ TP2
-                │
-        TradeJournal
-          ├── logs/trade_journal.csv
-          └── logs/trade_journal_detailed.jsonl
-                │
-                ▼  feedback loop
-        retrain_scheduler.py
-          ├── Weekly  (Sun 02:00 UTC): Quality + RL  (≥200/500 journal entries)
-          └── Monthly (1st Sun 03:00 UTC): Regime + GRU  (OHLCV-based)
-
-Redis pub/sub → backend WebSocket → frontend Redux store
+        ▼  feedback loop
+  retrain_scheduler.py
+    ├── Weekly  (Sun 02:00 UTC): Quality + RL  (≥200 / ≥500 journal entries)
+    └── Monthly (1st Sun 03:00 UTC): Regime + GRU  (OHLCV-based)
 ```
 
 ---
 
-## Trading Strategies
+## Signal Gates
 
-| Bot | Strategy | Session (UTC) | Regime Requirement |
+| Gate | Value | Where applied |
+|------|-------|--------------|
+| GRU uncertainty | `expected_variance ≤ 0.80` | Before ICT level computation |
+| GRU direction | `max(p_bull, p_bear) ≥ 0.58` | Before ICT level computation |
+| EV threshold | `ev ≥ 0.10` | After PM enrichment (needs rr_ratio) |
+| Dead zone | 12:00–13:00 UTC | Bar loop |
+| Cooldown | 10 bars | Bar loop |
+| Daily loss cap | 2% | Bar loop |
+| Portfolio drawdown halt | 8% | Bar loop |
+| Correlation cap | max 2 per group | PortfolioManager |
+
+---
+
+## ML Models
+
+| Model | Architecture | Features | Weights |
 |---|---|---|---|
-| T1 | NY EMA Trend Pullback | 13:00–17:00 | TRENDING_UP or DOWN required |
-| T2 | Structure Break + FVG Continuation | London + NY | Any |
-| T3 | London Breakout + Liquidity Sweep | 07:00–10:00 | TRENDING only |
-| T4 | News Structural Breakout | Any | Any (sentiment ≥ 0.65 hard gate) |
-| T5 | Asian Range Mean Reversion | 02:00–06:45 | RANGING required |
+| RegimeClassifier (4H) | MLP 31→128→64→5 | `REGIME_4H_FEATURES` (31) | `weights/regime_4h.pkl` |
+| RegimeClassifier (1H) | MLP 15→128→64→5 | `REGIME_1H_FEATURES` (15) | `weights/regime_1h.pkl` |
+| GRU-LSTM | GRU(64,2L)→LSTM(128)→3 heads | `SEQUENCE_FEATURES` (74) | `weights/gru_lstm/model.pt` |
+| QualityScorer | MLP 17→64→32→1, Huber | `QUALITY_FEATURES` (17) | `weights/quality_scorer.pkl` |
+| SentimentModel | FinBERT + VADER fallback | news headlines | pre-trained |
+| RLAgent | PPO (SB3), CPU, 16 actions | 43-dim state | `weights/rl_ppo/model.zip` |
 
-**Dead zone:** 12:00–13:00 UTC — all traders blocked.
+**5 regime classes:** TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, CONSOLIDATION
 
-### Risk Controls (BaseTrader 8 guards)
-
-| Guard | Check |
-|---|---|
-| 0 | Symbol exclusion list per trader |
-| 1 | Session window |
-| 2 | Dead zone 12:00–13:00 UTC |
-| 3 | Per-symbol cooldown |
-| 4 | Session trade cap |
-| 5 | Circuit breaker (2% daily loss / 8% drawdown) |
-| 6 | Spread gate (Forex > 3 pips, Gold > 50 pips) |
-| 7 | EV gate: `ev ≥ 0.10` AND `expected_variance ≤ 0.80` AND `p_dir ≥ threshold` |
-| 8 | RL gate: PPO approves trader + sets EV selectivity tier |
-
----
-
-## ML / AI Layer
-
-| Model | Algorithm | Role |
-|---|---|---|
-| RegimeClassifier | PyTorch MLP 59→128→64→4, BatchNorm, GELU, residual | TRENDING_UP/DOWN/RANGING/VOLATILE |
-| GRULSTMPredictor | GRU(256, 2L) + LayerNorm → 3 heads | p_bull, p_bear, magnitude, uncertainty |
-| QualityScorer | PyTorch MLP 17→64→32→1, Huber loss | Expected value in R-multiples |
-| SentimentModel | FinBERT + VADER fallback | News/macro directional bias |
-| RLAgent | PPO (stable-baselines3), CPU, 42-dim state, 16 actions | Strategy selector + EV threshold |
-
-**EV label tiers** (QualityScorer training):
+**EV label tiers (QualityScorer):**
 
 | Exit | EV label |
 |---|---|
-| `tp2` | `+rr_ratio` (best — model aims here) |
+| `tp2` | `+rr_ratio` |
 | `tp1` | `+rr × 0.75` |
 | `be_or_trail` | `+rr × 0.4` |
 | `sl_*` | `-1.0` |
 | `time_exit` | skipped |
 
-**Regime persistence filter:** short regime runs (<20 bars at 4H, <48 bars at 1H) are zero-weighted during training to prevent label noise from short-lived flips.
-
-**Retraining schedule:**
-
-| Cadence | Models | Min data |
-|---|---|---|
-| Weekly (Sun 02:00 UTC) | Quality + RL | 200 (Quality), 500 (RL) journal entries |
-| Monthly (1st Sun 03:00 UTC) | Regime + GRU | OHLCV only |
-
-All retrains warm-start from existing weights at 5× lower LR. GRU is excluded from the per-round reinforcement loop (catastrophic forgetting risk).
+All retrains warm-start from existing weights at 5× lower LR. GRU is excluded from per-round reinforcement loop (catastrophic forgetting risk).
 
 ---
 
-## Latest Backtest Results
+## ICT Concepts as Features
 
-Period: Jan 2021 – Aug 2024 · Capital: $10,000 · 3 reinforcement rounds
+ICT/SMC is encoded numerically in `SEQUENCE_FEATURES` — the GRU learns which patterns matter.
 
-| Round | Trades | WR | PF | Sharpe | Max DD | Return |
-|---|---|---|---|---|---|---|
-| 1 | 2,571 | 45.4% | 2.08 | 3.77 | 2.8% | 1,549% |
-| 2 | 2,610 | 44.8% | 2.04 | 3.70 | 3.6% | 1,458% |
-| 3 | 2,586 | 45.3% | 2.05 | 3.71 | 2.8% | 1,491% |
-
-All 4 regime classes active in backtest. Calibration OK across all symbols.
+| Concept | Features in GRU input |
+|---------|----------------------|
+| BOS | Age (bars ago / 40), strength (move / ATR) |
+| FVG | Distance to nearest open FVG / ATR, fill ratio |
+| Liquidity sweep | Wick depth / ATR, body recovery ratio |
+| EMA pullback | Band position, EMA21 slope, EMA stack |
+| Asian range | Range width / ATR, price vs high/low |
+| Regime (4H + 1H) | One-hot (5 classes each) + confidence — indices 26–37 |
 
 ---
 
 ## Trade Journals
 
-**`trade_journal.csv`** — 12-column clean log:
+**`trade_journal.csv`** — clean 12-column log:
 ```
 timestamp, trader, symbol, side, size, entry, stop_loss, take_profit, rr_ratio, confidence, pnl, commission
 ```
 
-**`trade_journal_detailed.jsonl`** — full decision record including:
-- `ev`, `quality_score`, `expected_variance`
-- `ml_model_scores`: `p_bull`, `p_bear`, `regime`, `sentiment_score`, `sentiment_backend`
-- `state_at_entry` (42-dim RL state vector)
-- `rl_action`, `exit_reason`, `session`, `source`
-
-Journal exit reasons and their meaning:
-- `tp2` — full TP hit (best)
-- `tp1` — TP1 hit, held for more
-- `be_or_trail` — TP1 hit then trailed/stopped
-- `sl_full` — stopped out at SL
-- `time_exit` — timed out
+**`trade_journal_detailed.jsonl`** — full decision record:
+`ev`, `expected_variance`, `exit_reason`, `ml_model_scores` (p_bull, p_bear, regime), `state_at_entry` (43-dim), `rl_action`
 
 ---
 
-## Kaggle Training Setup
+## Kaggle Training
 
-The system uses a **split-dataset** approach on Kaggle:
+Split-dataset approach:
+1. **Code** — GitHub repo clone at `/kaggle/input/datasets/tysonsiwela/multi-bot-system`
+2. **Data** — OHLCV + processed data at `/kaggle/input/datasets/tysonsiwela/trading-data`
+3. **Push** — weights + metrics pushed back to GitHub via fresh clone
 
-1. **Code dataset** — GitHub repo clone at `/kaggle/input/datasets/tysonsiwela/multi-bot-system`
-2. **Data dataset** — OHLCV + processed data at `/kaggle/input/datasets/tysonsiwela/trading-data`
-3. **Fresh clone** at `/kaggle/working/remote/Multi-Bot` for GitHub push (via `step8_push_to_github.py`)
+`env_config.py` resolves all paths automatically for both environments.
 
-`env_config.py` resolves all paths automatically for both Kaggle and local environments.
-
-Full pipeline: `python kaggle_train.py`
+```bash
+python kaggle_train.py   # full pipeline: step7a → step6 → step7b
+```
 
 ---
 
@@ -306,20 +266,23 @@ docker compose -f docker-compose.dev.yml up -d --build
 docker compose -f docker-compose.dev.yml build trading-engine
 docker compose -f docker-compose.dev.yml up -d trading-engine
 
-# Live trade journal
-tail -f trading-engine/logs/trade_journal_detailed.jsonl | python -m json.tool
-
 # Engine logs
 docker compose -f docker-compose.dev.yml logs trading-engine --tail=50 -f
 
-# Health check
-docker exec trading_backend curl -s http://trading-engine:8000/health
+# Live trade journal
+tail -f trading-engine/logs/trade_journal_detailed.jsonl | python -m json.tool
 
-# Manual retrain
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model quality
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model rl
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model regime
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model gru
+# Manual retrain (from trading-engine/)
+cd trading-system/trading-engine
+python scripts/retrain_incremental.py --model regime
+python scripts/retrain_incremental.py --model gru
+python scripts/retrain_incremental.py --model quality
+python scripts/retrain_incremental.py --model rl
+python scripts/retrain_incremental.py --model all
+
+# Offline pipeline (from trading-system/)
+export PYTHONPATH="/home/tybobo/Desktop/Multi-Bot/trading-system:/home/tybobo/Desktop/Multi-Bot/trading-system/trading-engine"
+python3 run_pipeline.py
 ```
 
 ---
@@ -330,40 +293,51 @@ docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py -
 trading-system/
 ├── kaggle_train.py                   ← Kaggle entrypoint (full pipeline)
 ├── env_config.py                     ← Path resolver (local + Kaggle)
-├── step8_push_to_github.py           ← Push weights + metrics to GitHub
 ├── .env                              ← Single source of truth for all services
 ├── docker-compose.dev.yml
-├── docs/                             ← Documentation
+├── docs/
 │   ├── README.md                     ← This file
+│   ├── CLAUDE.md                     ← Claude reference (file layout, known issues)
 │   ├── models.md                     ← ML model details
-│   ├── strategies.md                 ← Trading strategy details
-│   ├── system_architecture.md        ← Full architecture reference
-│   ├── system_assessment.md          ← Current status + bug history
+│   ├── strategies.md                 ← Signal generation reference
+│   ├── system_architecture.md        ← Full pipeline + causal integrity
 │   └── TRAINING_AND_BACKTEST.md      ← Training runbook
-├── instructions/                     ← Design docs
-│   ├── project-description.md
-│   ├── architecture.md
-│   └── research-plan.md
+├── instructions/                     ← Design context docs
 ├── pipeline/                         ← 9-step data + training pipeline
-│   ├── step0_resample.py  → step7b_train.py
-│   └── step6_backtest.py             ← 3-round reinforcement loop
 ├── backend/                          ← FastAPI (port 3000)
-└── trading-engine/                   ← Core engine (port 8000 internal)
+└── trading-engine/
+    ├── main.py                       ← BROKEN — imports deleted trader classes
     ├── models/
-    │   ├── regime_classifier.py      ← PyTorch MLP, dual-TF cascade
-    │   ├── gru_lstm_predictor.py     ← GRU(256) + 3 heads
-    │   ├── quality_scorer.py         ← EV regressor, tiered Huber loss
+    │   ├── regime_classifier.py      ← Dual-cascade MLP (4H + 1H)
+    │   ├── gru_lstm_predictor.py     ← GRU(64)→LSTM(128)→3 heads
+    │   ├── quality_scorer.py         ← EV regressor, Huber loss
     │   ├── sentiment_model.py        ← FinBERT + VADER
-    │   └── rl_agent.py               ← PPO, CPU, model.zip save/load
+    │   └── rl_agent.py               ← PPO, CPU, model.zip
     ├── scripts/
+    │   ├── run_backtest.py           ← Single ml_trader, GPU-batched
     │   ├── retrain_incremental.py    ← Manual / scheduled retraining
     │   └── retrain_scheduler.py      ← Weekly/monthly trigger daemon
-    ├── traders/                      ← trader_1 through trader_5
-    ├── services/                     ← SignalPipeline, DataFetcher, TradeJournal
-    ├── indicators/market_structure.py← Vectorized ICT (FVG, BOS, CHoCH, OB)
+    ├── traders/
+    │   └── __init__.py               ← Empty — trader files deleted
+    ├── services/
+    │   ├── feature_engine.py         ← All feature vectors
+    │   ├── signal_pipeline.py        ← BROKEN — calls deleted trader methods
+    │   └── ...
+    ├── indicators/market_structure.py ← Vectorized ICT (FVG, BOS, sweep, OB)
     ├── weights/                      ← Trained model weights
     └── logs/                         ← trade_journal.csv + trade_journal_detailed.jsonl
 ```
+
+---
+
+## Known Issues
+
+| Issue | File | Impact |
+|-------|------|--------|
+| Imports deleted `Trader1NYEMA` etc. | `trading-engine/main.py` | Live engine won't start |
+| Calls `trader.analyze_market()` | `services/signal_pipeline.py` | Live pipeline broken |
+| RL policy collapsed (action=1 always) | `models/rl_agent.py` | Needs ≥200 trades + entropy tuning |
+| Regime accuracy 4H ~49%, 1H ~41% | `models/regime_classifier.py` | Investigate GMM label quality |
 
 ---
 

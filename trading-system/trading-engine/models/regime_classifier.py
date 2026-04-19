@@ -806,7 +806,7 @@ class RegimeClassifier(BaseModel):
         sample_weight: optional (N,) float32 — per-bar confidence from rule labeling.
           Implemented as weighted CrossEntropyLoss (reduction='none' × weight).
           Bars with weight < 0.4 (ambiguous) also get softer label targets via
-          per-bar label smoothing: target = weight * one_hot + (1-weight)/4.
+          per-bar label smoothing: target = weight * one_hot + (1-weight)/N_CLASSES.
           Entropy regularisation (λ=0.05) penalises overconfident predictions on
           ALL bars — encourages the model to output high uncertainty on random/ambiguous
           market conditions rather than always committing to one regime.
@@ -865,14 +865,22 @@ class RegimeClassifier(BaseModel):
             # ── Build/warm-start model ────────────────────────────────────────
             n_feat = X.shape[1]
             _feature_mismatch = (self._model is not None and self._n_features != n_feat)
+            # Also force cold start if loaded model has wrong number of output classes.
+            # This fires when old 4-class pkl is loaded but labels now include class 4.
+            _loaded_n_cls = getattr(self, "_n_classes", N_CLASSES)
+            _class_mismatch = (self._model is not None and _loaded_n_cls != N_CLASSES)
             if _feature_mismatch:
                 logger.warning("RegimeClassifier: feature count changed %d→%d, resetting",
                                self._n_features, n_feat)
-            _warm_start = (self._model is not None and not _feature_mismatch)
+            if _class_mismatch:
+                logger.warning("RegimeClassifier: class count changed %d→%d, resetting",
+                               _loaded_n_cls, N_CLASSES)
+            _warm_start = (self._model is not None and not _feature_mismatch and not _class_mismatch)
             if not _warm_start:
                 # Cold start: fresh random init
                 self._model      = _build_mlp(n_feat, N_CLASSES).to(DEVICE)
                 self._n_features = n_feat
+                self._n_classes  = N_CLASSES
                 logger.info("RegimeClassifier: cold start (no existing weights)")
             else:
                 # Warm start: continue from loaded weights — preserves learned structure
@@ -1158,6 +1166,7 @@ class RegimeClassifier(BaseModel):
 
             self._model      = m
             self._n_features = n_feat
+            self._n_classes  = n_cls
             self._loaded     = True
             logger.info("RegimeClassifier loaded from %s (device=%s, features=%d)",
                         path, DEVICE, n_feat)

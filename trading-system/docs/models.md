@@ -1,67 +1,61 @@
 # ML Models Reference
 
-Last updated: 2026-04-19. All models live in `trading-engine/models/`. All are PyTorch — LightGBM and XGBoost have been removed.
+Last updated: 2026-04-19. All models live in `trading-engine/models/`. All are PyTorch.
 
-**Critical rule:** All models raise `ModelNotTrainedError(RuntimeError)` when used without trained weights. No silent fallbacks. Train all models before setting `ML_ENABLED=true`.
-
-**Incremental warm-start:** All models detect existing weights at fit time and continue training at 5× lower LR instead of reinitialising from scratch. This preserves knowledge accumulated from the full historical dataset.
+**Critical rule:** All models raise `ModelNotTrainedError(RuntimeError)` when used without
+trained weights. No silent fallbacks. Train all models before setting `ML_ENABLED=true`.
 
 ---
 
-## RegimeClassifier
+## RegimeClassifier (dual-cascade)
 
-**File:** `models/regime_classifier.py`  **Weights:** `weights/regime_4h.pkl` / `weights/regime_1h.pkl`
+**File:** `models/regime_classifier.py`
+**Weights:** `weights/regime_4h.pkl` (bias) + `weights/regime_1h.pkl` (structure)
 
 ### Purpose
-Labels each bar as one of 4 market regimes. Every downstream model conditions on this output.
+Two independent classifiers in cascade:
+- **4H bias classifier** — labels macro market state from 4H+1D data
+- **1H structure classifier** — refines intraday structure from 1H+4H data
+
+Both outputs injected as one-hot context into every GRU sequence timestep.
 
 ### Architecture
+Both classifiers share the same MLP structure:
 ```
-59 → BatchNorm → FC(128) + residual_skip(128) → BN → GELU → Dropout(0.5)
-  → FC(64) → BN → GELU → FC(4)
+N → BatchNorm → FC(128) + residual_skip(128) → BN → GELU → Dropout(0.5)
+  → FC(64) → BN → GELU → FC(5)
 ```
 
 ### Classes
-| ID | Name | Rule |
-|----|------|------|
-| 0 | TRENDING_UP | ADX > 25 AND EMA stack ≥ 1 AND drift > 0 |
-| 1 | TRENDING_DOWN | ADX > 25 AND EMA stack ≤ -1 AND drift < 0 |
-| 2 | RANGING | Default (low ADX, low drift) |
-| 3 | VOLATILE | ATR percentile ≥ 80th percentile |
-
-### Label Quality Features
-- **Per-group GMMs** on 4H data: `dollar` (7 pairs), `cross` (3 pairs), `gold` (XAUUSD)
-- **Confidence scoring** per bar (0→1): scales with ADX strength, EMA stack alignment, drift magnitude
-- **Minimum persistence filter**: regime runs shorter than N bars are zero-weighted (not labelled differently, just ignored by the trainer):
-  - 4H: min 20 bars (~80 hours)
-  - 1H: min 48 bars (~48 hours)
-  - Prevents label noise from short-lived regime flips that have no predictive value
-- **Ambiguous bars** (confidence < 0.4): trained with soft targets, not hard labels
+| ID | Name | Description |
+|----|------|-------------|
+| 0 | TRENDING_UP | Sustained upward drift, efficiency > 0.25 |
+| 1 | TRENDING_DOWN | Sustained downward drift, efficiency > 0.25 |
+| 2 | RANGING | Low drift, low efficiency |
+| 3 | VOLATILE | Vol > p60 AND vol_slope > 0 |
+| 4 | CONSOLIDATION | Tight range, low ATR percentile |
 
 ### Output
 ```python
-{"regime": "TRENDING_UP", "regime_id": 0, "proba": [0.7, 0.1, 0.1, 0.1], "regime_confidence": 0.7}
+{"regime": "TRENDING_UP", "regime_id": 0, "proba": [0.7, 0.1, 0.1, 0.05, 0.05], "regime_confidence": 0.7}
 ```
 
-### Training
-- Latest 4H: 120,490 samples — acc=0.477 (4-class balanced; random=0.25)
-- Latest 1H: 468,252 samples — acc=0.395
-- Val loss diverges quickly (train≈0.61, val≈1.03) → early stop at epoch 12-13
-- Root cause of low accuracy: 24-25% of all bars are ambiguous, RANGING is the majority class (~43%) but hardest to separate
-- Persistence improvements (min-persist filter) are expected to improve RANGING accuracy on next run
-- Warm-start: `_warm_start` flag checked before `_build_mlp()` — skips reinit if weights present and feature count matches; trains at `lr=6e-5` (warm) vs `lr=3e-4` (cold)
+### Feature Counts
+| Classifier | Features | Source |
+|-----------|----------|--------|
+| 4H bias | 31 (`REGIME_4H_FEATURES`) | 4H base + 1D context + regime dynamics + macro |
+| 1H structure | 15 (`REGIME_1H_FEATURES`) | 1H base + session + BOS/sweep + 4H context + dynamics |
 
-### 59 REGIME_FEATURES
-| Indices | Description |
-|---------|-------------|
-| 0–7 | Base: ADX, EMA stack, ATR ratio, BB width, realized vol, session code; indices 6–7 zeroed (BOS/sweep lookahead) |
-| 8–27 | 5 TFs × 4 features (ADX, EMA stack, ATR ratio, BB width) for 5M/15M/1H/4H/1D |
-| 28–33 | S/R zones — zeroed (detect_sr_zones uses centered rolling window = lookahead) |
-| 34–35 | vol_slope (Δ ATR/close over 14 bars), regime_duration |
-| 36–39 | prev_regime one-hot (4 dims) |
-| 40 | regime_confidence |
-| 41–57 | 17 global index returns |
-| 58–59 | macro_vix_level, macro_yield_spread |
+### Label Generation
+- Per-group GMMs on 4H data only: `dollar` (7 pairs), `cross` (3 crosses), `gold` (XAUUSD)
+- Feature-axis constraints for stable cluster assignment:
+  - `vol > p60 AND vol_slope > 0` → VOLATILE
+  - `drift > 5e-5 AND efficiency > 0.25` → TRENDING_UP
+  - `drift < -5e-5 AND efficiency > 0.25` → TRENDING_DOWN
+  - low drift AND low ATR percentile → CONSOLIDATION
+  - else → RANGING
+- 4H labels forward-filled to 1H training TF
+- Hysteresis: 3 consecutive bars required to switch regime
 
 ---
 
@@ -70,17 +64,19 @@ Labels each bar as one of 4 market regimes. Every downstream model conditions on
 **File:** `models/gru_lstm_predictor.py`  **Weights:** `weights/gru_lstm/model.pt`
 
 ### Purpose
-Predicts direction, magnitude, and uncertainty of the next price move from a 30-bar sequence. Conditions on regime at every timestep.
+Predicts direction, magnitude, and uncertainty of the next price move from a
+30-bar sequence of 74 features. Receives 4H and 1H regime context at every timestep.
 
 ### Architecture
 ```
-Input: (batch, 30, 53)
-  → GRU(256 hidden, 2 layers, dropout=0.2)
-  → LayerNorm(256) on last hidden state
-  → FC(128) → GELU  [shared representation]
-  → direction_head: FC(64) → GELU → FC(1) → sigmoid  → p_bull ∈ [0,1]
-  → magnitude_head: FC(64) → GELU → FC(1) → ReLU     → expected_move ≥ 0
-  → variance_head:  FC(64) → GELU → FC(1)             → log_variance (unbounded)
+Input: (batch, 30, 74)
+  → GRU(64 hidden, 2 layers, dropout=0.2)
+  → LSTM(128 hidden, 1 layer)
+  → LayerNorm(128) on last hidden state
+  → shared FC(128) → GELU
+  → direction_head:  FC(64) → GELU → FC(1) → sigmoid  → p_bull
+  → magnitude_head:  FC(64) → GELU → FC(1) → ReLU     → expected_move
+  → variance_head:   FC(64) → GELU → FC(1)             → log_variance
 ```
 
 ### Loss
@@ -92,34 +88,31 @@ Input: (batch, 30, 53)
     "p_bull": 0.72,
     "p_bear": 0.28,
     "expected_move": 0.0015,
-    "expected_variance": 0.3,   # uncertainty gate: reject if > 0.80
+    "expected_variance": 0.3,   # uncertainty; gate: ≤ 0.80
+    "expected_volatility": 0.55,
+    "entry_depth": 0.15,
 }
 ```
 
-### Training Data
-- Latest: 7,081,756 sequences, 44 symbol/timeframe combos, input_size=72 (includes HTF context)
-- DataParallel across both Kaggle T4s
-- Early stop at epoch 6 (train=0.5943, val=0.6184)
-
 ### Regime Conditioning
-`prev_regime_0..3` (one-hot) and `regime_confidence` injected at every sequence timestep. Regime inference runs before GRU sequence building — order is load-bearing.
+`regime_4h_0..4` (one-hot) + `regime_4h_conf` and `regime_1h_0..4` + `regime_1h_conf`
+are injected at every sequence timestep (indices 26–37 of `SEQUENCE_FEATURES`).
+Regime inference runs BEFORE GRU sequence building in `_precompute_ml_cache` — order is load-bearing.
 
-### GRU Excluded from Reinforcement Loop
-GRU is **NOT** retrained in `step6_backtest.py`'s per-round warm-start loop. Fine-tuning on ~3k backtest journal trades against 7M training sequences causes catastrophic forgetting. GRU retrains monthly from full OHLCV history only.
-
-### 53 SEQUENCE_FEATURES per Timestep
+### 74 SEQUENCE_FEATURES per Timestep
 | Indices | Count | Description |
 |---------|-------|-------------|
-| 0–15 | 16 | Base 15M: log_return, hl_range, close_vs_open, ATR_norm, RSI, EMA21/50 dist, BB position, volume ratio, session flags, bos_bull/bear, fvg_bull/bear |
+| 0–15 | 16 | Base 15M: log_return, HL range, close_vs_open, ATR_norm, RSI, EMA21/50 dist, BB pos, vol ratio, session flags, BOS flags, FVG flags |
 | 16–17 | 2 | 5M: RSI, EMA21 dist |
 | 18–20 | 3 | 1H: ADX, EMA21 dist, EMA50 dist |
-| 21–23 | 3 | 4H: EMA21-EMA50 diff / close, ADX, RSI |
+| 21–23 | 3 | 4H: EMA21-50 diff/close, ADX, RSI |
 | 24–25 | 2 | 1D: EMA21 dist, EMA stack score |
-| 26–29 | 4 | prev_regime one-hot |
-| 30 | 1 | regime_confidence |
-| 31 | 1 | vol_slope_seq (Δ ATR/close, 14 bars) |
-| 32–33 | 2 | time_sin, time_cos (hour cyclic encoding) |
-| 34–52 | 19 | Macro: 17 index returns + VIX level + yield spread |
+| 26–31 | 6 | 4H regime one-hot (5 dims) + confidence |
+| 32–37 | 6 | 1H regime one-hot (5 dims) + confidence |
+| 38 | 1 | vol_slope_seq (Δ ATR/close, 14 bars) |
+| 39–40 | 2 | time_sin, time_cos (hour cyclic) |
+| 41–71 | 31 | ICT structure distances: EMA pullback zone, BOS age/strength, FVG dist/fill, sweep wick depth, Asian range context, candle body/wicks, stochastic, ADX, regime dynamics, session timing |
+| 72–73 | 2 | macro_vix_level, macro_yield_spread |
 
 ---
 
@@ -128,7 +121,8 @@ GRU is **NOT** retrained in `step6_backtest.py`'s per-round warm-start loop. Fin
 **File:** `models/quality_scorer.py`  **Weights:** `weights/quality_scorer.pkl`
 
 ### Purpose
-Predicts expected value (EV) of a trade in R-multiples. Captures both win probability AND payoff magnitude — the actual decision variable for trade selection.
+Predicts expected value (EV) of a trade in R-multiples. Runs **post-signal** once the
+actual `rr_ratio`, `side`, and `trader_id` are known — not in the GPU pre-compute cache.
 
 ### Architecture
 ```
@@ -138,47 +132,31 @@ Predicts expected value (EV) of a trade in R-multiples. Captures both win probab
 ```
 
 ### Loss
-Class-weighted Huber loss — winners upweighted ~4.1× to correct for ~20%/80% positive/negative label imbalance.
-```python
-_pos_weight = clip(n_neg / n_pos, 1.0, 8.0)
-w = where(target > 0, _pos_weight, 1.0)
-loss = (w * huber(pred, target, delta=1.0)).mean()
-```
+`HuberLoss(delta=1.0)` — robust to large-R outliers.
 
 ### Output
 ```python
-{
-    "ev": 0.45,             # R-multiples; gate threshold: ≥ 0.10
-    "quality_score": 0.61,  # sigmoid(ev), kept for logging
-}
+{"ev": 0.45, "quality_score": 0.61}  # quality_score = sigmoid(ev)
 ```
 
-### EV Label Tiers
-Labels encode exit quality so the model learns to aim for TP2:
-
-| Exit reason | EV label | Meaning |
-|---|---|---|
-| `tp2` | `clip(rr_ratio, 0.1, 10.0)` | Full TP — best outcome |
-| `tp1` | `clip(rr_ratio × 0.75, 0.1, 10.0)` | TP1 hit, held further |
-| `be_or_trail` | `clip(rr_ratio × 0.4, 0.1, 10.0)` | TP1 hit, trailed out |
-| `sl_*` | `-1.0` | Loss |
-| `time_exit` | `None` (skipped) | Ambiguous — excluded |
-
-Winners are normalised by `median_win` RR so labels cluster around ±1R: `y[win] = clip(y[win] / median_win, 0.0, 3.0)`.
-
-### Warm-start
-Detects `self._model is not None and self._n_features == n_feat` → trains at `lr=2e-4` (vs `lr=1e-3` cold).
-Latest: 5,264 journal entries, EV stats: mean=-0.356, n_pos=1,003 vs n_neg=4,261, dir_acc=0.615, MAE=0.933.
+### EV Label Computation
+```python
+ev = realized_pnl / (size × |entry - sl|)   # preferred
+ev = realized_pnl / |entry - sl|             # if size missing
+ev = planned_rr                               # TP exit, no pnl recorded
+ev = -1.0                                    # SL exit, no pnl recorded
+# clipped to [-5.0, 10.0]; trades without "tp"/"sl" in exit_reason excluded
+```
 
 ### 17 QUALITY_FEATURES
 | Index | Feature |
 |-------|---------|
 | 0 | strategy_id |
-| 1 | signal_direction (1=buy, 0=sell) |
+| 1 | signal_direction (1=buy, -1=sell) |
 | 2 | rr_ratio |
 | 3 | p_bull_gru |
 | 4 | p_bear_gru |
-| 5 | regime_class (0–3) |
+| 5 | regime_class (0–4) |
 | 6 | sentiment_score |
 | 7 | adx_at_signal |
 | 8 | atr_ratio_at_signal |
@@ -197,23 +175,18 @@ Latest: 5,264 journal entries, EV stats: mean=-0.356, n_pos=1,003 vs n_neg=4,261
 
 **File:** `models/sentiment_model.py`  **Weights:** pre-trained (no local file)
 
-### Purpose
-Scores news headlines for currency/instrument sentiment direction.
-
 ### Backends
 1. **FinBERT** (`ProsusAI/finbert`) — primary
 2. **VADER** — fallback when FinBERT unavailable
 
 ### Output
 ```python
-{"sentiment_score": 0.6, "sentiment_label": "bullish", "sentiment_confidence": 0.8, "sentiment_backend": "finbert"}
+{"sentiment_score": 0.6, "sentiment_label": "bullish", "sentiment_confidence": 0.8}
 ```
 
 Gold: USD bullish → XAUUSD bearish score (inverted).
 
-### Usage
-- Trader 4 hard gate: `sentiment_score ≥ 0.65` required
-- Ensemble: `sentiment_bonus = abs(score) × 0.1` (direction match) or `-0.05` (mismatch)
+Used by QualityScorer feature `sentiment_score` (index 6).
 
 ---
 
@@ -222,45 +195,33 @@ Gold: USD bullish → XAUUSD bearish score (inverted).
 **File:** `models/rl_agent.py`  **Weights:** `weights/rl_ppo/model.zip`
 
 ### Purpose
-Selects which trader to approve and at what EV selectivity tier.
+Selects selectivity tier (EV threshold). Currently outputs action=1 for all bars
+(policy collapsed — needs ≥ 200 trades in journal + entropy coefficient tuning).
 
 ### Algorithm
-PPO via stable-baselines3. MLP policy — **always runs on CPU** (SB3 guidance: MlpPolicy is faster on CPU than GPU).
-
-### Save / Load
-Weights saved and loaded as `weights/rl_ppo/model.zip` (explicit `.zip` extension prevents SB3 from creating a directory instead of a file, which broke warm-start in previous versions).
-
-### Warm-start
-```python
-if self._model is not None and self.is_trained:
-    self._model.set_env(env)
-    self._model.learning_rate = 3e-4 / 5.0
-    self._model.learn(reset_num_timesteps=False)
-else:
-    self._model = PPO("MlpPolicy", env, device="cpu", ent_coef=0.01, ...)
-```
+PPO via stable-baselines3. Trains on completed trade episodes from JSONL journal.
 
 ### Action Space (16 actions)
 | Actions | Meaning |
 |---------|---------|
 | 0 | NoTrade |
-| 1–5 | Approve trader 1–5 at EV threshold 0.55 |
-| 6–10 | Approve trader 1–5 at EV threshold 0.65 |
-| 11–15 | Approve trader 1–5 at EV threshold 0.75 |
+| 1–5 | Approve at EV threshold 0.55 |
+| 6–10 | Approve at EV threshold 0.65 |
+| 11–15 | Approve at EV threshold 0.75 |
 
-### 42-dim State Vector
+### 43-dim State Vector
 | Dims | Content |
 |------|---------|
-| 0–5 | ML predictions: p_bull, p_bear, entry_depth, regime_id, sentiment, quality_score |
-| 6–13 | Market structure: ADX, EMA stack, ATR ratio, BB width, BOS bull/bear, FVG bull/bear |
-| 14–18 | Session context: asian, london, ny, overlap, news_proximity |
-| 19–23 | Strategy signal one-hot (traders 1–5) |
-| 24–29 | Portfolio state: open_positions, drawdown, daily_pnl, trades_today, last_result, equity_pct |
+| 0–5 | ML predictions (p_bull, p_bear, entry_depth, regime_id, sentiment, quality) |
+| 6–13 | Market structure (ADX, EMA stack, ATR ratio, BB width, BOS/FVG flags) |
+| 14–18 | Session context (asian, london, ny, dead, news_proximity) |
+| 19–23 | Signal presence per slot |
+| 24–29 | Portfolio state (open_pos, drawdown, daily_pnl, trades_today, last_result, equity_norm) |
 | 30–33 | Instrument one-hot (EURUSD, GBPUSD, USDJPY, XAUUSD) |
-| 34–41 | ATR lag ratios (8 bars) |
+| 34–41 | ATR history ratios (8 lags: 1,4,8,24,48,96,168,336 bars) |
 
-### Training requirement
-≥ 500 completed trades with `rl_action` and `state_at_entry` in the JSONL journal.
+### Training Requirement
+≥ 50 completed trades with `rl_action` and `state_at_entry` in JSONL journal.
 
 ---
 
@@ -271,7 +232,5 @@ else:
 | Untrained | Raises `ModelNotTrainedError(RuntimeError)` |
 | Silent fallback | None — all failures raise |
 | Hot-reload | `reload_if_updated()` checks mtime every 5 min |
-| GPU | RegimeClassifier + GRU: `torch.amp.autocast("cuda")` + DataParallel |
-| RL device | CPU always (MLP policy) |
-| Warm-start | Existing weights → continue training at 5× lower LR |
-| GRU reinforcement loop | Excluded — monthly OHLCV retraining only |
+| GPU | `torch.amp.autocast("cuda")` + DataParallel (Regime, GRU) |
+| Legacy formats | LightGBM/XGBoost pkl support removed |
