@@ -10,10 +10,9 @@ For training and backtest runbook see `docs/TRAINING_AND_BACKTEST.md`.
 ## Current System State
 
 **The 5 ICT rule-based traders are gone.** `traders/__init__.py` contains only a comment.
-Signal generation happens in a single unified ML path in `run_backtest._compute_backtest_signal`.
-
-`main.py` and `signal_pipeline.py` still reference the old traders — they are **broken for live trading**.
-The working execution path is the offline pipeline (`pipeline/` + `scripts/run_backtest.py`).
+Signal generation uses a single unified ML path: `_compute_backtest_signal` in `run_backtest.py`
+(offline/backtest) and `_compute_ml_signal` in `signal_pipeline.py` (live/paper) — both are
+kept in exact sync. `run_backtest._compute_backtest_signal` is the source of truth.
 
 ---
 
@@ -229,13 +228,10 @@ tail -f trading-engine/logs/trade_journal_detailed.jsonl | python -m json.tool
 
 | Issue | Severity | File |
 |-------|----------|------|
-| `main.py` broken — imports `Trader1NYEMA` etc. (deleted) | P0 | `trading-engine/main.py` |
-| `signal_pipeline.py` broken — calls `trader.analyze_market()` | P0 | `services/signal_pipeline.py` |
 | RL always action=1 — policy collapsed | P1 | `models/rl_agent.py` |
 | Regime accuracy low (4H ~49%, 1H ~41%) | P2 | `models/regime_classifier.py` |
 
 **Pending work:**
-- Fix `main.py` + `signal_pipeline.py` to use unified ML signal path (no trader classes)
 - RL entropy tuning after journal reaches ≥ 200 trades
 - EV calibration: isotonic regression on validation set
 - Regime transition matrix as additional GRU sequence features

@@ -38,10 +38,6 @@ from services.order_executor import ExecutionEngine, ExecutionRequest
 from services.paper_trading_service import PaperTradingService
 from services.feature_engine import FeatureEngine
 from monitors.portfolio_manager import PortfolioManager
-from traders import (
-    Trader1NYEMA, Trader2FVGBos, Trader3LondonBO,
-    Trader4NewsMomentum, Trader5AsianMR,
-)
 
 # ML models — only imported when ML_ENABLED=true
 if settings.ML_ENABLED:
@@ -90,7 +86,6 @@ class ProductionTradingEngine:
         self._init_ml_models()
         self._init_session_manager()
         self._init_news_service()
-        self._init_traders()
         self._init_signal_pipeline()
         self._init_risk_engine()
         self._init_trade_journal()
@@ -100,13 +95,13 @@ class ProductionTradingEngine:
         self._ohlcv_cache: Dict[str, Dict[str, object]] = {}
         # Track open positions for portfolio manager lifecycle calls
         self._open_positions: List[dict] = []
+        self._daily_pnl: float = 0.0
+        self._trades_today: int = 0
 
-        # Register allocs for all 5 traders
-        for t in self._traders:
-            self._state_mgr.set_strategy_allocation(t.TRADER_ID, {
-                "is_active": True,
-                "allocated_capital": settings.ACCOUNT_BALANCE * settings.CAPITAL_PER_TRADER,
-            })
+        self._state_mgr.set_strategy_allocation("ml_trader", {
+            "is_active": True,
+            "allocated_capital": settings.ACCOUNT_BALANCE,
+        })
 
     def _init_redis(self) -> None:
         self._redis = redis.Redis(
@@ -176,26 +171,8 @@ class ProductionTradingEngine:
         self._news = NewsService(redis_client=self._redis, news_api_key=settings.NEWS_API_KEY)
         self._news.start()
 
-    def _init_traders(self) -> None:
-        kwargs = dict(
-            settings=settings,
-            redis_client=self._redis,
-            state_manager=self._state_mgr,
-            feature_engine=self._feature_engine,
-            ml_models=self._ml_models,
-        )
-        self._traders: List = [
-            Trader1NYEMA(**kwargs),
-            Trader2FVGBos(**kwargs),
-            Trader3LondonBO(**kwargs),
-            Trader4NewsMomentum(**kwargs),
-            Trader5AsianMR(**kwargs),
-        ]
-        logger.info("Traders initialized: %s", [t.TRADER_ID for t in self._traders])
-
     def _init_signal_pipeline(self) -> None:
         self._pipeline = SignalPipeline(
-            traders=self._traders,
             ml_models=self._ml_models,
             feature_engine=self._feature_engine,
             session_manager=self._session_mgr,
@@ -255,7 +232,6 @@ class ProductionTradingEngine:
                     payload = {
                         "status": "ok",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "traders": len(engine_ref._traders),
                         "mode": "paper" if settings.PAPER_TRADING else "live",
                     }
                     body = json.dumps(payload).encode()
@@ -351,9 +327,10 @@ class ProductionTradingEngine:
                 )
                 trade = self._executor.execute_trade(req, portfolio)
                 if trade:
-                    # Record outcome for streak / daily budget tracking
                     pnl = float(trade.get("pnl", 0.0))
-                    self._portfolio_mgr.record_outcome(enriched["trader_id"], pnl)
+                    self._daily_pnl += pnl
+                    self._trades_today += 1
+                    self._portfolio_mgr.record_outcome("ml_trader", pnl)
                     self._open_positions.append({**trade, "tp1": enriched.get("tp1"), "size_full": enriched.get("size_full")})
                     self._journal.log_trade({
                         **trade,
@@ -387,19 +364,16 @@ class ProductionTradingEngine:
             return None
 
     def _get_portfolio_state(self) -> dict:
-        """Aggregate portfolio state across all traders."""
-        total_pnl = sum(t._daily_pnl for t in self._traders)
-        total_trades = sum(sum(t._trades_today.values()) for t in self._traders)
         open_symbols = list({p.get("symbol") for p in self._open_positions if p.get("symbol")})
         return {
-            "daily_loss_pct": max(0, -total_pnl) / (settings.ACCOUNT_BALANCE + 1e-9),
+            "daily_loss_pct": max(0, -self._daily_pnl) / (settings.ACCOUNT_BALANCE + 1e-9),
             "drawdown_pct": 0.0,
             "open_positions": len(self._open_positions),
             "open_symbols": open_symbols,
             "open_positions_detail": self._open_positions,
-            "equity": settings.ACCOUNT_BALANCE + total_pnl,
-            "daily_pnl": total_pnl,
-            "trades_today": total_trades,
+            "equity": settings.ACCOUNT_BALANCE + self._daily_pnl,
+            "daily_pnl": self._daily_pnl,
+            "trades_today": self._trades_today,
         }
 
     # ─── Main loop ───────────────────────────────────────────────────────────
@@ -408,8 +382,8 @@ class ProductionTradingEngine:
         """Main loop. Subscribes to MARKET_DATA. Runs heartbeat."""
         self._running = True
         self._state_mgr.set_engine_status("running")
-        logger.info("Engine starting — %d traders, ML=%s, PAPER=%s",
-                    len(self._traders), settings.ML_ENABLED, settings.PAPER_TRADING)
+        logger.info("Engine starting — ML=%s, PAPER=%s",
+                    settings.ML_ENABLED, settings.PAPER_TRADING)
 
         self._bus.subscribe(EventType.MARKET_DATA, self.on_market_data)
 

@@ -6,9 +6,6 @@ A production-grade, fully containerised automated trading system for Forex and G
 Signal generation is driven entirely by ML — ICT/SMC concepts are encoded as numeric
 features fed to a GRU-LSTM model. There are no rule-based traders.
 
-> **Note:** The live trading engine (`main.py`) is currently broken — it still imports
-> the deleted trader classes. The working path is the offline pipeline + backtest.
-> See [Known Issues](#known-issues).
 
 ---
 
@@ -132,7 +129,7 @@ MIN_JOURNAL_RL=500
 | `trading_postgres` | 5432 | Trade journal, state |
 | `trading_redis` | 6379 | Event bus, state cache |
 | `trading_backend` | 3000 | FastAPI — REST + WebSocket |
-| `trading_engine_main` | 8000 (internal) | Trading engine (currently broken for live) |
+| `trading_engine_main` | 8000 (internal) | Trading engine (paper + live) |
 | `trading_frontend` | 3001 | React dashboard (Nginx) |
 | `trading_model_retrainer` | — | `retrain_scheduler.py` |
 
@@ -321,7 +318,7 @@ trading-system/
     │   └── __init__.py               ← Empty — trader files deleted
     ├── services/
     │   ├── feature_engine.py         ← All feature vectors
-    │   ├── signal_pipeline.py        ← BROKEN — calls deleted trader methods
+    │   ├── signal_pipeline.py        ← _compute_ml_signal mirrors run_backtest exactly
     │   └── ...
     ├── indicators/market_structure.py ← Vectorized ICT (FVG, BOS, sweep, OB)
     ├── weights/                      ← Trained model weights
@@ -334,8 +331,6 @@ trading-system/
 
 | Issue | File | Impact |
 |-------|------|--------|
-| Imports deleted `Trader1NYEMA` etc. | `trading-engine/main.py` | Live engine won't start |
-| Calls `trader.analyze_market()` | `services/signal_pipeline.py` | Live pipeline broken |
 | RL policy collapsed (action=1 always) | `models/rl_agent.py` | Needs ≥200 trades + entropy tuning |
 | Regime accuracy 4H ~49%, 1H ~41% | `models/regime_classifier.py` | Investigate GMM label quality |
 

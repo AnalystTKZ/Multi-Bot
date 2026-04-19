@@ -1,18 +1,14 @@
 """
-signal_pipeline.py — Replaces signal_engine.py + strategy_manager.py.
+signal_pipeline.py — ML-native signal generator for the live/paper engine.
 
-Orchestrates: ML inference → strategy scan → RL selection → execution gate.
+Mirrors run_backtest._compute_backtest_signal exactly (that is the source of truth).
 Called by main.py on every MARKET_DATA event.
-
-v2 additions:
-  - CandidateLogger injected into all traders (logs pre-gate candidates)
-  - EVFilter injected into all traders (EV gate before execution)
-  - EVFilter.refresh() called every 100 bars to update historical averages
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -20,12 +16,8 @@ import numpy as np
 import pandas as pd
 
 from services.event_bus import EventBus, EventType
-from services.candidate_logger import CandidateLogger
-from services.quant_analytics import EVFilter
 
 logger = logging.getLogger(__name__)
-
-_EV_REFRESH_INTERVAL = 100  # refresh EVFilter every N bars
 
 
 def _first_present_frame(df_htf: dict, *keys: str, default=None):
@@ -41,18 +33,14 @@ def _first_present_frame(df_htf: dict, *keys: str, default=None):
 
 class SignalPipeline:
     """
-    Full pipeline per bar:
-      1. ML inference (if ML_ENABLED)
-      2. Run all session-appropriate traders
-      3. Collect valid rule-based signals
-      4. RL action selection (if ML_ENABLED)
-      5. Confidence gate
-      6. Return approved signals
+    Per-bar pipeline: ML inference → _compute_ml_signal → ensemble gate → publish.
+
+    Signal logic mirrors run_backtest._compute_backtest_signal (source of truth).
+    QualityScorer / EV gate runs after PM enrichment in main.py (needs rr_ratio).
     """
 
     def __init__(
         self,
-        traders: list,
         ml_models: dict,
         feature_engine,
         session_manager,
@@ -60,7 +48,6 @@ class SignalPipeline:
         settings,
         event_bus: EventBus,
     ):
-        self._traders = traders
         self._ml = ml_models
         self._fe = feature_engine
         self._session = session_manager
@@ -70,17 +57,7 @@ class SignalPipeline:
 
         # Per-symbol OHLCV store: {symbol: {tf: df}}
         self._ohlcv: Dict[str, Dict[str, pd.DataFrame]] = {}
-
-        # Quant analytics layer
-        self._candidate_logger = CandidateLogger()
-        self._ev_filter = EVFilter()
-        self._ev_filter.refresh()   # load historical averages at startup
-        self._bar_count = 0         # for periodic EV refresh
-
-        # Inject analytics into all traders
-        for t in self._traders:
-            t._candidate_logger = self._candidate_logger
-            t._ev_filter = self._ev_filter
+        self._bar_count = 0
 
     def update_ohlcv(self, symbol: str, timeframe: str, df: pd.DataFrame) -> None:
         self._ohlcv.setdefault(symbol, {})[timeframe] = df
@@ -94,38 +71,13 @@ class SignalPipeline:
         """
         Returns list of approved signals (usually 0 or 1).
         df_htf: {timeframe: DataFrame} for HTF context.
-          Expects keys: "5M", "1H", "4H". 5M is used by T3/T5 for precision entry.
         """
         if df is None or len(df) < 20:
             return []
 
-        # Periodically refresh EV averages from candidate log
         self._bar_count += 1
-        if self._bar_count % _EV_REFRESH_INTERVAL == 0:
-            self._ev_filter.refresh()
 
-        # Extract per-TF dataframes from the HTF dict passed by main.py.
-        # Each trader requires a specific timeframe as its HTF context:
-        #   T1 (NY EMA):        1H — EMA21/50/200 stack, ADX, London open detection
-        #   T2 (FVG+BOS):       4H — BOS detection, structure swing high/low
-        #   T3 (Judas Swing):   4H — trend bias ADX + BOS
-        #   T4 (News Momentum): 4H — H4 EMA21/50 trend filter
-        #   T5 (Asian MR):      1H — ADX ranging filter (must be <= 27)
-        htf_1h = _first_present_frame(df_htf, "1H", "H1", default=df)
-        htf_4h = _first_present_frame(df_htf, "4H", "H4", default=df)
-        df_5m  = df_htf.get("5M")   # precision execution TF for T3/T5 (None = fall back to 15M)
-
-        _HTF_MAP = {
-            "trader_1": htf_1h,
-            "trader_2": htf_4h,
-            "trader_3": htf_4h,
-            "trader_4": htf_4h,
-            "trader_5": htf_1h,
-        }
-
-        now = datetime.now(timezone.utc)
-
-        # Step 1: ML inference — pass full df_htf dict so each model extracts its TF.
+        # Step 1: ML inference
         if self._settings.ML_ENABLED:
             ml_preds = self._run_ml_inference(symbol, df, df_htf)
         else:
@@ -146,88 +98,40 @@ class SignalPipeline:
                 "active_news_events": [],
             })
 
-        # Step 2: Run all session-appropriate traders.
-        # Each trader receives its designated HTF timeframe.
-        # T3 and T5 also receive df_5m for precision execution entry.
-        raw_signals = {}
-        for trader in self._traders:
-            try:
-                tid = trader.TRADER_ID
-                trader_htf = _HTF_MAP.get(tid, htf_1h)
-                trader_5m  = df_5m if tid in ("trader_3", "trader_5") else None
-                sig = trader.analyze_market(symbol, df, trader_htf, ml_preds, df_5m=trader_5m)
-                if sig is not None:
-                    raw_signals[tid] = sig
-            except Exception as exc:
-                logger.error("Trader %s error: %s", trader.TRADER_ID, exc)
-
-        if not raw_signals:
+        # Step 2: Dead zone 12:00–13:00 UTC (mirrors backtest _backtest_trader)
+        now = datetime.now(timezone.utc)
+        if now.hour == 12:
             return []
 
-        # Step 3 (ML): Refine quality score per signal (now has full signal context).
-        # Overwrites the bar-level quality_score in ml_preds with the signal-specific score
-        # so _compute_ensemble_score uses the most accurate value for each signal.
-        if self._settings.ML_ENABLED:
-            for tid, sig in raw_signals.items():
-                quality = self._get_ml_score_for_signal(sig, ml_preds, df.iloc[-1])
-                if quality is not None:
-                    sig.setdefault("signal_metadata", {})["quality_score"] = quality
-                    # Update ml_preds so ensemble score uses this signal's quality
-                    ml_preds["quality_score"] = quality
+        # Step 3: Unified ML signal (mirrors _compute_backtest_signal exactly)
+        # QualityScorer/EV gate runs in main.py after PM enrichment (needs rr_ratio).
+        raw_signal = self._compute_ml_signal(symbol, df, ml_preds)
+        if raw_signal is None:
+            return []
 
-        # Step 4: RL action selection (done inside BaseTrader.analyze_market already)
-        # Confirm signals with ensemble score >= 0.5
-        approved = []
-        for tid, sig in raw_signals.items():
-            confidence = float(sig.get("confidence", 0.60))
-            if self._settings.ML_ENABLED:
-                meta = sig.get("signal_metadata", {})
-                ict_score = confidence
-                ensemble = self._compute_ensemble_score(
-                    ict_score, ml_preds, sig.get("side", "buy"), sig.get("symbol", symbol)
-                )
-                if ensemble < 0.5:
-                    logger.debug(
-                        "Signal %s filtered — ensemble=%.3f ict=%.3f regime=%s "
-                        "p_dir=%.3f quality=%.3f sentiment=%.3f(%s/%s)",
-                        tid, ensemble, ict_score,
-                        ml_preds.get("regime", "?"),
-                        ml_preds.get("p_bull" if sig.get("side") == "buy" else "p_bear", 0.5),
-                        ml_preds.get("quality_score", 0.5),
-                        ml_preds.get("sentiment_score", 0.0),
-                        ml_preds.get("sentiment_label", "?"),
-                        ml_preds.get("sentiment_backend", "?"),
-                    )
-                    continue
-                sig["confidence"] = round(float(np.clip(ensemble, 0, 1)), 4)
-                meta["ensemble_score"] = round(ensemble, 4)
-                meta["sentiment_label"] = ml_preds.get("sentiment_label", "neutral")
-                meta["sentiment_backend"] = ml_preds.get("sentiment_backend", "neutral")
-                meta["sentiment_confidence"] = ml_preds.get("sentiment_confidence", 0.0)
-                from services.feature_engine import MACRO_FEATURES
-                meta["macro"] = {k: float(ml_preds.get(k, 0.0)) for k in MACRO_FEATURES}
-                logger.info(
-                    "Signal APPROVED %s %s %s — ensemble=%.3f ict=%.3f regime=%s "
-                    "p_dir=%.3f quality=%.3f sentiment=%.3f(%s/%s)",
-                    tid, sig.get("symbol"), sig.get("side"),
-                    ensemble, ict_score,
-                    ml_preds.get("regime", "?"),
-                    ml_preds.get("p_bull" if sig.get("side") == "buy" else "p_bear", 0.5),
-                    ml_preds.get("quality_score", 0.5),
-                    ml_preds.get("sentiment_score", 0.0),
-                    ml_preds.get("sentiment_label", "?"),
-                    ml_preds.get("sentiment_backend", "?"),
-                )
+        # Step 4: Confidence gate (≥ 0.55) — same as backtest MIN_CONFIDENCE
+        if float(raw_signal.get("confidence", 0)) < 0.55:
+            return []
 
-            # Confidence gate — minimum 0.55
-            if float(sig.get("confidence", 0)) < 0.55:
-                continue
+        # Enrich metadata with sentiment and macro context
+        meta = raw_signal.setdefault("signal_metadata", {})
+        meta["sentiment_label"] = ml_preds.get("sentiment_label", "neutral")
+        meta["sentiment_backend"] = ml_preds.get("sentiment_backend", "neutral")
+        meta["sentiment_confidence"] = ml_preds.get("sentiment_confidence", 0.0)
+        from services.feature_engine import MACRO_FEATURES
+        meta["macro"] = {k: float(ml_preds.get(k, 0.0)) for k in MACRO_FEATURES}
 
-            # Publish SIGNAL_GENERATED event (Contract 1)
-            self._publish_signal(sig)
-            approved.append(sig)
+        logger.info(
+            "Signal APPROVED ml_trader %s %s — conf=%.3f regime=%s p_bull=%.3f p_bear=%.3f",
+            symbol, raw_signal.get("side"),
+            raw_signal.get("confidence", 0),
+            ml_preds.get("regime", "?"),
+            ml_preds.get("p_bull", 0.5),
+            ml_preds.get("p_bear", 0.5),
+        )
 
-        return approved
+        self._publish_signal(raw_signal)
+        return [raw_signal]
 
     def _run_ml_inference(
         self, symbol: str, df: pd.DataFrame, df_htf: dict
@@ -309,21 +213,8 @@ class SignalPipeline:
             else:
                 preds[f"atr_lag_{lag}"] = 1.0
 
-        # Bar-level quality score — computed before traders run so they can gate on it.
-        # Uses a neutral signal scaffold (no trader_id, neutral rr_ratio) to get a
-        # regime/ATR/volume-based score from QualityScorer independent of signal details.
-        qs = self._ml.get("quality")
-        if qs is not None:
-            try:
-                bar = df.iloc[-1]
-                neutral_signal = {"trader_id": "", "side": "buy", "rr_ratio": 1.5}
-                features = self._fe.get_quality_features(neutral_signal, preds, bar)
-                from services.feature_engine import QUALITY_FEATURES
-                feat_dict = dict(zip(QUALITY_FEATURES, features))
-                preds["quality_score"] = float(qs.predict(feat_dict))
-            except Exception as exc:
-                logger.error("QualityScorer bar-level inference failed: %s", exc)
-                raise
+        # QualityScorer (EV) runs post-signal in main.py after PM enrichment.
+        # It requires actual rr_ratio from the enriched signal, so it cannot run here.
 
         return preds
 
@@ -334,110 +225,91 @@ class SignalPipeline:
             **{f"atr_lag_{l}": 1.0 for l in [1, 4, 8, 24, 48, 96, 168, 336]},
         }
 
-    def _get_ml_score_for_signal(
-        self, signal: dict, ml_base: dict, bar: pd.Series
-    ) -> float:
-        """Compute per-signal quality score using XGBoost. Raises if model untrained."""
-        qs = self._ml.get("quality")
-        if qs is None:
+    def _compute_ml_signal(
+        self, symbol: str, df: pd.DataFrame, ml_preds: dict
+    ) -> dict | None:
+        """
+        Mirrors run_backtest._compute_backtest_signal exactly (source of truth).
+
+        Gates (in order):
+          1. ATR sanity
+          2. GRU variance ≤ MAX_UNCERTAINTY (default 2.0 bootstrap; set 0.80 post-training)
+          3. GRU direction ≥ ML_DIRECTION_THRESHOLD (default 0.52; EURUSD=0.85)
+        EV gate runs in main.py after PM enrichment (needs actual rr_ratio).
+        """
+        if df is None or len(df) == 0:
             return None
-        from services.feature_engine import QUALITY_FEATURES
-        features = self._fe.get_quality_features(signal, ml_base, bar)
-        feat_dict = dict(zip(QUALITY_FEATURES, features))
-        return float(qs.predict(feat_dict))
 
-    def _compute_ensemble_score(
-        self,
-        ict_score: float,
-        ml_preds: dict,
-        signal_direction: str,
-        symbol: str = "",
-    ) -> float:
-        """
-        New ensemble formula:
-          gru_score = (p_bull - 0.5) * 2.0  if long
-                    = (p_bear - 0.5) * 2.0  if short
-          ml_score  = gru_score * 0.5 + quality_score * 0.5
-          sentiment_bonus = sign_match * abs(sentiment) * 0.1 else -0.05
-          regime_mult = {TRENDING_UP: 1.2 long, TRENDING_DOWN: 1.2 short,
-                         RANGING: 0.9, VOLATILE: 0.85}
-          score = (ict_score * 0.5 + ml_score * 0.5 + sentiment_bonus) * regime_mult
-        """
-        if signal_direction == "buy":
-            p_dir = float(ml_preds.get("p_bull", 0.5))
+        bar = df.iloc[-1]
+        close = float(bar["close"])
+        atr = float(bar.get("atr_14", close * 0.001))
+        if atr < 1e-9:
+            return None
+
+        if not ml_preds:
+            return None
+
+        # GRU uncertainty gate
+        _uncertainty = float(ml_preds.get("expected_variance", 0.0))
+        if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
+            return None
+
+        # Direction gate
+        p_bull = float(ml_preds.get("p_bull", 0.5))
+        p_bear = float(ml_preds.get("p_bear", 0.5))
+        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.52"))
+        if symbol == "EURUSD":
+            _dir_thresh = float(os.getenv("EURUSD_DIRECTION_THRESHOLD", "0.85"))
+
+        if p_bull >= p_bear and p_bull >= _dir_thresh:
+            side = "buy"
+            conf = p_bull
+        elif p_bear > p_bull and p_bear >= _dir_thresh:
+            side = "sell"
+            conf = p_bear
         else:
-            p_dir = float(ml_preds.get("p_bear", 0.5))
+            return None
 
-        gru_score = (p_dir - 0.5) * 2.0  # maps [0,1] → [-1,1]
-        quality_score = float(ml_preds.get("quality_score", 0.5))
-        ml_score = gru_score * 0.5 + quality_score * 0.5
+        # Regime context (metadata only — regime is encoded in SEQUENCE_FEATURES)
+        _regime = str(ml_preds.get("regime", "RANGING"))
+        _regime_dur = float(bar.get("regime_duration", 0.5))
 
-        sentiment = float(ml_preds.get("sentiment_score", 0.0))
-        if (signal_direction == "buy" and sentiment > 0) or \
-           (signal_direction == "sell" and sentiment < 0):
-            sentiment_bonus = abs(sentiment) * 0.1
+        # Weak regime-age prior (mirrors backtest exactly)
+        _age_weight = 1.0 + 0.08 * (1.0 - min(_regime_dur, 1.0))
+        conf = float(conf * _age_weight)
+
+        # ATR-based entry / SL / TP (mirrors backtest exactly)
+        _sl_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
+        _rr_default = float(os.getenv("RR_DEFAULT", "2.0"))
+        sl_dist = atr * _sl_mult
+        if side == "buy":
+            stop_loss = close - sl_dist
+            take_profit = close + sl_dist * _rr_default
         else:
-            sentiment_bonus = -0.05
+            stop_loss = close + sl_dist
+            take_profit = close - sl_dist * _rr_default
 
-        regime = ml_preds.get("regime", "RANGING")
-        regime_mult_map = {
-            "TRENDING_UP": 1.2 if signal_direction == "buy" else 0.9,
-            "TRENDING_DOWN": 1.2 if signal_direction == "sell" else 0.9,
-            "RANGING": 0.9,
-            "VOLATILE": 0.85,
-            "CONSOLIDATION": 1.05,  # pre-breakout compression — slight positive bias for breakout traders
+        return {
+            "side": side,
+            "entry": close,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "confidence": round(conf, 3),
+            "trader_id": "ml_trader",
+            "symbol": symbol,
+            "signal_metadata": {
+                "regime": _regime,
+                "expected_variance": _uncertainty,
+                "p_bull": p_bull,
+                "p_bear": p_bear,
+                "atr": atr,
+                "atr_at_entry": atr,
+                "session_weight": 1.0,
+                "regime_weight": 1.0,
+                "age_weight": round(_age_weight, 3),
+                "strategy": "ml_native",
+            },
         }
-        regime_mult = regime_mult_map.get(regime, 1.0)
-
-        # Macro bias (risk-on/off + USD strength)
-        macro_bias = 0.0
-        vix = float(ml_preds.get("macro_vix_level", 0.0))
-        if vix > 0.6:  # > ~30 VIX (scaled /50)
-            macro_bias -= 0.05
-        if float(ml_preds.get("macro_yield_spread", 0.0)) < 0:
-            macro_bias -= 0.03
-        spx_ret = float(ml_preds.get("idx_spx_ret", 0.0))
-        if spx_ret < -0.01:
-            macro_bias -= 0.02
-
-        dxy_ret = float(ml_preds.get("idx_dxy_ret", 0.0))
-        if symbol:
-            usd_base = symbol.startswith("USD") and symbol != "XAUUSD"
-            usd_quote = symbol.endswith("USD") and not usd_base and symbol != "XAUUSD"
-            if usd_base:
-                if signal_direction == "buy" and dxy_ret > 0:
-                    macro_bias += 0.03
-                elif signal_direction == "sell" and dxy_ret > 0:
-                    macro_bias -= 0.03
-            elif usd_quote or symbol == "XAUUSD":
-                if signal_direction == "buy" and dxy_ret > 0:
-                    macro_bias -= 0.03
-                elif signal_direction == "sell" and dxy_ret > 0:
-                    macro_bias += 0.03
-
-        raw = (ict_score * 0.5 + ml_score * 0.5 + sentiment_bonus + macro_bias) * regime_mult
-        return float(np.clip(raw, 0.0, 1.0))
-
-    def record_trade_outcome(
-        self,
-        candidate_id: str,
-        tp_hit: bool,
-        sl_hit: bool,
-        pnl: float,
-        exit_reason: str = "",
-    ) -> None:
-        """
-        Called by TradeJournal/ExecutionEngine when a trade closes.
-        Updates the CandidateLogger with the actual outcome for statistical analysis.
-        """
-        if candidate_id and self._candidate_logger is not None:
-            self._candidate_logger.mark_outcome(
-                candidate_id=candidate_id,
-                tp_hit=tp_hit,
-                sl_hit=sl_hit,
-                pnl=pnl,
-                exit_reason=exit_reason,
-            )
 
     def _publish_signal(self, sig: dict) -> None:
         """Publish SIGNAL_GENERATED event (Contract 1)."""
