@@ -433,6 +433,261 @@ def detect_sr_zones(
     return result
 
 
+def detect_trending_pullback(
+    df: pd.DataFrame,
+    swing_n: int = 5,
+    pullback_atr: float = 0.75,
+    retest_atr: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Detect valid pullback/retest zones for TRENDING entries.
+
+    Uptrend structure (HH + HL): price has made a Higher High followed by a Higher
+    Low. A buy pullback is valid when price retraces back toward the last confirmed
+    HL and is within `pullback_atr` × ATR of that level — i.e., retesting the HL
+    before the next leg up.
+
+    Downtrend structure (LH + LL): price has made a Lower High followed by a Lower
+    Low. A sell pullback is valid when price retraces back up toward the last
+    confirmed LH and is within `pullback_atr` × ATR of that level.
+
+    Both cases are tightened by a `retest_atr` confirmation: the last swing must
+    have been established at least `swing_n` bars ago (not the current bar) so the
+    retest is genuinely causal.
+
+    Returns DataFrame with columns:
+      pullback_valid  (bool)  — price is in a valid pullback zone
+      pullback_side   (str)   — "buy" (at HL retest) or "sell" (at LH retest), "" otherwise
+      pullback_level  (float) — the HL or LH level being retested
+      pb_swing_high   (float) — most recent confirmed swing high (for context)
+      pb_swing_low    (float) — most recent confirmed swing low (for context)
+    """
+    n = len(df)
+    atr = compute_atr(df, 14).to_numpy(dtype=np.float64)
+    close = df["close"].to_numpy(dtype=np.float64)
+    high  = df["high"].to_numpy(dtype=np.float64)
+    low   = df["low"].to_numpy(dtype=np.float64)
+
+    # Causal swing detection: swing high at i if it's the max in [i-swing_n, i-1]
+    # (no center=True — strictly causal; confirmed only after swing_n bars have passed)
+    swing_high_arr = np.full(n, np.nan, dtype=np.float64)
+    swing_low_arr  = np.full(n, np.nan, dtype=np.float64)
+    for i in range(swing_n * 2, n):
+        window_slice = slice(i - swing_n * 2, i)
+        mid = i - swing_n
+        if high[mid] == np.max(high[window_slice]):
+            swing_high_arr[i] = high[mid]
+        if low[mid] == np.min(low[window_slice]):
+            swing_low_arr[i] = low[mid]
+
+    pullback_valid = np.zeros(n, dtype=bool)
+    pullback_side  = np.full(n, "", dtype=object)
+    pullback_level = np.full(n, np.nan, dtype=np.float64)
+    pb_swing_high  = np.full(n, np.nan, dtype=np.float64)
+    pb_swing_low   = np.full(n, np.nan, dtype=np.float64)
+
+    # Running confirmed swings (forward-filled, causal)
+    last_sh = np.nan   # last confirmed swing high
+    last_sl = np.nan   # last confirmed swing low
+    prev_sh = np.nan   # swing high before last_sh  (for HH check)
+    prev_sl = np.nan   # swing low before last_sl   (for LL check)
+
+    for i in range(swing_n * 2, n):
+        # Update swing history
+        if not np.isnan(swing_high_arr[i]):
+            prev_sh = last_sh
+            last_sh = swing_high_arr[i]
+        if not np.isnan(swing_low_arr[i]):
+            prev_sl = last_sl
+            last_sl = swing_low_arr[i]
+
+        pb_swing_high[i] = last_sh
+        pb_swing_low[i]  = last_sl
+
+        atr_i = atr[i] if not np.isnan(atr[i]) and atr[i] > 1e-9 else np.nan
+        if np.isnan(atr_i):
+            continue
+
+        c = close[i]
+
+        # ── Uptrend pullback (buy): HH confirmed + HL forming ───────────────
+        # Uptrend: last_sh > prev_sh (Higher High made)
+        #          last_sl > prev_sl (Higher Low — uptrend structure intact)
+        # Entry: price has pulled back to within pullback_atr of last_sl (the HL)
+        if (
+            not np.isnan(last_sh)
+            and not np.isnan(prev_sh)
+            and not np.isnan(last_sl)
+            and not np.isnan(prev_sl)
+            and last_sh > prev_sh          # Higher High confirmed
+            and last_sl > prev_sl          # Higher Low confirmed
+            and c < last_sh                # price pulled back from HH (not chasing top)
+            and abs(c - last_sl) <= pullback_atr * atr_i   # within pullback zone of HL
+            and c > last_sl - retest_atr * atr_i           # not broken below HL (still valid)
+        ):
+            pullback_valid[i] = True
+            pullback_side[i]  = "buy"
+            pullback_level[i] = last_sl
+
+        # ── Downtrend pullback (sell): LL confirmed + LH forming ────────────
+        # Downtrend: last_sl < prev_sl (Lower Low made)
+        #            last_sh < prev_sh (Lower High — downtrend structure intact)
+        # Entry: price has pulled back up to within pullback_atr of last_sh (the LH)
+        elif (
+            not np.isnan(last_sl)
+            and not np.isnan(prev_sl)
+            and not np.isnan(last_sh)
+            and not np.isnan(prev_sh)
+            and last_sl < prev_sl          # Lower Low confirmed
+            and last_sh < prev_sh          # Lower High confirmed
+            and c > last_sl                # price pulled back from LL (not chasing bottom)
+            and abs(c - last_sh) <= pullback_atr * atr_i   # within pullback zone of LH
+            and c < last_sh + retest_atr * atr_i           # not broken above LH (still valid)
+        ):
+            pullback_valid[i] = True
+            pullback_side[i]  = "sell"
+            pullback_level[i] = last_sh
+
+    result = pd.DataFrame(index=df.index)
+    result["pullback_valid"]  = pullback_valid
+    result["pullback_side"]   = pullback_side
+    result["pullback_level"]  = pullback_level
+    result["pb_swing_high"]   = pb_swing_high
+    result["pb_swing_low"]    = pb_swing_low
+    return result
+
+
+def detect_significant_range(
+    df: pd.DataFrame,
+    swing_n: int = 5,
+    lookback: int = 100,
+    min_width_atr: float = 2.0,
+    min_touches: int = 2,
+    boundary_atr: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Identify bars where price is inside a significant, clearly-defined range and
+    sitting at one of its boundaries — the only condition under which RANGING entries
+    are valid.
+
+    A range is "significant and clear" when:
+      1. There is a resistance level above AND a support level below within `lookback` bars
+      2. Both levels have been touched at least `min_touches` times (clustered swings)
+      3. The gap between them is at least `min_width_atr` × ATR  (room for a trade)
+      4. Price is within `boundary_atr` × ATR of either level (entry near the wall, not the middle)
+
+    Returns DataFrame with columns:
+      range_valid    (bool)   — all four conditions satisfied
+      range_side     (str)    — "buy" (at support), "sell" (at resistance), "" (middle/invalid)
+      range_support  (float)  — support level of the detected range
+      range_resist   (float)  — resistance level of the detected range
+      range_width_atr (float) — range width in ATR units
+    """
+    n = len(df)
+    atr = compute_atr(df, 14).to_numpy(dtype=np.float64)
+    close = df["close"].to_numpy(dtype=np.float64)
+    high  = df["high"].to_numpy(dtype=np.float64)
+    low   = df["low"].to_numpy(dtype=np.float64)
+
+    # Compute swing levels using the same window as detect_sr_zones
+    window = 2 * swing_n + 1
+    roll_high = df["high"].rolling(window, center=True).max().to_numpy(dtype=np.float64)
+    roll_low  = df["low"].rolling(window, center=True).min().to_numpy(dtype=np.float64)
+    swing_highs = np.where(high == roll_high, high, np.nan)
+    swing_lows  = np.where(low  == roll_low,  low,  np.nan)
+
+    range_valid     = np.zeros(n, dtype=bool)
+    range_side_arr  = np.full(n, "", dtype=object)
+    range_support   = np.full(n, np.nan, dtype=np.float64)
+    range_resist    = np.full(n, np.nan, dtype=np.float64)
+    range_width_atr = np.zeros(n, dtype=np.float64)
+
+    for i in range(swing_n * 2, n):
+        atr_i = atr[i] if not np.isnan(atr[i]) and atr[i] > 1e-9 else np.nan
+        if np.isnan(atr_i):
+            continue
+
+        start = max(0, i - lookback)
+        c = close[i]
+
+        raw_highs = swing_highs[start:i]
+        raw_lows  = swing_lows[start:i]
+        vh = raw_highs[~np.isnan(raw_highs)]
+        vl = raw_lows[~np.isnan(raw_lows)]
+
+        if len(vh) == 0 or len(vl) == 0:
+            continue
+
+        merge_tol = atr_i * 0.5
+
+        # Cluster resistance levels
+        resist_zones: list[list] = []   # [level, touch_count]
+        for lvl in vh:
+            placed = False
+            for z in resist_zones:
+                if abs(lvl - z[0]) <= merge_tol:
+                    z[0] = (z[0] * z[1] + lvl) / (z[1] + 1)
+                    z[1] += 1
+                    placed = True
+                    break
+            if not placed:
+                resist_zones.append([float(lvl), 1])
+
+        # Cluster support levels
+        support_zones: list[list] = []
+        for lvl in vl:
+            placed = False
+            for z in support_zones:
+                if abs(lvl - z[0]) <= merge_tol:
+                    z[0] = (z[0] * z[1] + lvl) / (z[1] + 1)
+                    z[1] += 1
+                    placed = True
+                    break
+            if not placed:
+                support_zones.append([float(lvl), 1])
+
+        # Find nearest qualified resistance above close
+        above = [(z[0], z[1]) for z in resist_zones if z[0] > c and z[1] >= min_touches]
+        if not above:
+            continue
+        nr_lvl = min(above, key=lambda x: x[0])[0]
+
+        # Find nearest qualified support below close
+        below = [(z[0], z[1]) for z in support_zones if z[0] < c and z[1] >= min_touches]
+        if not below:
+            continue
+        ns_lvl = max(below, key=lambda x: x[0])[0]
+
+        # Condition 3: range must be wide enough
+        width_atr = (nr_lvl - ns_lvl) / atr_i
+        if width_atr < min_width_atr:
+            continue
+
+        # Condition 4: price must be near a boundary (not in the middle)
+        near_resist  = (nr_lvl - c) <= boundary_atr * atr_i
+        near_support = (c - ns_lvl) <= boundary_atr * atr_i
+
+        if not (near_resist or near_support):
+            continue
+
+        range_valid[i]     = True
+        range_support[i]   = ns_lvl
+        range_resist[i]    = nr_lvl
+        range_width_atr[i] = width_atr
+        if near_support:
+            range_side_arr[i] = "buy"
+        else:
+            range_side_arr[i] = "sell"
+
+    result = pd.DataFrame(index=df.index)
+    result["range_valid"]     = range_valid
+    result["range_side"]      = range_side_arr
+    result["range_support"]   = range_support
+    result["range_resist"]    = range_resist
+    result["range_width_atr"] = range_width_atr
+    return result
+
+
 def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     """
     Master function. Adds all indicator columns to df and returns it.
@@ -507,6 +762,20 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     out["sr_in_demand_zone"]   = sr["sr_in_demand_zone"]
     out["sr_resist_strength"]  = sr["sr_resist_strength"]
     out["sr_support_strength"] = sr["sr_support_strength"]
+
+    rng = detect_significant_range(df)
+    out["range_valid"]     = rng["range_valid"]
+    out["range_side"]      = rng["range_side"]
+    out["range_support"]   = rng["range_support"]
+    out["range_resist"]    = rng["range_resist"]
+    out["range_width_atr"] = rng["range_width_atr"]
+
+    pb = detect_trending_pullback(df)
+    out["pullback_valid"]  = pb["pullback_valid"]
+    out["pullback_side"]   = pb["pullback_side"]
+    out["pullback_level"]  = pb["pullback_level"]
+    out["pb_swing_high"]   = pb["pb_swing_high"]
+    out["pb_swing_low"]    = pb["pb_swing_low"]
 
     # Downcast float64 → float32 to halve per-symbol memory footprint.
     # Boolean columns are left as-is; OHLCV source columns keep their dtype.

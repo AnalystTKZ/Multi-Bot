@@ -862,6 +862,14 @@ def _precompute_ml_cache(
                 if 'seq_arr' in dir() and seq_arr is not None:
                     del seq_arr  # ~(N×F) float32 — free before regime allocates X_all
 
+        # ── Build LTF per-bar lookup (behaviour class name) ──────────────────
+        ltf_preds: dict[int, str] = {}
+        if _regime_ltf_series is not None:
+            _ltf_cls_arr = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"])
+            ltf_preds = {i: str(v) for i, v in enumerate(
+                _ltf_cls_arr[np.clip(_regime_ltf_series.values, 0, len(_ltf_cls_arr) - 1)]
+            )}
+
         # ── Merge into combined per-bar cache ────────────────────────────────
         cache: dict[int, dict] = {}
         all_bar_indices = set(gru_preds.keys()) | set(regime_preds.keys())
@@ -871,11 +879,13 @@ def _precompute_ml_cache(
             if bar_i in gru_preds:
                 entry.update(gru_preds[bar_i])
             if bar_i in regime_preds:
-                entry["regime"] = regime_preds[bar_i]
+                entry["regime"] = regime_preds[bar_i]        # HTF bias
+            if bar_i in ltf_preds:
+                entry["regime_ltf"] = ltf_preds[bar_i]       # LTF behaviour
             cache[bar_i] = entry
 
-        logger.info("ML cache: %d bars cached for %s (gru=%d regime=%d)",
-                    len(cache), symbol, len(gru_preds), len(regime_preds))
+        logger.info("ML cache: %d bars cached for %s (gru=%d htf_regime=%d ltf_regime=%d)",
+                    len(cache), symbol, len(gru_preds), len(regime_preds), len(ltf_preds))
 
         # Diagnostic: sample GRU output distribution so 0-trade causes are visible
         _sample_vals = [v for v in list(cache.values())[:5000] if "p_bull" in v]
@@ -902,14 +912,22 @@ def _precompute_ml_cache(
 
 def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dict | None:
     """
-    Unified ML-native signal generator. ICT rules are encoded as numeric features
-    in SEQUENCE_FEATURES and learned by the GRU. This function uses GRU outputs
-    directly to decide direction; ATR math sets entry/SL/TP levels.
+    ML-native signal generator gated on HTF bias + LTF behaviour + GRU direction.
 
-    Gates (in order):
-      1. ATR sanity: atr > 0
-      2. GRU variance: expected_variance ≤ MAX_UNCERTAINTY (0.80)
-      3. GRU direction: p_bull or p_bear ≥ ML_DIRECTION_THRESHOLD (0.55)
+    Gate order:
+      1. ATR sanity
+      2. GRU variance ≤ MAX_UNCERTAINTY
+      3. GRU direction ≥ ML_DIRECTION_THRESHOLD  →  determines side (buy/sell)
+      4. HTF bias must AGREE with GRU side:
+           buy  → regime must be BIAS_UP   (or BIAS_NEUTRAL when p_bull is strong)
+           sell → regime must be BIAS_DOWN (or BIAS_NEUTRAL when p_bear is strong)
+      5. LTF behaviour must PERMIT entry:
+           TRENDING   → allow (price is moving, follow the move)
+           VOLATILE   → allow if GRU conviction is high (p ≥ VOLATILE_THRESHOLD)
+           RANGING    → block (no directional momentum; GRU already encodes this,
+                               but explicit block prevents false breakout entries)
+           CONSOLIDATING → block (tight range, likely to reverse; wait for breakout)
+
     EV gate runs after PM enrichment in _backtest_trader (needs rr_ratio).
     """
     close = float(bar["close"])
@@ -920,22 +938,15 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     if not ml_preds:
         return None
 
-    # ── GRU uncertainty gate ──────────────────────────────────────────────────
-    # Default 2.0 allows bootstrap trades on round 1 before quality/RL training.
-    # Set MAX_UNCERTAINTY=0.80 once the quality scorer is calibrated.
+    # ── Gate 2: GRU uncertainty ───────────────────────────────────────────────
     _uncertainty = float(ml_preds.get("expected_variance", 0.0))
     if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
         return None
 
-    # ── Direction gate: GRU decides buy/sell ──────────────────────────────────
-    # Default 0.52 (vs 0.55) so a freshly trained GRU can generate journal trades
-    # on round 1. Set ML_DIRECTION_THRESHOLD=0.55 once EV/quality model is trained.
-    # EURUSD uses a higher threshold (default 0.85) due to its historically low WR (37%).
+    # ── Gate 3: GRU direction ─────────────────────────────────────────────────
     p_bull = float(ml_preds.get("p_bull", 0.5))
     p_bear = float(ml_preds.get("p_bear", 0.5))
     _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.52"))
-    if symbol == "EURUSD":
-        _dir_thresh = float(os.getenv("EURUSD_DIRECTION_THRESHOLD", "0.85"))
     if p_bull >= p_bear and p_bull >= _dir_thresh:
         side = "buy"
         conf = p_bull
@@ -945,51 +956,107 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     else:
         return None
 
-    # ── Regime context (for metadata logging only) ───────────────────────────
-    # session and regime biases are NOT applied here — time_sin/cos, mins_since_
-    # london_open, mins_since_ny_open, and regime_duration are already in
-    # SEQUENCE_FEATURES. Applying manual multipliers would double-count the signal.
-    _regime     = str(ml_preds.get("regime", "RANGING"))
-    _regime_dur = float(bar.get("regime_duration", 0.5))
+    # ── Gate 4: HTF bias alignment ────────────────────────────────────────────
+    # BIAS_UP   → only buys allowed (HTF trend is up)
+    # BIAS_DOWN → only sells allowed (HTF trend is down)
+    # BIAS_NEUTRAL → allow both directions only when GRU conviction is strong;
+    #                neutral means no clear structural bias — require higher bar.
+    _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
+    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.65"))
 
-    # Weak regime-age prior: attenuates late-trend entries only.
-    # Kept light (max 8% boost) so the GRU's own learned regime_duration feature
-    # dominates once the model has seen sufficient training data.
-    _age_weight      = 1.0 + 0.08 * (1.0 - min(_regime_dur, 1.0))  # range [1.00, 1.08]
-    _session_weight  = 1.0   # pass-through for diagnostics logging
-    _regime_weight   = 1.0   # pass-through for diagnostics logging
-    conf = float(conf * _age_weight)
+    if _htf_bias == "BIAS_UP" and side == "sell":
+        return None   # HTF is bullish — no sells
+    if _htf_bias == "BIAS_DOWN" and side == "buy":
+        return None   # HTF is bearish — no buys
+    if _htf_bias == "BIAS_NEUTRAL" and conf < _neutral_thresh:
+        return None   # no structural bias — require stronger GRU conviction
 
-    # ── ATR-based entry / SL / TP levels ─────────────────────────────────────
-    # Entry at current close (limit order at bar close — no lookahead).
-    # SL: 1.5×ATR from entry. TP: entry ± SL_dist × RR_DEFAULT.
-    _sl_mult   = float(os.getenv("SL_ATR_MULT", "1.5"))
+    # ── Gate 5: LTF behaviour filter ─────────────────────────────────────────
+    # TRENDING      → allow ONLY at a valid pullback/retest (HH+HL or LH+LL
+    #                 confirmed, price retesting the last HL/LH before next leg).
+    #                 Entering mid-trend on a breakout is chasing — wait for retest.
+    # VOLATILE      → allow only when GRU is highly confident
+    # CONSOLIDATING → block (tight pre-breakout squeeze — wait for the move)
+    # RANGING       → allow ONLY when a significant, clearly-bounded range is
+    #                 detected AND the GRU direction matches the near boundary.
+    _ltf_behaviour = str(ml_preds.get("regime_ltf", "RANGING"))
+    _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
+
+    _range_valid    = bool(bar.get("range_valid", False))
+    _range_side     = str(bar.get("range_side", ""))
+    _pullback_valid = bool(bar.get("pullback_valid", False))
+    _pullback_side  = str(bar.get("pullback_side", ""))
+
+    if _ltf_behaviour == "CONSOLIDATING":
+        return None
+
+    if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
+        return None
+
+    if _ltf_behaviour == "TRENDING":
+        if not _pullback_valid:
+            return None                         # no confirmed HH/HL or LH/LL retest
+        if _pullback_side != side:
+            return None                         # pullback structure disagrees with GRU side
+
+    if _ltf_behaviour == "RANGING":
+        if not _range_valid:
+            return None                         # no identifiable range — skip
+        if _range_side != side:
+            return None                         # price is at the wrong wall
+
+    # ── ATR-based entry / SL / TP ─────────────────────────────────────────────
+    # For RANGING entries: TP is the far wall of the range rather than a fixed
+    # ATR multiple, provided the far wall gives better R:R than the default.
+    _sl_mult    = float(os.getenv("SL_ATR_MULT", "1.5"))
     _rr_default = float(os.getenv("RR_DEFAULT", "2.0"))
     sl_dist = atr * _sl_mult
-    if side == "buy":
-        stop_loss   = close - sl_dist
-        take_profit = close + sl_dist * _rr_default
+
+    if _ltf_behaviour == "RANGING" and _range_valid:
+        # SL: just beyond the near boundary (boundary acts as stop anchor)
+        # TP: the far wall of the range
+        if side == "buy":
+            stop_loss   = float(bar.get("range_support", close - sl_dist)) - atr * 0.3
+            far_wall    = float(bar.get("range_resist",  close + sl_dist * _rr_default))
+            take_profit = far_wall
+        else:
+            stop_loss   = float(bar.get("range_resist",  close + sl_dist)) + atr * 0.3
+            far_wall    = float(bar.get("range_support", close - sl_dist * _rr_default))
+            take_profit = far_wall
+        # Fall back to ATR-based TP if the range wall gives worse R:R
+        default_tp = (close + sl_dist * _rr_default) if side == "buy" else (close - sl_dist * _rr_default)
+        actual_rr  = abs(take_profit - close) / (abs(close - stop_loss) + 1e-9)
+        if actual_rr < 1.5:
+            stop_loss   = (close - sl_dist) if side == "buy" else (close + sl_dist)
+            take_profit = default_tp
     else:
-        stop_loss   = close + sl_dist
-        take_profit = close - sl_dist * _rr_default
+        if side == "buy":
+            stop_loss   = close - sl_dist
+            take_profit = close + sl_dist * _rr_default
+        else:
+            stop_loss   = close + sl_dist
+            take_profit = close - sl_dist * _rr_default
+
+    _range_width = float(bar.get("range_width_atr", 0.0)) if _ltf_behaviour == "RANGING" else 0.0
 
     return {
         "side":        side,
         "entry":       close,
         "stop_loss":   stop_loss,
         "take_profit": take_profit,
-        "confidence":  round(conf, 3),
+        "confidence":  round(float(conf), 3),
         "trader_id":   "ml_trader",
         "symbol":      symbol,
         "signal_metadata": {
-            "regime":            _regime,
+            "regime":            _htf_bias,
+            "regime_ltf":        _ltf_behaviour,
             "expected_variance": _uncertainty,
             "p_bull":            p_bull,
             "p_bear":            p_bear,
             "atr_at_entry":      atr,
-            "session_weight":    round(_session_weight, 3),
-            "regime_weight":     round(_regime_weight, 3),
-            "age_weight":        round(_age_weight, 3),
+            "range_width_atr":   _range_width,
+            "pullback_valid":    _pullback_valid,
+            "pullback_level":    float(bar.get("pullback_level", float("nan"))),
         },
     }
 

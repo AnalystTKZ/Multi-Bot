@@ -122,10 +122,12 @@ class SignalPipeline:
         meta["macro"] = {k: float(ml_preds.get(k, 0.0)) for k in MACRO_FEATURES}
 
         logger.info(
-            "Signal APPROVED ml_trader %s %s — conf=%.3f regime=%s p_bull=%.3f p_bear=%.3f",
+            "Signal APPROVED ml_trader %s %s — conf=%.3f htf=%s ltf=%s pb=%s p_bull=%.3f p_bear=%.3f",
             symbol, raw_signal.get("side"),
             raw_signal.get("confidence", 0),
             ml_preds.get("regime", "?"),
+            ml_preds.get("regime_ltf", "?"),
+            raw_signal.get("signal_metadata", {}).get("pullback_valid", False),
             ml_preds.get("p_bull", 0.5),
             ml_preds.get("p_bear", 0.5),
         )
@@ -164,19 +166,34 @@ class SignalPipeline:
                 logger.error("GRU-LSTM inference error: %s", exc)
                 raise
 
-        # RegimeClassifier: base structural features + MTF adx/ema_stack/atr/bb from 5M/15M/1H/4H/1D
-        regime_model = self._ml.get("regime")
-        if regime_model:
+        # HTF RegimeClassifier (4H bias: BIAS_UP / BIAS_DOWN / BIAS_NEUTRAL)
+        regime_htf = self._ml.get("regime_htf") or self._ml.get("regime_4h") or self._ml.get("regime")
+        if regime_htf:
             try:
-                r = regime_model.predict(df, symbol=symbol, df_htf=htf)
-                preds["regime"] = r.get("regime")
-                preds["regime_id"] = r.get("regime_id")
+                r = regime_htf.predict(df, symbol=symbol, df_htf=htf)
+                preds["regime"]       = r.get("regime")
+                preds["regime_id"]    = r.get("regime_id")
                 preds["regime_proba"] = r.get("proba")
             except RuntimeError as exc:
-                logger.error("RegimeClassifier not trained — ML signals disabled. %s", exc)
+                logger.error("HTF RegimeClassifier not trained — ML signals disabled. %s", exc)
                 raise
             except Exception as exc:
-                logger.error("Regime inference error: %s", exc)
+                logger.error("HTF Regime inference error: %s", exc)
+                raise
+
+        # LTF RegimeClassifier (1H behaviour: TRENDING / RANGING / CONSOLIDATING / VOLATILE)
+        regime_ltf = self._ml.get("regime_ltf") or self._ml.get("regime_1h")
+        if regime_ltf:
+            try:
+                r = regime_ltf.predict(df, symbol=symbol, df_htf=htf)
+                preds["regime_ltf"]      = r.get("regime")
+                preds["regime_ltf_id"]   = r.get("regime_id")
+                preds["regime_ltf_conf"] = r.get("proba")
+            except RuntimeError as exc:
+                logger.error("LTF RegimeClassifier not trained — ML signals disabled. %s", exc)
+                raise
+            except Exception as exc:
+                logger.error("LTF Regime inference error: %s", exc)
                 raise
 
         # Sentiment
@@ -229,12 +246,18 @@ class SignalPipeline:
         self, symbol: str, df: pd.DataFrame, ml_preds: dict
     ) -> dict | None:
         """
-        Mirrors run_backtest._compute_backtest_signal exactly (source of truth).
+        Mirrors run_backtest._compute_backtest_signal (source of truth).
 
-        Gates (in order):
+        Gate order:
           1. ATR sanity
-          2. GRU variance ≤ MAX_UNCERTAINTY (default 2.0 bootstrap; set 0.80 post-training)
-          3. GRU direction ≥ ML_DIRECTION_THRESHOLD (default 0.52; EURUSD=0.85)
+          2. GRU variance ≤ MAX_UNCERTAINTY
+          3. GRU direction ≥ ML_DIRECTION_THRESHOLD  →  determines side
+          4. HTF bias must agree with GRU side
+          5. LTF behaviour must permit entry:
+               TRENDING   → valid pullback/retest required (HH+HL or LH+LL + retest)
+               VOLATILE   → high-conviction GRU only
+               RANGING    → significant range + price at correct boundary
+               CONSOLIDATING → blocked
         EV gate runs in main.py after PM enrichment (needs actual rr_ratio).
         """
         if df is None or len(df) == 0:
@@ -249,18 +272,15 @@ class SignalPipeline:
         if not ml_preds:
             return None
 
-        # GRU uncertainty gate
+        # Gate 2: GRU uncertainty
         _uncertainty = float(ml_preds.get("expected_variance", 0.0))
         if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
             return None
 
-        # Direction gate
+        # Gate 3: GRU direction
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
         _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.52"))
-        if symbol == "EURUSD":
-            _dir_thresh = float(os.getenv("EURUSD_DIRECTION_THRESHOLD", "0.85"))
-
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
             conf = p_bull
@@ -270,60 +290,87 @@ class SignalPipeline:
         else:
             return None
 
-        # Regime context (metadata only — regime is encoded in SEQUENCE_FEATURES)
-        _regime = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-        _regime_dur = float(bar.get("regime_duration", 0.5))
+        # Gate 4: HTF bias alignment
+        _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
+        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.65"))
+        if _htf_bias == "BIAS_UP" and side == "sell":
+            return None
+        if _htf_bias == "BIAS_DOWN" and side == "buy":
+            return None
+        if _htf_bias == "BIAS_NEUTRAL" and conf < _neutral_thresh:
+            return None
 
-        # Regime confidence multiplier (light bias — GRU already encodes regime in features)
-        _regime_mult_map = {
-            # HTF bias classes
-            "BIAS_UP":      1.10,
-            "BIAS_DOWN":    1.10,
-            "BIAS_NEUTRAL": 1.00,
-            # LTF behaviour classes
-            "TRENDING":     1.10,
-            "RANGING":      0.95,
-            "CONSOLIDATING": 1.05,
-            "VOLATILE":     0.85,
-            # Legacy compat
-            "TRENDING_UP": 1.10, "TRENDING_DOWN": 1.10, "CONSOLIDATION": 1.05,
-        }
-        _regime_weight = _regime_mult_map.get(_regime, 1.0)
+        # Gate 5: LTF behaviour filter
+        _ltf_behaviour = str(ml_preds.get("regime_ltf", "RANGING"))
+        _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
 
-        # Weak regime-age prior (mirrors backtest exactly)
-        _age_weight = 1.0 + 0.08 * (1.0 - min(_regime_dur, 1.0))
-        conf = float(conf * _age_weight)
+        _range_valid    = bool(bar.get("range_valid", False))
+        _range_side     = str(bar.get("range_side", ""))
+        _pullback_valid = bool(bar.get("pullback_valid", False))
+        _pullback_side  = str(bar.get("pullback_side", ""))
 
-        # ATR-based entry / SL / TP (mirrors backtest exactly)
-        _sl_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
+        if _ltf_behaviour == "CONSOLIDATING":
+            return None
+
+        if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
+            return None
+
+        if _ltf_behaviour == "TRENDING":
+            if not _pullback_valid:
+                return None                     # no confirmed HH/HL or LH/LL retest
+            if _pullback_side != side:
+                return None                     # pullback structure disagrees with GRU side
+
+        if _ltf_behaviour == "RANGING":
+            if not _range_valid:
+                return None
+            if _range_side != side:
+                return None
+
+        # ATR-based entry / SL / TP
+        # For RANGING entries: TP targets the far wall of the range.
+        _sl_mult    = float(os.getenv("SL_ATR_MULT", "1.5"))
         _rr_default = float(os.getenv("RR_DEFAULT", "2.0"))
         sl_dist = atr * _sl_mult
-        if side == "buy":
-            stop_loss = close - sl_dist
-            take_profit = close + sl_dist * _rr_default
+
+        if _ltf_behaviour == "RANGING" and _range_valid:
+            if side == "buy":
+                stop_loss   = float(bar.get("range_support", close - sl_dist)) - atr * 0.3
+                take_profit = float(bar.get("range_resist",  close + sl_dist * _rr_default))
+            else:
+                stop_loss   = float(bar.get("range_resist",  close + sl_dist)) + atr * 0.3
+                take_profit = float(bar.get("range_support", close - sl_dist * _rr_default))
+            actual_rr = abs(take_profit - close) / (abs(close - stop_loss) + 1e-9)
+            if actual_rr < 1.5:
+                stop_loss   = (close - sl_dist) if side == "buy" else (close + sl_dist)
+                take_profit = (close + sl_dist * _rr_default) if side == "buy" else (close - sl_dist * _rr_default)
         else:
-            stop_loss = close + sl_dist
-            take_profit = close - sl_dist * _rr_default
+            if side == "buy":
+                stop_loss   = close - sl_dist
+                take_profit = close + sl_dist * _rr_default
+            else:
+                stop_loss   = close + sl_dist
+                take_profit = close - sl_dist * _rr_default
 
         return {
-            "side": side,
-            "entry": close,
-            "stop_loss": stop_loss,
+            "side":        side,
+            "entry":       close,
+            "stop_loss":   stop_loss,
             "take_profit": take_profit,
-            "confidence": round(conf, 3),
-            "trader_id": "ml_trader",
-            "symbol": symbol,
+            "confidence":  round(float(conf), 3),
+            "trader_id":   "ml_trader",
+            "symbol":      symbol,
             "signal_metadata": {
-                "regime": _regime,
+                "regime":            _htf_bias,
+                "regime_ltf":        _ltf_behaviour,
                 "expected_variance": _uncertainty,
-                "p_bull": p_bull,
-                "p_bear": p_bear,
-                "atr": atr,
-                "atr_at_entry": atr,
-                "session_weight": 1.0,
-                "regime_weight": round(_regime_weight, 3),
-                "age_weight": round(_age_weight, 3),
-                "strategy": "ml_native",
+                "p_bull":            p_bull,
+                "p_bear":            p_bear,
+                "atr":               atr,
+                "atr_at_entry":      atr,
+                "strategy":          "ml_native",
+                "pullback_valid":    _pullback_valid,
+                "pullback_level":    float(bar.get("pullback_level", float("nan"))),
             },
         }
 
