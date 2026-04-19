@@ -876,11 +876,44 @@ class RegimeClassifier(BaseModel):
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: regime_duration failed: {exc}") from exc
 
-        # ── Macro features (indices 36–54) ────────────────────────────────────
+        # ── Time-series discriminators (indices 45–47) ───────────────────────
+        # efficiency_ratio, autocorr_lag1, hurst_proxy — same features used
+        # for GMM labeling but never given to the MLP. Without them, the MLP
+        # cannot separate RANGING (autocorr≈0, eff≈0.2) from TRENDING (autocorr>0,
+        # eff>0.7) because ADX and ATR look identical for both at the boundary.
+        try:
+            _n_bar = 14  # default lookback — matches _DEFAULT_NBAR
+            _close = df["close"]
+            _log_ret = np.log(_close / _close.shift(1))
+            _abs_moves = np.abs(_close.diff()).rolling(_n_bar, min_periods=_n_bar).sum()
+            _net_move  = np.abs(_close - _close.shift(_n_bar))
+            _eff_ratio = (_net_move / (_abs_moves + 1e-9)).clip(0, 1)
+            X[:, 45] = np.nan_to_num(_eff_ratio.values.astype(np.float32), nan=0.5)
+
+            _autocorr = pd.Series(_log_ret).rolling(_n_bar, min_periods=max(4, _n_bar // 2)).apply(
+                lambda x: float(pd.Series(x).autocorr(lag=1)) if len(x) > 3 else 0.0,
+                raw=False
+            ).fillna(0.0).clip(-1.0, 1.0)
+            X[:, 46] = _autocorr.values.astype(np.float32)
+
+            _hi_n    = df["high"].rolling(_n_bar, min_periods=_n_bar).max()
+            _lo_n    = df["low"].rolling(_n_bar, min_periods=_n_bar).min()
+            _range_n = (_hi_n - _lo_n).clip(1e-9)
+            _hi_h    = df["high"].rolling(max(2, _n_bar // 2), min_periods=2).max()
+            _lo_h    = df["low"].rolling(max(2, _n_bar // 2), min_periods=2).min()
+            _range_h = (_hi_h - _lo_h).clip(1e-9)
+            # Normalise Hurst proxy to [0,1]: raw range is [0.2,3.0] → (val-0.2)/2.8
+            _hurst_raw = (_range_n / _range_h / (2 ** 0.5)).clip(0.2, 3.0)
+            _hurst_norm = ((_hurst_raw - 0.2) / 2.8).clip(0.0, 1.0)
+            X[:, 47] = np.nan_to_num(_hurst_norm.values.astype(np.float32), nan=0.5)
+        except Exception as exc:
+            raise RuntimeError(f"_build_feature_matrix: ts_discriminators failed: {exc}") from exc
+
+        # ── Macro features (indices 48–66) ────────────────────────────────────
         try:
             fe = FeatureEngine()
             macro_df = fe._build_macro_frame(df.index, symbol)
-            base_macro = 36  # after 8 base + 5×4 MTF + 6 S/R + 2 regime dynamics
+            base_macro = 48  # after 8 base + 5×4 MTF + 6 S/R + 2 regime dynamics + 3 TS discriminators
             for i, name in enumerate(INDEX_NAMES):
                 col = f"idx_{name}_ret"
                 if col in macro_df.columns:

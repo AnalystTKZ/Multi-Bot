@@ -161,14 +161,20 @@ REGIME_4H_FEATURES = [
     "vol_slope",            # 9   Δ(ATR/close) over 14 bars — bias expanding/contracting
     "regime_duration",      # 10  bars since last regime change (capped 50, /50)
     "atr_pctile",           # 11  ATR percentile rank in own 3×n_bar history — consolidation signal
+    # ── Time-series discriminators (BIAS_NEUTRAL vs BIAS_UP/DOWN) ─────────────
+    # These three features are used to *label* regimes in the GMM but were never
+    # given to the MLP — so the classifier had no signal to separate BIAS_NEUTRAL
+    # (low autocorr, low efficiency) from weak-trend bars (same ADX, different dynamics).
+    "efficiency_ratio",     # 12  |net n-bar move| / sum(|bar moves|) [0→1, 1=clean trend]
+    "autocorr_lag1",        # 13  lag-1 autocorrelation of log-returns — trending>0, ranging≈0
+    "hurst_proxy",          # 14  R/S Hurst proxy — H>1=trending, H<1=mean-reverting
 ] + INDEX_FEATURES + [
     "macro_vix_level",      # macro risk-off/on
     "macro_yield_spread",   # yield curve regime signal
-]  # 12 base + 1D context + regime + 19 macro = 31 features
+]  # 15 base + 1D context + regime + dynamics + 19 macro = 34 features
 
 # ─── 1H STRUCTURE classifier features ────────────────────────────────────────
-# Trained on 1H data with 4H labels ffill'd. Intraday structure: BOS, FVG, session.
-# No macro indices — they're too coarse for 1H structure decisions.
+# Trained on 1H data. No macro indices — too coarse for 1H structure decisions.
 REGIME_1H_FEATURES = [
     # ── 1H base structural features ───────────────────────────────────────────
     "adx_14_base",          # 0   ADX on 1H df
@@ -190,7 +196,14 @@ REGIME_1H_FEATURES = [
     "vol_slope",            # 12  Δ(ATR/close) over 14 bars
     "regime_duration",      # 13  bars since last regime change
     "atr_pctile",           # 14  ATR percentile rank — consolidation signal
-]  # 15 features total
+    # ── Time-series discriminators (RANGING vs TRENDING — the key missing signal)
+    # RANGING has near-zero autocorr, low efficiency ratio, Hurst≈0.5.
+    # TRENDING has high autocorr, high efficiency, Hurst>0.5.
+    # Without these the MLP sees identical ADX/ATR for both and collapses RANGING to 0%.
+    "efficiency_ratio",     # 15  |net n-bar move| / sum(|bar moves|) [0→1]
+    "autocorr_lag1",        # 16  lag-1 autocorrelation of log-returns
+    "hurst_proxy",          # 17  R/S Hurst proxy
+]  # 18 features total
 
 # ─── Legacy REGIME_FEATURES (shared contract kept for backwards compat) ───────
 # Used by _build_feature_matrix which builds ALL columns regardless of which
@@ -252,10 +265,17 @@ REGIME_FEATURES = [
     "prev_regime_ltf_consolidating",# 42  one-hot: previous LTF regime was CONSOLIDATING
     "prev_regime_ltf_volatile",     # 43  one-hot: previous LTF regime was VOLATILE
     "regime_confidence",    # 44
+    # ── Time-series discriminators ────────────────────────────────────────────
+    # These were only used for GMM labeling — never passed to the MLP.
+    # Without them, RANGING (autocorr≈0, eff≈0, Hurst≈0.5) is indistinguishable
+    # from weak TRENDING in ADX/ATR space, causing the model to predict RANGING=0%.
+    "efficiency_ratio",     # 45  |net n-bar move| / sum(|bar moves|) [0→1]
+    "autocorr_lag1",        # 46  lag-1 autocorrelation of log-returns [-1→1]
+    "hurst_proxy",          # 47  R/S Hurst proxy [0.2→3.0, normalised to 0→1]
 ] + INDEX_FEATURES + [
     "macro_vix_level",
     "macro_yield_spread",
-]  # base + MTF + S/R + regime dynamics + memory + indices + macro
+]  # base + MTF + S/R + regime dynamics + memory + ts-discriminators + indices + macro
 
 QUALITY_FEATURES = [
     "strategy_id",          # 0
