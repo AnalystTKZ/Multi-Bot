@@ -29,7 +29,6 @@ copied back to /kaggle/working/outputs/processed_data/ for dataset update.
 """
 from __future__ import annotations
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -153,28 +152,8 @@ for step_name, script_file, done_check in PIPELINE_STEPS:
 
 print("\n=== Pipeline complete ===")
 
-# ── Save outputs to dataset update directory ─────────────────────────────────
-# Copy weights + logs into /kaggle/working/outputs/processed_data/
-# so they can be uploaded as a new version of the Kaggle dataset.
-if env["on_kaggle"]:
-    save_root = env["output"] / "outputs" / "processed_data"
-    save_root.mkdir(parents=True, exist_ok=True)
-
-    if env["weights"].exists():
-        shutil.copytree(str(env["weights"]), str(save_root / "weights"), dirs_exist_ok=True)
-        print(f"Weights saved to: {save_root / 'weights'}")
-
-    engine_logs = env["engine"] / "logs"
-    if engine_logs.exists():
-        shutil.copytree(str(engine_logs), str(save_root / "logs"), dirs_exist_ok=True)
-        print(f"Logs saved to: {save_root / 'logs'}")
-
-    print(f"\nDataset update bundle: {save_root}")
-    print("Download /kaggle/working/outputs/ and re-upload as the dataset version.")
-else:
-    # Local: just report weights location
-    if env["weights"].exists():
-        print(f"Weights at: {env['weights']}")
+if not env["on_kaggle"] and env["weights"].exists():
+    print(f"Weights at: {env['weights']}")
 
 # ── Step 8: Push training outputs to GitHub ───────────────────────────────────
 push_script = env["base"] / "step8_push_to_github.py"

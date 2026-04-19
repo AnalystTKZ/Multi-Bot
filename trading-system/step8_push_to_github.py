@@ -1,20 +1,24 @@
 """
 step8_push_to_github.py — Push training outputs back to GitHub.
 
-Collects weights, logs, backtest reports, and training metrics from the
-Kaggle working directory and commits + pushes them to the main branch.
+Setup:
+  - Pipeline runs in /kaggle/working/Multi-Bot (copied from input dataset, no git history)
+  - Notebook cell 0 clones the repo fresh to /kaggle/working/remote/Multi-Bot
+  - This script copies new training artifacts into that clone and pushes to GitHub
+
+This script:
+  1. Sets committer identity + injects GITHUB_TOKEN into the remote URL
+  2. Copies new training artifacts into the clone
+  3. Stages + commits + pushes to main
 
 Required env var:
     GITHUB_TOKEN  — personal access token with repo write scope
 
 Optional env vars:
     GITHUB_REPO   — full repo name, default: AnalystTKZ/Multi-Bot
-    GITHUB_BRANCH — target branch, default: main
-    GITHUB_USER   — git committer name, default: Kaggle Training Bot
+    GITHUB_BRANCH — target branch,   default: main
+    GITHUB_USER   — git committer name,  default: Kaggle Training Bot
     GITHUB_EMAIL  — git committer email, default: bot@kaggle.local
-
-Usage (from kaggle_train.py or notebook):
-    python step8_push_to_github.py
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 
 GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO   = os.getenv("GITHUB_REPO",   "AnalystTKZ/Multi-Bot")
@@ -45,20 +49,19 @@ try:
 except NameError:
     _HERE = Path("/kaggle/working/Multi-Bot/trading-system")
 
-# On Kaggle the working tree is at /kaggle/working/Multi-Bot; locally it is the
-# repo root itself (two levels up from trading-system/).
-_KAGGLE = Path("/kaggle/working/Multi-Bot")
-REPO_ROOT = _KAGGLE if _KAGGLE.exists() else _HERE.parent
-
-# ── Artifact manifest ─────────────────────────────────────────────────────────
-# Each entry: (source_path, dest_path_relative_to_REPO_ROOT)
-# Sources that don't exist are silently skipped.
+# On Kaggle: fresh clone is at /kaggle/working/remote/Multi-Bot
+# Locally: two levels up from trading-system/
+_KAGGLE_CLONE = Path("/kaggle/working/remote/Multi-Bot")
+REPO_ROOT = _KAGGLE_CLONE if _KAGGLE_CLONE.exists() else _HERE.parent
 
 ENGINE = _HERE / "trading-engine"
 ML_DIR = _HERE / "ml_training"
 
+# ── Artifact manifest ─────────────────────────────────────────────────────────
+# (source_path, dest_path relative to REPO_ROOT)
+# Missing sources are silently skipped.
+
 ARTIFACTS: list[tuple[Path, Path]] = [
-    # ── Model weights ──────────────────────────────────────────────────────────
     (ENGINE / "weights" / "gru_lstm" / "model.pt",
      Path("trading-system/trading-engine/weights/gru_lstm/model.pt")),
 
@@ -80,26 +83,22 @@ ARTIFACTS: list[tuple[Path, Path]] = [
     (ENGINE / "weights" / "gru_lstm" / "weights_manifest.json",
      Path("trading-system/trading-engine/weights/gru_lstm/weights_manifest.json")),
 
-    # ── Training metrics ───────────────────────────────────────────────────────
     (ML_DIR / "metrics" / "training_summary.json",
      Path("trading-system/ml_training/metrics/training_summary.json")),
 
     (ML_DIR / "metrics" / "training_7b_summary.json",
      Path("trading-system/ml_training/metrics/training_7b_summary.json")),
 
-    # ── Backtest diagnostics ───────────────────────────────────────────────────
     (ENGINE / "logs" / "backtest_diagnostics.csv",
      Path("trading-system/trading-engine/logs/backtest_diagnostics.csv")),
 
     (ENGINE / "logs" / "trade_journal_detailed.jsonl",
      Path("trading-system/trading-engine/logs/trade_journal_detailed.jsonl")),
 
-    # ── Latest backtest summary ────────────────────────────────────────────────
     (_HERE / "backtesting" / "results" / "latest_summary.json",
      Path("trading-system/backtesting/results/latest_summary.json")),
 ]
 
-# Whole directories to sync (all files inside, recursively)
 ARTIFACT_DIRS: list[tuple[Path, Path]] = [
     (ENGINE / "backtest_results",
      Path("trading-system/trading-engine/backtest_results")),
@@ -131,8 +130,7 @@ def _copy_dir(src: Path, dst_rel: Path) -> int:
     count = 0
     for f in src.rglob("*"):
         if f.is_file():
-            rel = f.relative_to(src)
-            _copy_artifact(f, dst_rel / rel)
+            _copy_artifact(f, dst_rel / f.relative_to(src))
             count += 1
     return count
 
@@ -147,32 +145,16 @@ def main() -> None:
     logger.info("Branch: %s", GITHUB_BRANCH)
     logger.info("Root:   %s", REPO_ROOT)
 
-    # ── 1. Connect to GitHub remote ───────────────────────────────────────────
-    # /kaggle/working/Multi-Bot already contains the full repo files (copied
-    # from the input dataset) plus new training outputs. It is NOT a git repo.
-    # Strategy: git init → remote add → fetch remote tip → soft-reset HEAD to
-    # FETCH_HEAD so the new commit has the correct parent and push succeeds
-    # without --force and without losing any existing files on GitHub.
     remote_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
 
-    _run(["git", "init", "-b", GITHUB_BRANCH], cwd=REPO_ROOT)
+    # The clone at /kaggle/working/remote/Multi-Bot is already up to date with
+    # GitHub — no fetch/merge needed. Just set committer identity and ensure
+    # the remote URL carries the token for push auth.
     _run(["git", "config", "user.name",  GITHUB_USER],  cwd=REPO_ROOT)
     _run(["git", "config", "user.email", GITHUB_EMAIL], cwd=REPO_ROOT)
+    _run(["git", "remote", "set-url", "origin", remote_url], cwd=REPO_ROOT)
 
-    _probe = _run(["git", "remote", "get-url", "origin"], cwd=REPO_ROOT, check=False)
-    if _probe.returncode == 0:
-        _run(["git", "remote", "set-url", "origin", remote_url], cwd=REPO_ROOT)
-    else:
-        _run(["git", "remote", "add", "origin", remote_url], cwd=REPO_ROOT)
-
-    logger.info("Fetching remote history ...")
-    _run(["git", "fetch", "--depth=1", "origin", GITHUB_BRANCH], cwd=REPO_ROOT)
-    # Stage entire working tree, then soft-reset to remote tip.
-    # soft-reset moves HEAD + index to FETCH_HEAD without touching the working tree.
-    _run(["git", "add", "--all"], cwd=REPO_ROOT)
-    _run(["git", "reset", "--soft", "FETCH_HEAD"], cwd=REPO_ROOT)
-
-    # ── 2. Copy artifacts into repo ───────────────────────────────────────────
+    # ── Copy new artifacts into the working tree ──────────────────────────────
     logger.info("Collecting artifacts ...")
     n_files = 0
     for src, dst_rel in ARTIFACTS:
@@ -182,7 +164,7 @@ def main() -> None:
         n_files += _copy_dir(src_dir, dst_rel)
     logger.info("Collected %d file(s)", n_files)
 
-    # ── 3. Stage artifacts, commit, push ──────────────────────────────────────
+    # ── Stage, commit, push ───────────────────────────────────────────────────
     _run(["git", "add",
           "trading-system/trading-engine/weights/",
           "trading-system/trading-engine/backtest_results/",
@@ -191,9 +173,9 @@ def main() -> None:
           "trading-system/backtesting/results/",
           ], cwd=REPO_ROOT)
 
-    result = _run(["git", "status", "--porcelain"], cwd=REPO_ROOT)
-    if not result.stdout.strip():
-        logger.info("Nothing changed — repo already up to date, skipping push")
+    status = _run(["git", "status", "--porcelain"], cwd=REPO_ROOT)
+    if not status.stdout.strip():
+        logger.info("Nothing changed — skipping push")
         return
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
