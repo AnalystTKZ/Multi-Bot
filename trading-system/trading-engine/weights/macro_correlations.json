@@ -1,16 +1,16 @@
 {
-  "updated_at": "2026-04-19T05:16:58.799488+00:00",
+  "updated_at": "2026-04-19T07:26:10.822025+00:00",
   "symbols": {
     "AUDUSD": {
       "selected": [
         "dxy",
-        "spx",
-        "djia"
+        "djia",
+        "spx"
       ],
       "correlations": {
-        "dxy": -0.4748,
-        "spx": 0.3515,
-        "djia": 0.3507
+        "dxy": -0.4601,
+        "djia": 0.3254,
+        "spx": 0.32
       }
     },
     "EURGBP": {
@@ -20,9 +20,9 @@
         "cac40"
       ],
       "correlations": {
-        "eurostoxx": -0.1818,
-        "dax": -0.1805,
-        "cac40": -0.1707
+        "eurostoxx": -0.2015,
+        "dax": -0.2005,
+        "cac40": -0.188
       }
     },
     "EURJPY": {
@@ -32,9 +32,9 @@
         "dxy"
       ],
       "correlations": {
-        "us10y": 0.3064,
-        "us30y": 0.2741,
-        "dxy": -0.2416
+        "us10y": 0.2772,
+        "us30y": 0.2525,
+        "dxy": -0.2173
       }
     },
     "EURUSD": {
@@ -44,9 +44,9 @@
         "us10y"
       ],
       "correlations": {
-        "dxy": -0.8139,
-        "gold_fut": 0.2966,
-        "us10y": -0.138
+        "dxy": -0.8041,
+        "gold_fut": 0.3172,
+        "us10y": -0.1566
       }
     },
     "GBPJPY": {
@@ -56,9 +56,9 @@
         "us30y"
       ],
       "correlations": {
-        "us10y": 0.2697,
-        "djia": 0.2485,
-        "us30y": 0.2448
+        "us10y": 0.2537,
+        "djia": 0.2325,
+        "us30y": 0.23
       }
     },
     "GBPUSD": {
@@ -68,21 +68,21 @@
         "djia"
       ],
       "correlations": {
-        "dxy": -0.5551,
-        "gold_fut": 0.2024,
-        "djia": 0.1784
+        "dxy": -0.5326,
+        "gold_fut": 0.2117,
+        "djia": 0.1454
       }
     },
     "NZDUSD": {
       "selected": [
         "dxy",
         "gold_fut",
-        "spx"
+        "djia"
       ],
       "correlations": {
-        "dxy": -0.5089,
-        "gold_fut": 0.2937,
-        "spx": 0.2693
+        "dxy": -0.4949,
+        "gold_fut": 0.3045,
+        "djia": 0.2382
       }
     },
     "USDCAD": {
@@ -92,9 +92,9 @@
         "spx"
       ],
       "correlations": {
-        "dxy": 0.4288,
-        "djia": -0.3715,
-        "spx": -0.369
+        "dxy": 0.4143,
+        "djia": -0.3442,
+        "spx": -0.3417
       }
     },
     "USDCHF": {
@@ -104,9 +104,9 @@
         "us10y"
       ],
       "correlations": {
-        "dxy": 0.7,
-        "gold_fut": -0.3481,
-        "us10y": 0.2932
+        "dxy": 0.7082,
+        "gold_fut": -0.3355,
+        "us10y": 0.2615
       }
     },
     "USDJPY": {
@@ -116,9 +116,9 @@
         "us30y"
       ],
       "correlations": {
-        "dxy": 0.457,
-        "us10y": 0.4361,
-        "us30y": 0.367
+        "dxy": 0.4639,
+        "us10y": 0.4143,
+        "us30y": 0.3521
       }
     },
     "XAUUSD": {
@@ -128,9 +128,9 @@
         "us10y"
       ],
       "correlations": {
-        "gold_fut": 0.74,
-        "dxy": -0.378,
-        "us10y": -0.3083
+        "gold_fut": 0.7321,
+        "dxy": -0.3973,
+        "us10y": -0.3137
       }
     }
   }
