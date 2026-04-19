@@ -1,8 +1,8 @@
 {
-  "saved_at": "2026-04-19T02:41:43.820432+00:00",
+  "saved_at": "2026-04-19T04:51:07.836114+00:00",
   "gru": {
-    "n_features": 72,
-    "feature_hash": "8e3d04e2b45ced45",
+    "n_features": 74,
+    "feature_hash": "2514fa47db1fb7e1",
     "feature_names": [
       "log_return",
       "high_low_range",
@@ -34,11 +34,13 @@
       "regime_4h_1",
       "regime_4h_2",
       "regime_4h_3",
+      "regime_4h_4",
       "regime_4h_conf",
       "regime_1h_0",
       "regime_1h_1",
       "regime_1h_2",
       "regime_1h_3",
+      "regime_1h_4",
       "regime_1h_conf",
       "vol_slope_seq",
       "time_sin",
