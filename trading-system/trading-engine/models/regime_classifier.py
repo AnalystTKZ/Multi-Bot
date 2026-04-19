@@ -640,10 +640,12 @@ class RegimeClassifier(BaseModel):
             conf[neutral_mask] = neutral_conf[neutral_mask].astype(np.float32)
 
             # ── Persistence filter (HTF) ──────────────────────────────────────
+            # BIAS_UP/DOWN: a 4H structural bias should hold for at least 8 bars
+            # (32 hours). Prior value of 96 on 1H = 4 days was too strict.
             _persist_by_class = {
-                0: {"5M": 576, "15M": 192, "1H": 96, "4H": 20, "1D": 5},  # BIAS_UP
-                1: {"5M": 576, "15M": 192, "1H": 96, "4H": 20, "1D": 5},  # BIAS_DOWN
-                2: {"5M": 144, "15M":  48, "1H": 24, "4H":  5, "1D": 2},  # BIAS_NEUTRAL (shorter)
+                0: {"5M": 96, "15M": 32, "1H": 8, "4H": 8, "1D": 3},  # BIAS_UP
+                1: {"5M": 96, "15M": 32, "1H": 8, "4H": 8, "1D": 3},  # BIAS_DOWN
+                2: {"5M": 48, "15M": 16, "1H": 4, "4H": 3, "1D": 2},  # BIAS_NEUTRAL
             }
             _runs = (labels != labels.shift()).cumsum()
             _run_len = _runs.map(_runs.value_counts())
@@ -701,11 +703,16 @@ class RegimeClassifier(BaseModel):
             conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
 
             # ── Persistence filter (LTF) ──────────────────────────────────────
+            # Thresholds represent the minimum run length (in bars) for a regime
+            # label to be considered stable enough to train on.
+            # Prior values (TRENDING=48h, VOLATILE=24h on 1H) zeroed ~83% of bars.
+            # Realistic thresholds: a 6-bar trend = 6H of directional momentum is
+            # sufficient; VOLATILE only needs 3-4 bars to be real.
             _persist_by_class = {
-                0: {"5M": 288, "15M": 96, "1H": 48, "4H": 20, "1D": 5},   # TRENDING (long)
-                1: {"5M": 72,  "15M": 24, "1H": 12, "4H":  5, "1D": 2},   # RANGING (short)
-                2: {"5M": 72,  "15M": 24, "1H": 12, "4H":  5, "1D": 2},   # CONSOLIDATING (short)
-                3: {"5M": 144, "15M": 48, "1H": 24, "4H": 10, "1D": 3},   # VOLATILE (medium)
+                0: {"5M": 48, "15M": 16, "1H": 6, "4H": 3, "1D": 2},    # TRENDING
+                1: {"5M": 24, "15M":  8, "1H": 4, "4H": 2, "1D": 1},    # RANGING
+                2: {"5M": 24, "15M":  8, "1H": 4, "4H": 2, "1D": 1},    # CONSOLIDATING
+                3: {"5M": 24, "15M":  8, "1H": 4, "4H": 2, "1D": 1},    # VOLATILE
             }
             _runs = (labels != labels.shift()).cumsum()
             _run_len = _runs.map(_runs.value_counts())

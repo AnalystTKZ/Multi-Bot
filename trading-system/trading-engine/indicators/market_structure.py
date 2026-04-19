@@ -436,8 +436,8 @@ def detect_sr_zones(
 def detect_trending_pullback(
     df: pd.DataFrame,
     swing_n: int = 5,
-    pullback_atr: float = 0.75,
-    retest_atr: float = 0.5,
+    pullback_atr: float = 1.5,
+    retest_atr: float = 0.75,
 ) -> pd.DataFrame:
     """
     Detect valid pullback/retest zones for TRENDING entries.

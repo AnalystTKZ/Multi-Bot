@@ -81,21 +81,23 @@ def _build_torch_model():
             self.gru = nn.GRU(
                 input_size=N_FEATURES,
                 hidden_size=64,
-                num_layers=1,
+                num_layers=2,
                 batch_first=True,
+                dropout=0.3,
             )
-            self.drop1 = nn.Dropout(0.2)
+            self.drop1 = nn.Dropout(0.3)
             self.lstm = nn.LSTM(
                 input_size=64,
                 hidden_size=128,
-                num_layers=1,
+                num_layers=2,
                 batch_first=True,
+                dropout=0.3,
             )
-            self.drop2 = nn.Dropout(0.2)
+            self.drop2 = nn.Dropout(0.3)
             self.shared = nn.Sequential(
                 nn.Linear(128, 64),
                 nn.ReLU(),
-                nn.Dropout(0.2),
+                nn.Dropout(0.3),
             )
             self.head_dir = nn.Linear(64, 1)
             self.head_mag = nn.Linear(64, 1)
