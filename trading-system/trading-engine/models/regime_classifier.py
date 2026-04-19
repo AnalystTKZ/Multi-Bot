@@ -615,28 +615,32 @@ class RegimeClassifier(BaseModel):
         if mode == "htf_bias":
             labels = pd.Series(2, index=df.index, dtype=int)  # default BIAS_NEUTRAL
 
-            # BIAS_UP: ADX>20 AND ema_stack>=1 AND drift>0
-            bu_mask = (adx > 20) & (ema_stack >= 1) & (drift > 0)
+            # BIAS_UP: ADX>25 AND ema_stack>=1 AND drift>drift_p40
+            # Raised from ADX>20 to ADX>25 — weak-trend bars (20-25 ADX) are genuinely
+            # ambiguous and were causing the model to memorise noise instead of structure.
+            # drift_p40 filter ensures the move has meaningful directional commitment.
+            drift_p40 = float(drift.abs().quantile(0.40)) + 1e-9
+            bu_mask = (adx > 25) & (ema_stack >= 1) & (drift > drift_p40)
             labels[bu_mask] = 0
-            adx_conf_bu  = ((adx - 20) / 30.0).clip(0.0, 1.0)
+            adx_conf_bu   = ((adx - 25) / 25.0).clip(0.0, 1.0)
             stack_conf_bu = np.where(ema_stack >= 2, 1.0, 0.7)
             drift_conf_bu = (drift.abs() / drift_p80).clip(0.0, 1.0)
             bu_conf = (adx_conf_bu * stack_conf_bu * drift_conf_bu).astype(np.float32)
             conf[bu_mask] = (0.5 + 0.5 * pd.Series(bu_conf, index=df.index)[bu_mask]).astype(np.float32)
 
-            # BIAS_DOWN: ADX>20 AND ema_stack<=-1 AND drift<0
-            bd_mask = (adx > 20) & (ema_stack <= -1) & (drift < 0)
+            # BIAS_DOWN: ADX>25 AND ema_stack<=-1 AND drift<-drift_p40
+            bd_mask = (adx > 25) & (ema_stack <= -1) & (drift < -drift_p40)
             labels[bd_mask] = 1
-            adx_conf_bd  = ((adx - 20) / 30.0).clip(0.0, 1.0)
+            adx_conf_bd   = ((adx - 25) / 25.0).clip(0.0, 1.0)
             stack_conf_bd = np.where(ema_stack <= -2, 1.0, 0.7)
             drift_conf_bd = (drift.abs() / drift_p80).clip(0.0, 1.0)
             bd_conf = (adx_conf_bd * stack_conf_bd * drift_conf_bd).astype(np.float32)
             conf[bd_mask] = (0.5 + 0.5 * pd.Series(bd_conf, index=df.index)[bd_mask]).astype(np.float32)
 
-            # BIAS_NEUTRAL: everything else — confidence by distance from trend boundary
+            # BIAS_NEUTRAL: everything else — high confidence when clearly non-directional
             neutral_mask = ~bu_mask & ~bd_mask
-            adx_neutral_conf = (1.0 - (adx / 20.0).clip(0.0, 1.0))
-            neutral_conf     = adx_neutral_conf.clip(0.1, 1.0)
+            adx_neutral_conf = (1.0 - (adx / 25.0).clip(0.0, 1.0))
+            neutral_conf     = adx_neutral_conf.clip(0.2, 1.0)  # floor 0.2 so NEUTRAL bars aren't suppressed
             conf[neutral_mask] = neutral_conf[neutral_mask].astype(np.float32)
 
             # ── Persistence filter (HTF) ──────────────────────────────────────
@@ -695,12 +699,29 @@ class RegimeClassifier(BaseModel):
             consol_conf = (0.5 * consol_atr_conf + 0.5 * consol_slope_conf).clip(0.1, 1.0)
             conf[consol_mask] = (0.5 + 0.5 * consol_conf[consol_mask]).astype(np.float32)
 
-            # RANGING (1): sideways oscillation — everything else
-            ranging_mask = ~trend_mask & ~volatile_mask & ~consol_mask
+            # RANGING (1): explicit definition — sideways oscillation in the middle band.
+            # ADX<25 (no meaningful trend), atr_pctile in the mid-band (not volatile, not consolidating),
+            # and abs(drift) below the 60th percentile (no committed direction).
+            # Being explicit prevents the model from learning "RANGING = garbage bin of everything else".
+            drift_p60 = float(drift.abs().quantile(0.60)) + 1e-9
+            ranging_mask = (
+                ~trend_mask & ~volatile_mask & ~consol_mask
+                & (adx < 25)
+                & (atr_pctile > consol_thresh) & (atr_pctile < vol_thresh)
+                & (drift.abs() < drift_p60)
+            )
+            labels[ranging_mask] = 1
             adx_range_conf = (1.0 - (adx / 25.0).clip(0.0, 1.0))
             atr_range_conf = (1.0 - (atr_pctile / vol_thresh).clip(0.0, 1.0))
-            ranging_conf   = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.1, 1.0)
+            ranging_conf   = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.3, 1.0)
             conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
+
+            # Ambiguous bars: don't fit any explicit definition cleanly — assign most
+            # likely class by ADX/atr_pctile but zero their confidence so the MLP
+            # learns uncertainty rather than memorising a noisy hard label.
+            ambig_mask = ~trend_mask & ~volatile_mask & ~consol_mask & ~ranging_mask
+            labels[ambig_mask] = 1  # default to RANGING for ambiguous mid-band bars
+            conf[ambig_mask] = 0.0
 
             # ── Persistence filter (LTF) ──────────────────────────────────────
             # Thresholds represent the minimum run length (in bars) for a regime
@@ -982,10 +1003,17 @@ class RegimeClassifier(BaseModel):
                             torch.cuda.device_count())
 
             # ── Class weights (handle imbalance) ─────────────────────────────
-            counts   = np.bincount(y_tr, minlength=_n_cls).astype(np.float32)
-            counts   = np.where(counts == 0, 1.0, counts)
-            class_w  = torch.tensor(counts.sum() / (_n_cls * counts),
-                                    dtype=torch.float32).to(DEVICE)
+            counts  = np.bincount(y_tr, minlength=_n_cls).astype(np.float32)
+            counts  = np.where(counts == 0, 1.0, counts)
+            class_w = counts.sum() / (_n_cls * counts)
+            # Extra boost for the hardest-to-learn classes:
+            # LTF RANGING (1) collapses to 0% — 2× boost on top of inverse-freq weight.
+            # HTF BIAS_NEUTRAL (2) stalls at ~33% — 1.5× boost.
+            if self._mode == "ltf_behaviour":
+                class_w[1] *= 2.0   # RANGING
+            elif self._mode == "htf_bias":
+                class_w[2] *= 1.5   # BIAS_NEUTRAL
+            class_w = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
 
             # ── GPU-resident tensors ──────────────────────────────────────────
             batch_size = 4096
@@ -1003,9 +1031,10 @@ class RegimeClassifier(BaseModel):
             # Base CE with class weights (no label_smoothing — we do per-bar soft targets below)
             _base_ce = nn.CrossEntropyLoss(weight=class_w, reduction="none")
             # Entropy regularisation coefficient: penalises overconfident outputs on ALL bars.
-            # λ=0.05 means ~5% of the loss budget pushes the model toward output uncertainty
-            # on genuinely ambiguous bars. This is the "leave room for randomness" mechanism.
-            _entropy_lambda = 0.05
+            # Raised 0.05 → 0.10: the HTF model was hitting proba=1.0 on BIAS_UP/DOWN by
+            # epoch 20 (pure memorisation). Higher λ forces the model to spread probability
+            # mass, which also naturally reduces the BIAS_NEUTRAL / RANGING collapse.
+            _entropy_lambda = 0.10
 
             def _hybrid_loss(logits: "torch.Tensor", labels: "torch.Tensor",
                              bar_weights: "torch.Tensor") -> "torch.Tensor":
@@ -1047,7 +1076,10 @@ class RegimeClassifier(BaseModel):
                 # bar weight scales each bar's contribution to training stability.
                 cw_per_bar = class_w[labels]
                 # Hard floor on bar_weights so ambiguous bars still contribute.
-                bar_w_floored = torch.clamp(bar_weights, min=0.3)
+                # Raised from 0.3 → 0.4: RANGING bars have legitimately low confidence
+                # (they're defined as "not trending/volatile/consolidating") and were
+                # being suppressed below the learning threshold at 0.3.
+                bar_w_floored = torch.clamp(bar_weights, min=0.4)
                 weighted_ce = (soft_ce * cw_per_bar * bar_w_floored).mean()
 
                 # Entropy regularisation: encourages uncertainty on ambiguous bars
@@ -1064,8 +1096,11 @@ class RegimeClassifier(BaseModel):
             # blowing away weights that took 7 years of data to learn.
             _base_lr  = 3e-4
             _train_lr = _base_lr / 5.0 if _warm_start else _base_lr
+            # weight_decay raised 5e-2 → 1e-1: train/val gap was ~0.35 (HTF) and ~0.37 (LTF)
+            # indicating the small MLP was memorising label noise. Stronger L2 penalty
+            # keeps weights closer to zero and forces the model to learn general patterns.
             optimiser = torch.optim.AdamW(self._model.parameters(),
-                                          lr=_train_lr, weight_decay=5e-2)
+                                          lr=_train_lr, weight_decay=1e-1)
             scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimiser,
                 max_lr=_train_lr,
