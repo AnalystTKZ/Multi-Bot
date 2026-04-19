@@ -69,76 +69,78 @@ SEQUENCE_FEATURES = [
     # ── 1D cross-TF features (macro structure) ───────────────────────────────
     "mtf_1d_ema21_dist",    # 24
     "mtf_1d_ema_stack",     # 25
-    # ── 4H regime context (bias layer) ──────────────────────────────────────
-    "regime_4h_0",          # 26  one-hot: 4H regime is TRENDING_UP
-    "regime_4h_1",          # 27  one-hot: 4H regime is TRENDING_DOWN
-    "regime_4h_2",          # 28  one-hot: 4H regime is RANGING
-    "regime_4h_3",          # 29  one-hot: 4H regime is VOLATILE
-    "regime_4h_4",          # 30  one-hot: 4H regime is CONSOLIDATION
-    "regime_4h_conf",       # 31  4H regime classifier confidence (max softmax)
-    # ── 1H regime context (structure layer) ─────────────────────────────────
-    "regime_1h_0",          # 32  one-hot: 1H regime is TRENDING_UP
-    "regime_1h_1",          # 33  one-hot: 1H regime is TRENDING_DOWN
-    "regime_1h_2",          # 34  one-hot: 1H regime is RANGING
-    "regime_1h_3",          # 35  one-hot: 1H regime is VOLATILE
-    "regime_1h_4",          # 36  one-hot: 1H regime is CONSOLIDATION
-    "regime_1h_conf",       # 37  1H regime classifier confidence
+    # ── HTF bias context (4H classifier: 3-class) ───────────────────────────
+    "htf_bias_up",          # 26  one-hot: 4H bias is BIAS_UP
+    "htf_bias_down",        # 27  one-hot: 4H bias is BIAS_DOWN
+    "htf_bias_neutral",     # 28  one-hot: 4H bias is BIAS_NEUTRAL
+    "htf_bias_conf",        # 29  4H classifier confidence (max softmax)
+    # ── LTF behaviour context (1H classifier: 4-class) ───────────────────────
+    "ltf_trending",         # 30  one-hot: 1H behaviour is TRENDING
+    "ltf_ranging",          # 31  one-hot: 1H behaviour is RANGING
+    "ltf_consolidating",    # 32  one-hot: 1H behaviour is CONSOLIDATING
+    "ltf_volatile",         # 33  one-hot: 1H behaviour is VOLATILE
+    "ltf_conf",             # 34  1H classifier confidence
+    # ── HTF/LTF alignment + duration (3 slots, indices 35–37) ───────────────
+    "htf_ltf_align",        # 35  1.0 if HTF bias is directional AND LTF is TRENDING
+    "htf_regime_dur",       # 36  bars since last HTF bias change / 100 (capped 1.0)
+    "ltf_regime_dur",       # 37  bars since last LTF behaviour change / 100 (capped 1.0)
     # ── Volatility dynamics ───────────────────────────────────────────────────
-    "vol_slope_seq",        # 38
+    "vol_slope_seq",        # 38  Δ(ATR/close) over 14 bars × 1000
     # ── Time encoding (cyclic) ────────────────────────────────────────────────
-    "time_sin",             # 39
-    "time_cos",             # 40
+    "time_sin",             # 39  sin(2π × hour / 24)
+    "time_cos",             # 40  cos(2π × hour / 24)
     # ── ICT structural features ───────────────────────────────────────────────
     # EMA structure
-    "ema_pullback_zone",    # 39  price in EMA21-50 band normalised by ATR (0=outside, ±1=inside)
-    "ema21_slope_15m",      # 40  EMA21 slope / ATR over 5 bars
-    "ema21_slope_1h",       # 41  1H EMA21 slope / ATR (ffill to 15M)
-    "ema_stack_15m",        # 42  15M EMA stack score / 2
+    "ema_pullback_zone",    # 41  price in EMA21-50 band normalised by ATR (0=outside, ±1=inside)
+    "ema21_slope_15m",      # 42  EMA21 slope / ATR over 5 bars
+    "ema21_slope_1h",       # 43  1H EMA21 slope / ATR (ffill to 15M)
+    "ema_stack_15m",        # 44  15M EMA stack score / 2
     # BOS — age + strength
-    "bos_bull_bars_ago",    # 43  bars since last bull BOS / 40 (1.0 = no recent BOS)
-    "bos_bear_bars_ago",    # 44  bars since last bear BOS / 40
-    "bos_bull_strength",    # 45  bull BOS move / ATR at signal bar (0 = no recent BOS)
-    "bos_bear_strength",    # 46  bear BOS move / ATR at signal bar
+    "bos_bull_bars_ago",    # 45  bars since last bull BOS / 40 (1.0 = no recent BOS)
+    "bos_bear_bars_ago",    # 46  bars since last bear BOS / 40
+    "bos_bull_strength",    # 47  bull BOS move / ATR at signal bar (0 = no recent BOS)
+    "bos_bear_strength",    # 48  bear BOS move / ATR at signal bar
     # FVG — distance + fill ratio
-    "fvg_bull_dist_atr",    # 47  distance from close to nearest open bull FVG / ATR
-    "fvg_bear_dist_atr",    # 48  distance from close to nearest open bear FVG / ATR
-    "fvg_bull_fill_ratio",  # 49  how far price has moved into nearest bull FVG [0,1]
-    "fvg_bear_fill_ratio",  # 50  how far price has moved into nearest bear FVG [0,1]
+    "fvg_bull_dist_atr",    # 49  distance from close to nearest open bull FVG / ATR
+    "fvg_bear_dist_atr",    # 50  distance from close to nearest open bear FVG / ATR
+    "fvg_bull_fill_ratio",  # 51  how far price has moved into nearest bull FVG [0,1]
+    "fvg_bear_fill_ratio",  # 52  how far price has moved into nearest bear FVG [0,1]
     # Sweep / liquidity
-    "sweep_wick_depth_atr", # 51  wick beyond recent range extreme / ATR (last 3 bars, else 0)
-    "body_recovery_ratio",  # 52  |close-open| / (high-low) of sweep candle (0 if no sweep)
+    "sweep_wick_depth_atr", # 53  wick beyond recent range extreme / ATR (last 3 bars, else 0)
+    "body_recovery_ratio",  # 54  |close-open| / (high-low) of sweep candle (0 if no sweep)
     # Liquidity proximity
-    "dist_to_recent_high_atr",  # 53  (20-bar high - close) / ATR
-    "dist_to_recent_low_atr",   # 54  (close - 20-bar low) / ATR
+    "dist_to_recent_high_atr",  # 55  (20-bar high - close) / ATR
+    "dist_to_recent_low_atr",   # 56  (close - 20-bar low) / ATR
     # Asian range context
-    "asian_range_width_atr",    # 55  Asian session range width / ATR
-    "price_vs_asian_high_atr",  # 56  (close - asian_high) / ATR
-    "price_vs_asian_low_atr",   # 57  (close - asian_low) / ATR
+    "asian_range_width_atr",    # 57  Asian session range width / ATR
+    "price_vs_asian_high_atr",  # 58  (close - asian_high) / ATR
+    "price_vs_asian_low_atr",   # 59  (close - asian_low) / ATR
     # Candle structure
-    "candle_body_ratio",    # 58  |close-open| / (high-low)
-    "upper_wick_ratio",     # 59  upper wick / (high-low)
-    "lower_wick_ratio",     # 60  lower wick / (high-low)
+    "candle_body_ratio",    # 60  |close-open| / (high-low)
+    "upper_wick_ratio",     # 61  upper wick / (high-low)
+    "lower_wick_ratio",     # 62  lower wick / (high-low)
     # Oscillators
-    "rsi_extreme",          # 61  (rsi - 50) / 50  — distance from neutral
-    "stoch_k",              # 62  stoch %K / 100
-    "stoch_k_vs_d",         # 63  (stoch K - stoch D) / 100
+    "rsi_extreme",          # 63  (rsi - 50) / 50  — distance from neutral
+    "stoch_k",              # 64  stoch %K / 100
+    "stoch_k_vs_d",         # 65  (stoch K - stoch D) / 100
     # ADX on 15M
-    "adx_15m",              # 64  ADX / 100
+    "adx_15m",              # 66  ADX / 100
     # Regime dynamics
-    "regime_duration",      # 65  bars in current regime / 100 (capped at 1.0)
-    "vol_expansion",        # 66  ATR_t / ATR_{t-10} (clipped 0.5–3.0, centred at 1.0)
-    "atr_pctile",           # 67  ATR percentile rank in own 42-bar history [0→1]
+    "regime_duration",      # 67  bars in current regime / 100 (capped at 1.0)
+    "vol_expansion",        # 68  ATR_t / ATR_{t-10} (clipped 0.5–3.0, centred at 1.0)
+    "atr_pctile",           # 69  ATR percentile rank in own 42-bar history [0→1]
                             #     low = compression/consolidation; high = breakout expansion
     # Session timing — continuous
-    "mins_since_london_open",   # 68  minutes since 07:00 UTC / 480 (-1 if before open)
-    "mins_since_ny_open",       # 69  minutes since 13:00 UTC / 300 (-1 if before open)
+    "mins_since_london_open",   # 70  minutes since 07:00 UTC / 480 (-1 if before open)
+    "mins_since_ny_open",       # 71  minutes since 13:00 UTC / 300 (-1 if before open)
     # ── Execution-relevant macro context (daily, ffill'd to 15M) ─────────────
     # Only risk/liquidity signals: 17 index returns omitted (daily resolution
     # adds noise at 15M execution; they belong in the 4H bias classifier).
-    "macro_vix_level",          # 70  VIX percentile — risk-off context for sizing
-    "macro_yield_spread",       # 71  10Y-2Y spread — macro regime signal
+    "macro_vix_level",          # 72  VIX percentile — risk-off context for sizing
+    "macro_yield_spread",       # 73  10Y-2Y spread — macro regime signal
 ]
-# Total: 74 features (72 + regime_4h_4 + regime_1h_4 for CONSOLIDATION class)
+# Total: 74 features (26 base/MTF + 12 regime slots [3 HTF + 1 HTF_conf + 4 LTF + 1 LTF_conf + 3 align/dur]
+#                     + 36 ICT/macro)
 
 # ─── 4H BIAS classifier features ─────────────────────────────────────────────
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
@@ -240,12 +242,16 @@ REGIME_FEATURES = [
     "regime_duration",      # 35
     "atr_pctile",           # 36  ATR percentile rank — consolidation signal
     # ── Regime memory ─────────────────────────────────────────────────────────
-    "prev_regime_0",        # 37
-    "prev_regime_1",        # 38
-    "prev_regime_2",        # 39
-    "prev_regime_3",        # 40
-    "prev_regime_4",        # 41  one-hot: previous regime was CONSOLIDATION
-    "regime_confidence",    # 42
+    # HTF bias prev_regime (3 slots)
+    "prev_regime_htf_up",       # 37  one-hot: previous HTF regime was BIAS_UP
+    "prev_regime_htf_down",     # 38  one-hot: previous HTF regime was BIAS_DOWN
+    "prev_regime_htf_neutral",  # 39  one-hot: previous HTF regime was BIAS_NEUTRAL
+    # LTF behaviour prev_regime (4 slots)
+    "prev_regime_ltf_trending",     # 40  one-hot: previous LTF regime was TRENDING
+    "prev_regime_ltf_ranging",      # 41  one-hot: previous LTF regime was RANGING
+    "prev_regime_ltf_consolidating",# 42  one-hot: previous LTF regime was CONSOLIDATING
+    "prev_regime_ltf_volatile",     # 43  one-hot: previous LTF regime was VOLATILE
+    "regime_confidence",    # 44
 ] + INDEX_FEATURES + [
     "macro_vix_level",
     "macro_yield_spread",
@@ -409,6 +415,12 @@ class FeatureEngine:
         symbol: Optional[str] = None,
         regime_series: Optional["pd.Series"] = None,
         regime_conf_series: Optional["pd.Series"] = None,
+        # New canonical names
+        regime_htf_series: Optional["pd.Series"] = None,
+        regime_htf_conf_series: Optional["pd.Series"] = None,
+        regime_ltf_series: Optional["pd.Series"] = None,
+        regime_ltf_conf_series: Optional["pd.Series"] = None,
+        # Legacy backward-compat aliases (maps to htf/ltf)
         regime_4h_series: Optional["pd.Series"] = None,
         regime_4h_conf_series: Optional["pd.Series"] = None,
         regime_1h_series: Optional["pd.Series"] = None,
@@ -417,24 +429,27 @@ class FeatureEngine:
         """
         Returns shape (length, N) float32.
         Pads with zeros at start if len(df) < length. Never raises IndexError.
-        regime_4h_series: int labels from 4H regime classifier (bias layer).
-        regime_1h_series: int labels from 1H regime classifier (structure layer).
+        regime_htf_series: int labels (0-2) from HTF bias classifier (3-class).
+        regime_ltf_series: int labels (0-3) from LTF behaviour classifier (4-class).
+        regime_4h/1h_series: legacy aliases for htf/ltf.
         regime_series/regime_conf_series: legacy params kept for backwards compat,
-            maps to regime_4h if regime_4h_series is None.
+            maps to regime_htf if regime_htf_series is None.
         """
         if df is None or len(df) == 0:
             return np.zeros((length, len(SEQUENCE_FEATURES)), dtype=np.float32)
 
-        # Legacy fallback: if only old-style regime_series provided, treat as 4H
-        _r4h = regime_4h_series if regime_4h_series is not None else regime_series
-        _c4h = regime_4h_conf_series if regime_4h_conf_series is not None else regime_conf_series
+        # Resolve aliases: new canonical > legacy 4h/1h > oldest regime_series
+        _r4h = regime_htf_series or regime_4h_series or regime_series
+        _c4h = regime_htf_conf_series or regime_4h_conf_series or regime_conf_series
+        _r1h = regime_ltf_series or regime_1h_series
+        _c1h = regime_ltf_conf_series or regime_1h_conf_series
 
         feat = self._build_sequence_df(
             df, df_htf, symbol=symbol,
             regime_4h_series=_r4h,
             regime_4h_conf_series=_c4h,
-            regime_1h_series=regime_1h_series,
-            regime_1h_conf_series=regime_1h_conf_series,
+            regime_1h_series=_r1h,
+            regime_1h_conf_series=_c1h,
         )
         arr = feat[SEQUENCE_FEATURES].values.astype(np.float32)
 
@@ -461,9 +476,9 @@ class FeatureEngine:
         """Add all sequence feature columns to a copy of df.
 
         df_htf: dict of {tf_key: DataFrame} with keys "5M", "1H", "4H", "1D".
-        regime_4h_series: int labels (0-3) from 4H regime classifier — bias layer.
-        regime_1h_series: int labels (0-3) from 1H regime classifier — structure layer.
-        regime_series/regime_conf_series: legacy compat, treated as 4H if _4h not provided.
+        regime_4h_series: int labels (0-2) from HTF bias classifier — BIAS_UP/DOWN/NEUTRAL.
+        regime_1h_series: int labels (0-3) from LTF behaviour classifier — TRENDING/RANGING/CONSOLIDATING/VOLATILE.
+        regime_series/regime_conf_series: legacy compat, treated as HTF if _4h not provided.
         """
         from indicators.market_structure import (
             compute_rsi, compute_adx, compute_bollinger_bands,
@@ -585,29 +600,75 @@ class FeatureEngine:
         _open  = out["open"].to_numpy(dtype=np.float64)
         _atr   = atr.to_numpy(dtype=np.float64)
 
-        # ── Dual-regime context (4H bias + 1H structure) ─────────────────────
+        # ── Dual-regime context (4H bias + 1H behaviour) ─────────────────────
         # Legacy: if old regime_series provided but new _4h not, treat as 4H
         _r4h = regime_4h_series if regime_4h_series is not None else regime_series
         _c4h = regime_4h_conf_series if regime_4h_conf_series is not None else regime_conf_series
 
-        def _regime_onehot(series, conf_series, prefix):
-            if series is not None:
-                cur = series.reindex(out.index, method="ffill").fillna(2).astype(int)
-                for k in range(5):
-                    extra[f"{prefix}_{k}"] = (cur == k).to_numpy(dtype=np.float32)
-            else:
-                for k in range(5):
-                    extra[f"{prefix}_{k}"] = np.zeros(n, dtype=np.float32)
-            if conf_series is not None:
-                extra[f"{prefix}_conf"] = (
-                    conf_series.reindex(out.index, method="ffill")
-                    .fillna(0.25).clip(0.0, 1.0).to_numpy(dtype=np.float32)
-                )
-            else:
-                extra[f"{prefix}_conf"] = np.full(n, 0.25, dtype=np.float32)
+        # HTF bias (3-class: BIAS_UP=0, BIAS_DOWN=1, BIAS_NEUTRAL=2)
+        if _r4h is not None:
+            cur_htf = _r4h.reindex(out.index, method="ffill").fillna(2).astype(int)
+            extra["htf_bias_up"]      = (cur_htf == 0).to_numpy(dtype=np.float32)
+            extra["htf_bias_down"]    = (cur_htf == 1).to_numpy(dtype=np.float32)
+            extra["htf_bias_neutral"] = (cur_htf == 2).to_numpy(dtype=np.float32)
+        else:
+            cur_htf = pd.Series(2, index=out.index, dtype=int)
+            extra["htf_bias_up"]      = np.zeros(n, dtype=np.float32)
+            extra["htf_bias_down"]    = np.zeros(n, dtype=np.float32)
+            extra["htf_bias_neutral"] = np.ones(n, dtype=np.float32)
+        extra["htf_bias_conf"] = (
+            _c4h.reindex(out.index, method="ffill").fillna(0.33).clip(0, 1).to_numpy(dtype=np.float32)
+            if _c4h is not None else np.full(n, 0.33, dtype=np.float32)
+        )
 
-        _regime_onehot(_r4h, _c4h, "regime_4h")
-        _regime_onehot(regime_1h_series, regime_1h_conf_series, "regime_1h")
+        # LTF behaviour (4-class: TRENDING=0, RANGING=1, CONSOLIDATING=2, VOLATILE=3)
+        if regime_1h_series is not None:
+            cur_ltf = regime_1h_series.reindex(out.index, method="ffill").fillna(1).astype(int)
+            extra["ltf_trending"]      = (cur_ltf == 0).to_numpy(dtype=np.float32)
+            extra["ltf_ranging"]       = (cur_ltf == 1).to_numpy(dtype=np.float32)
+            extra["ltf_consolidating"] = (cur_ltf == 2).to_numpy(dtype=np.float32)
+            extra["ltf_volatile"]      = (cur_ltf == 3).to_numpy(dtype=np.float32)
+        else:
+            cur_ltf = pd.Series(1, index=out.index, dtype=int)
+            extra["ltf_trending"]      = np.zeros(n, dtype=np.float32)
+            extra["ltf_ranging"]       = np.ones(n, dtype=np.float32)
+            extra["ltf_consolidating"] = np.zeros(n, dtype=np.float32)
+            extra["ltf_volatile"]      = np.zeros(n, dtype=np.float32)
+        extra["ltf_conf"] = (
+            regime_1h_conf_series.reindex(out.index, method="ffill").fillna(0.25).clip(0, 1).to_numpy(dtype=np.float32)
+            if regime_1h_conf_series is not None else np.full(n, 0.25, dtype=np.float32)
+        )
+
+        # HTF/LTF alignment: 1.0 when HTF has directional bias AND LTF is TRENDING
+        _htf_a = cur_htf  # already aligned to out.index
+        _ltf_a = cur_ltf  # already aligned to out.index
+        extra["htf_ltf_align"] = ((_htf_a != 2) & (_ltf_a == 0)).to_numpy(dtype=np.float32)
+
+        # HTF regime duration: bars since last HTF bias change / 100 (capped 1.0)
+        _htf_dur_arr = np.zeros(n, dtype=np.float32)
+        _cnt = 0
+        _prev = -1
+        for _i in range(n):
+            _v = int(_htf_a.iloc[_i])
+            if _v != _prev:
+                _cnt = 0
+                _prev = _v
+            _cnt += 1
+            _htf_dur_arr[_i] = min(_cnt / 100.0, 1.0)
+        extra["htf_regime_dur"] = _htf_dur_arr
+
+        # LTF regime duration: bars since last LTF behaviour change / 100 (capped 1.0)
+        _ltf_dur_arr = np.zeros(n, dtype=np.float32)
+        _cnt2 = 0
+        _prev2 = -1
+        for _i in range(n):
+            _v2 = int(_ltf_a.iloc[_i])
+            if _v2 != _prev2:
+                _cnt2 = 0
+                _prev2 = _v2
+            _cnt2 += 1
+            _ltf_dur_arr[_i] = min(_cnt2 / 100.0, 1.0)
+        extra["ltf_regime_dur"] = _ltf_dur_arr
 
         # ── Volatility dynamics ───────────────────────────────────────────────
         _rel_vol = atr / (out["close"] + 1e-9)
@@ -1093,8 +1154,15 @@ class FeatureEngine:
         feats[3] = float(np.clip(ml_base.get("p_bull_gru", 0.5), 0, 1))
         feats[4] = float(np.clip(ml_base.get("p_bear_gru", 0.5), 0, 1))
 
-        regime_map = {"TRENDING_UP": 0, "TRENDING_DOWN": 1, "RANGING": 2, "VOLATILE": 3, "CONSOLIDATION": 4}
-        feats[5] = float(regime_map.get(ml_base.get("regime", "RANGING"), 2))
+        regime_map = {
+            # New LTF behaviour classes
+            "TRENDING": 0, "RANGING": 1, "CONSOLIDATING": 2, "VOLATILE": 3,
+            # Legacy compat (map to closest new class)
+            "TRENDING_UP": 0, "TRENDING_DOWN": 0, "CONSOLIDATION": 2,
+            # HTF bias classes (map to neutral/default)
+            "BIAS_UP": 0, "BIAS_DOWN": 0, "BIAS_NEUTRAL": 1,
+        }
+        feats[5] = float(regime_map.get(ml_base.get("regime", "RANGING"), 1))
         feats[6] = float(np.clip(ml_base.get("sentiment_score", 0.0), -1, 1))
 
         feats[7] = float(np.clip(bar.get("adx_14", 20.0) if hasattr(bar, "get") else 20.0, 0, 100))
@@ -1162,8 +1230,14 @@ class FeatureEngine:
         state[0] = _safe(ml_preds, "p_bull", 0.5)
         state[1] = _safe(ml_preds, "p_bear", 0.5)
         state[2] = _safe(ml_preds, "entry_depth", 0.3)
-        regime_map = {"TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 3.0, "CONSOLIDATION": 4.0}
-        state[3] = regime_map.get(ml_preds.get("regime", "RANGING"), 2.0) / 4.0
+        # HTF bias encoding at state[3]: BIAS_UP=0.0, BIAS_DOWN=1.0, BIAS_NEUTRAL=2.0 → /2.0
+        # LTF behaviour encoding at state[42]: TRENDING=0, RANGING=1, CONSOLIDATING=2, VOLATILE=3 → /3.0
+        htf_regime_map = {
+            "BIAS_UP": 0.0, "BIAS_DOWN": 1.0, "BIAS_NEUTRAL": 2.0,
+            # Legacy compat
+            "TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATION": 2.0,
+        }
+        state[3] = htf_regime_map.get(ml_preds.get("regime", "BIAS_NEUTRAL"), 2.0) / 2.0
         state[4] = _safe(ml_preds, "sentiment_score", 0.0)
         state[5] = _safe(ml_preds, "quality_score", 0.5)
 

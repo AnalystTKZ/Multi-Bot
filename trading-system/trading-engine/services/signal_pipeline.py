@@ -271,8 +271,24 @@ class SignalPipeline:
             return None
 
         # Regime context (metadata only — regime is encoded in SEQUENCE_FEATURES)
-        _regime = str(ml_preds.get("regime", "RANGING"))
+        _regime = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
         _regime_dur = float(bar.get("regime_duration", 0.5))
+
+        # Regime confidence multiplier (light bias — GRU already encodes regime in features)
+        _regime_mult_map = {
+            # HTF bias classes
+            "BIAS_UP":      1.10,
+            "BIAS_DOWN":    1.10,
+            "BIAS_NEUTRAL": 1.00,
+            # LTF behaviour classes
+            "TRENDING":     1.10,
+            "RANGING":      0.95,
+            "CONSOLIDATING": 1.05,
+            "VOLATILE":     0.85,
+            # Legacy compat
+            "TRENDING_UP": 1.10, "TRENDING_DOWN": 1.10, "CONSOLIDATION": 1.05,
+        }
+        _regime_weight = _regime_mult_map.get(_regime, 1.0)
 
         # Weak regime-age prior (mirrors backtest exactly)
         _age_weight = 1.0 + 0.08 * (1.0 - min(_regime_dur, 1.0))
@@ -305,7 +321,7 @@ class SignalPipeline:
                 "atr": atr,
                 "atr_at_entry": atr,
                 "session_weight": 1.0,
-                "regime_weight": 1.0,
+                "regime_weight": round(_regime_weight, 3),
                 "age_weight": round(_age_weight, 3),
                 "strategy": "ml_native",
             },

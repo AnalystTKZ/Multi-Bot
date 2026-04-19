@@ -85,8 +85,8 @@ trading-system/
     │   ├── rl_agent.py               ← PPO via SB3; 43-dim state; 16 actions
     │   └── weights/
     │       ├── gru_lstm/model.pt
-    │       ├── regime_4h.pkl         ← 4H bias classifier
-    │       ├── regime_1h.pkl         ← 1H structure classifier
+    │       ├── regime_htf.pkl        ← HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)
+    │       ├── regime_ltf.pkl        ← LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)
     │       ├── quality_scorer.pkl
     │       └── rl_ppo/
     ├── traders/
@@ -105,8 +105,8 @@ trading-system/
 
 | Model | Role | Output | Weights |
 |-------|------|--------|---------|
-| RegimeClassifier (4H) | Bias layer — macro regime from 4H+1D data | 5-class + confidence | `weights/regime_4h.pkl` |
-| RegimeClassifier (1H) | Structure layer — intraday regime from 1H+4H | 5-class + confidence | `weights/regime_1h.pkl` |
+| RegimeClassifier HTF | Directional bias — "what is macro direction?" from 4H+1D | 3-class (BIAS_UP/DOWN/NEUTRAL) + conf | `weights/regime_htf.pkl` |
+| RegimeClassifier LTF | Behaviour — "how is price acting?" from 1H+4H | 4-class (TRENDING/RANGING/CONSOLIDATING/VOLATILE) + conf | `weights/regime_ltf.pkl` |
 | GRU-LSTM | Direction + magnitude + uncertainty | `p_bull`, `p_bear`, `expected_move`, `expected_variance` | `weights/gru_lstm/model.pt` |
 | QualityScorer | EV in R-multiples (runs post-signal with real rr_ratio) | `ev`, `quality_score` | `weights/quality_scorer.pkl` |
 | SentimentModel | News headline scoring | `sentiment_score`, `sentiment_label` | pre-trained |

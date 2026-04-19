@@ -1,13 +1,13 @@
 """
-regime_classifier.py — GPU-native PyTorch MLP 4-class market regime classifier.
+regime_classifier.py — GPU-native PyTorch MLP hierarchical regime classifier.
 
-Multi-TF cascade architecture:
-  4H classifier → market bias (TRENDING_UP/DOWN/RANGING/VOLATILE)
-  1H classifier → intraday structure refinement
-  15M/5M entry precision is handled by the GRU which receives both as context.
+Hierarchical market structure framework:
+  HTF classifier (4H) — "What is overall direction?" (mode="htf_bias")
+    3 classes: 0=BIAS_UP, 1=BIAS_DOWN, 2=BIAS_NEUTRAL
+  LTF classifier (1H) — "How is price behaving NOW?" (mode="ltf_behaviour")
+    4 classes: 0=TRENDING, 1=RANGING, 2=CONSOLIDATING, 3=VOLATILE
 
-Classes: 0=TRENDING_UP, 1=TRENDING_DOWN, 2=RANGING, 3=VOLATILE
-Architecture: N_FEATURES → 128 → 64 → 4  (BN + Dropout + residual skip)
+Architecture: N_FEATURES → 128 → 64 → N_CLASSES  (BN + Dropout + residual skip)
 DataParallel across both T4 GPUs during training and batch inference.
 3-bar hysteresis: regime must persist 3 bars before switching.
 """
@@ -27,9 +27,14 @@ from services.feature_engine import REGIME_FEATURES, REGIME_4H_FEATURES, REGIME_
 
 logger = logging.getLogger(__name__)
 
-CLASSES = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]
+# ── New hierarchical class definitions ───────────────────────────────────────
+HTF_CLASSES = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]          # 3-class HTF bias
+LTF_CLASSES = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]  # 4-class LTF behaviour
+
+# CLASSES kept as LTF_CLASSES for backward compat (most code paths use LTF or check by name)
+CLASSES = LTF_CLASSES
 N_FEATURES  = len(REGIME_FEATURES)   # full matrix width for _build_feature_matrix
-N_CLASSES   = len(CLASSES)
+N_CLASSES   = len(CLASSES)           # default (LTF, 4-class)
 
 # Per-TF feature subsets: indices into the full REGIME_FEATURES column order.
 # _build_feature_matrix always builds the full matrix; classifiers index these columns.
@@ -46,11 +51,15 @@ _TF_FEATURE_MAP: dict = {
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHT_PATH = os.path.join(_MODEL_ROOT, "weights", "regime_classifier.pkl")
 
-# Per-TF weight paths for the 4H→1H cascade.
-# regime_4h.pkl: bias layer — trained on 4H data across all symbols/groups.
-# regime_1h.pkl: structure layer — trained on 1H data, refines 4H bias.
-WEIGHT_PATH_4H = os.path.join(_MODEL_ROOT, "weights", "regime_4h.pkl")
-WEIGHT_PATH_1H = os.path.join(_MODEL_ROOT, "weights", "regime_1h.pkl")
+# Per-mode weight paths for the hierarchical cascade.
+# regime_htf.pkl: 3-class HTF bias (BIAS_UP/DOWN/NEUTRAL) — trained on 4H data.
+# regime_ltf.pkl: 4-class LTF behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE) — trained on 1H data.
+# Legacy paths kept for backward compat during transition.
+WEIGHT_PATH_HTF = os.path.join(_MODEL_ROOT, "weights", "regime_htf.pkl")
+WEIGHT_PATH_LTF = os.path.join(_MODEL_ROOT, "weights", "regime_ltf.pkl")
+# Legacy aliases (old pkl files cold-start on n_classes mismatch detection — no manual deletion needed)
+WEIGHT_PATH_4H = WEIGHT_PATH_HTF
+WEIGHT_PATH_1H = WEIGHT_PATH_LTF
 
 
 # ── Device selection ──────────────────────────────────────────────────────────
@@ -131,41 +140,64 @@ class ModelNotTrainedError(RuntimeError):
 
 class RegimeClassifier(BaseModel):
     """
-    GPU-native PyTorch MLP 4-class regime classifier.
+    GPU-native PyTorch MLP hierarchical regime classifier.
 
-    timeframe: "4H" (bias layer) | "1H" (structure layer) | None (legacy default).
-    Each timeframe trains and saves to its own weight file so both can coexist.
+    timeframe: "4H" (HTF bias) | "1H" (LTF behaviour) | None (legacy default).
+    mode: "htf_bias" → 3-class (BIAS_UP/DOWN/NEUTRAL) trained on 4H data.
+          "ltf_behaviour" → 4-class (TRENDING/RANGING/CONSOLIDATING/VOLATILE) trained on 1H data.
+    Each mode trains and saves to its own weight file so both can coexist.
     DataParallel is used across all available GPUs for both training and batch predict.
     """
 
     weight_path = WEIGHT_PATH
 
     _TF_TO_PATH = {
-        "4H": WEIGHT_PATH_4H,
-        "1H": WEIGHT_PATH_1H,
+        "4H": WEIGHT_PATH_HTF,
+        "1H": WEIGHT_PATH_LTF,
     }
 
-    def __init__(self, timeframe: Optional[str] = None):
+    def __init__(self, timeframe: Optional[str] = None, mode: Optional[str] = None):
         super().__init__()
         self._model = None
         self._hysteresis_buffer: List[int] = []
-        self._current_regime_id: int = 2   # default RANGING
         self._timeframe = timeframe.upper() if timeframe else None
-        # Route weight file: per-TF if specified, else legacy path
+
+        # Determine mode: explicit > inferred from timeframe > default ltf_behaviour
+        if mode is not None:
+            self._mode = mode
+        elif self._timeframe == "4H":
+            self._mode = "htf_bias"
+        elif self._timeframe == "1H":
+            self._mode = "ltf_behaviour"
+        else:
+            self._mode = "ltf_behaviour"  # backward compat default
+
+        # Pick class list and output size based on mode
+        if self._mode == "htf_bias":
+            self._class_list = HTF_CLASSES
+            self._n_output_classes = len(HTF_CLASSES)  # 3
+            self._current_regime_id: int = 2   # default BIAS_NEUTRAL
+        else:
+            self._class_list = LTF_CLASSES
+            self._n_output_classes = len(LTF_CLASSES)  # 4
+            self._current_regime_id: int = 1   # default RANGING
+
+        # Route weight file: per-TF/mode if specified, else legacy path
         self.weight_path = self._TF_TO_PATH.get(self._timeframe, WEIGHT_PATH)
         # Feature column indices and count for this TF's classifier
         _col_idx, _feat_names = _TF_FEATURE_MAP.get(self._timeframe, _TF_FEATURE_MAP[None])
         self._col_idx   = _col_idx
         self._n_features = len(_col_idx)
-        logger.debug("RegimeClassifier[%s]: %d features, weight=%s",
-                     self._timeframe or "default", self._n_features, self.weight_path)
+        logger.debug("RegimeClassifier[%s mode=%s]: %d features, %d classes, weight=%s",
+                     self._timeframe or "default", self._mode, self._n_features,
+                     self._n_output_classes, self.weight_path)
         os.makedirs(os.path.join(_MODEL_ROOT, "weights"), exist_ok=True)
         if self.is_trained:
             try:
                 self.load(self.weight_path)
             except Exception as exc:
-                logger.warning("RegimeClassifier[%s]: initial load failed: %s",
-                               self._timeframe or "default", exc)
+                logger.warning("RegimeClassifier[%s mode=%s]: initial load failed: %s",
+                               self._timeframe or "default", self._mode, exc)
 
     # ── Predict ───────────────────────────────────────────────────────────────
 
@@ -209,7 +241,7 @@ class RegimeClassifier(BaseModel):
                 self._current_regime_id = self._hysteresis_buffer[0]
 
             return {
-                "regime":             CLASSES[self._current_regime_id],
+                "regime":             self._class_list[self._current_regime_id],
                 "regime_id":          self._current_regime_id,
                 "proba":              proba,
                 "regime_confidence":  float(max(proba)),
@@ -225,9 +257,11 @@ class RegimeClassifier(BaseModel):
         Returns (labels: np.ndarray int32, confidences: np.ndarray float32).
         DataParallel splits batches across both T4 GPUs automatically.
         """
+        _default_id = 2 if self._mode == "htf_bias" else 1  # BIAS_NEUTRAL or RANGING
+        _default_conf = 1.0 / self._n_output_classes
         if not self.is_trained or self._model is None:
             n = len(X)
-            return np.full(n, 2, dtype=np.int32), np.full(n, 0.25, dtype=np.float32)
+            return np.full(n, _default_id, dtype=np.int32), np.full(n, _default_conf, dtype=np.float32)
         try:
             import torch
             # Slice to TF-specific columns if full matrix provided
@@ -248,7 +282,7 @@ class RegimeClassifier(BaseModel):
         except Exception as exc:
             logger.error("RegimeClassifier.predict_batch failed: %s", exc)
             n = len(X)
-            return np.full(n, 2, dtype=np.int32), np.full(n, 0.25, dtype=np.float32)
+            return np.full(n, _default_id, dtype=np.int32), np.full(n, _default_conf, dtype=np.float32)
 
     # ── Labels ────────────────────────────────────────────────────────────────
 
@@ -425,11 +459,14 @@ class RegimeClassifier(BaseModel):
         return feat_df, feat_df.index
 
     @staticmethod
-    def fit_global_gmm(dfs: list[pd.DataFrame], timeframe: str = None) -> tuple:
+    def fit_global_gmm(dfs: list[pd.DataFrame], timeframe: str = None,
+                       mode: str = "ltf_behaviour") -> tuple:
         """
         Fit one GMM on combined features from all dfs and return (gmm, scaler, cluster_labels).
         Call once before labeling — guarantees consistent regime semantics across all symbols/TFs.
         timeframe: used to pick the correct lookback window ("4H", "1H", "15M", etc.).
+        mode: "htf_bias" → 3 clusters (BIAS_UP/DOWN/NEUTRAL by drift direction).
+              "ltf_behaviour" → 4 clusters (TRENDING/RANGING/CONSOLIDATING/VOLATILE by behaviour).
         """
         try:
             from sklearn.mixture import GaussianMixture
@@ -438,7 +475,9 @@ class RegimeClassifier(BaseModel):
             return None, None, None
 
         n_bar = RegimeClassifier._TF_NBAR.get(timeframe, RegimeClassifier._DEFAULT_NBAR)
-        logger.info("GMM fit: timeframe=%s → n_bar=%d", timeframe or "default", n_bar)
+        n_components = 3 if mode == "htf_bias" else 4
+        logger.info("GMM fit: timeframe=%s mode=%s → n_bar=%d n_components=%d",
+                    timeframe or "default", mode, n_bar, n_components)
 
         all_feats = []
         for df in dfs:
@@ -455,53 +494,50 @@ class RegimeClassifier(BaseModel):
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_all)
 
-        gmm = GaussianMixture(n_components=5, covariance_type="full",
+        gmm = GaussianMixture(n_components=n_components, covariance_type="full",
                               random_state=42, max_iter=300)
         gmm.fit(X_scaled)
 
         centroids = scaler.inverse_transform(gmm.means_)
         # centroids cols: [eff, vol, drift, comp, vol_slope, atr_pctile, autocorr, hurst_proxy]
-        #
-        # Rank-based assignment — guaranteed to assign exactly one cluster per class
-        # regardless of centroid magnitudes. Constraint-based logic fails for small or
-        # correlated groups (e.g. forex crosses) where all drift centroids are near zero.
-        #
-        # Assignment order (greedy, most-distinguishable first):
-        #   1. VOLATILE    — highest (vol - eff): high noise, low directionality
-        #   2. TRENDING_UP — highest drift among remaining (most positive momentum)
-        #   3. TRENDING_DOWN — lowest drift among remaining (most negative momentum)
-        #   4. RANGING     — the leftover cluster (low vol, low drift, low autocorr)
-        remaining = list(range(5))
+        remaining = list(range(n_components))
         cluster_labels: dict[int, int] = {}
 
-        # 1. VOLATILE: highest (vol - eff) — chaotic expansion, low directional efficiency
-        vol_c = max(remaining, key=lambda c: centroids[c, 1] - centroids[c, 0])
-        cluster_labels[vol_c] = 3
-        remaining.remove(vol_c)
+        if mode == "htf_bias":
+            # HTF (3-class): assign by drift direction — most-distinguishable first
+            # BIAS_UP (0): highest signed drift
+            bu_c = max(remaining, key=lambda c: centroids[c, 2])
+            cluster_labels[bu_c] = 0
+            remaining.remove(bu_c)
+            # BIAS_DOWN (1): lowest signed drift
+            bd_c = min(remaining, key=lambda c: centroids[c, 2])
+            cluster_labels[bd_c] = 1
+            remaining.remove(bd_c)
+            # BIAS_NEUTRAL (2): the remainder
+            cluster_labels[remaining[0]] = 2
+        else:
+            # LTF (4-class): assign by behaviour profile
+            # VOLATILE (3): highest (vol - eff) — chaotic expansion
+            vol_c = max(remaining, key=lambda c: centroids[c, 1] - centroids[c, 0])
+            cluster_labels[vol_c] = 3
+            remaining.remove(vol_c)
+            # TRENDING (0): highest efficiency AND highest abs(drift)
+            tr_c = max(remaining, key=lambda c: centroids[c, 0] + abs(centroids[c, 2]))
+            cluster_labels[tr_c] = 0
+            remaining.remove(tr_c)
+            # CONSOLIDATING (2): lowest atr_pctile + lowest autocorr (pre-breakout compression)
+            consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
+            cluster_labels[consol] = 2
+            remaining.remove(consol)
+            # RANGING (1): the last cluster — moderate vol, near-zero drift
+            cluster_labels[remaining[0]] = 1
 
-        # 2. TRENDING_UP: highest signed drift among remaining 3
-        tu_c = max(remaining, key=lambda c: centroids[c, 2])
-        cluster_labels[tu_c] = 0
-        remaining.remove(tu_c)
-
-        # 3. TRENDING_DOWN: lowest signed drift among remaining 2
-        td_c = min(remaining, key=lambda c: centroids[c, 2])
-        cluster_labels[td_c] = 1
-        remaining.remove(td_c)
-
-        # 4. CONSOLIDATION (4): lowest atr_pctile + lowest autocorr among remaining 2
-        consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
-        cluster_labels[consol] = 4
-        remaining.remove(consol)
-
-        # 5. RANGING (2): the last cluster — moderate vol, near-zero drift, stable ATR
-        cluster_labels[remaining[0]] = 2
-
-        dist = {CLASSES[v]: 0 for v in range(N_CLASSES)}
+        class_list = HTF_CLASSES if mode == "htf_bias" else LTF_CLASSES
+        dist = {class_list[v]: 0 for v in range(n_components)}
         for v in cluster_labels.values():
-            dist[CLASSES[v]] += 1
-        logger.info("GMM fitted on %d samples — cluster→regime: %s dist: %s",
-                    len(X_all), cluster_labels, dist)
+            dist[class_list[v]] += 1
+        logger.info("GMM fitted on %d samples (mode=%s) — cluster→regime: %s dist: %s",
+                    len(X_all), mode, cluster_labels, dist)
         return gmm, scaler, cluster_labels
 
     def create_labels_with_gmm(self, df: pd.DataFrame, gmm, scaler, cluster_labels: dict,
@@ -525,28 +561,28 @@ class RegimeClassifier(BaseModel):
     def create_rule_labels(
         df: pd.DataFrame,
         timeframe: str = "4H",
+        mode: str = "ltf_behaviour",
         return_confidence: bool = False,
     ):
         """
-        Rule-based regime labels with per-bar confidence scores.
+        Mode-aware rule-based regime labels with per-bar confidence scores.
 
-        Rules (priority order):
-          1. VOLATILE  (3): atr_pctile ≥ 80th pctile  (expansion / stress)
-          2. TRENDING_UP  (0): adx > 25 AND ema_stack ≥ 1 AND drift > 0
-          3. TRENDING_DOWN(1): adx > 25 AND ema_stack ≤ -1 AND drift < 0
-          4. RANGING (2): everything else
+        mode="htf_bias" (4H): 3-class direction labels
+          - BIAS_UP (0):     ADX>20 AND ema_stack >= 1 AND drift > 0
+          - BIAS_DOWN (1):   ADX>20 AND ema_stack <= -1 AND drift < 0
+          - BIAS_NEUTRAL (2): everything else
+          Persistence: 20 bars (4H) for BIAS_UP/DOWN; 5 bars for BIAS_NEUTRAL.
 
-        Confidence [0→1] encodes how cleanly the rule fired:
-          - Trending: scales with ADX strength (25→50 maps to 0.5→1.0),
-            full stack (±2) vs partial (±1) multiplier 1.0 vs 0.7,
-            and drift magnitude relative to its 80th percentile.
-          - Volatile: scales with atr_pctile above threshold (0.8→1.0 maps to 0.5→1.0).
-          - Ranging: confidence is low when near a trend/volatile boundary
-            (ADX 20-25, or atr_pctile 0.65-0.80) and higher deep inside range.
+        mode="ltf_behaviour" (1H): 4-class behaviour labels (direction-agnostic)
+          Priority order:
+          1. VOLATILE (3):       atr_pctile >= 80th pctile  (expansion/stress)
+          2. TRENDING (0):       ADX>25 AND abs(ema_stack)>=1 AND abs(drift)>0 AND not volatile
+          3. CONSOLIDATING (2):  atr_pctile<=25th pctile AND atr_slope<0 AND not trending/volatile
+          4. RANGING (1):        everything else — sideways oscillation
+          Persistence: TRENDING=20 bars, VOLATILE=10 bars, RANGING/CONSOLIDATING=5 bars.
 
-        Bars with confidence < 0.4 are "ambiguous" — the MLP will be trained
-        with reduced sample weight so it learns uncertainty on those bars rather
-        than memorising a noisy hard label.
+        Bars with confidence < 0.4 are "ambiguous" — the MLP trains with reduced
+        sample weight so it learns uncertainty on those bars.
 
         Returns:
           labels pd.Series[int]                        (always)
@@ -554,17 +590,15 @@ class RegimeClassifier(BaseModel):
         """
         from indicators.market_structure import compute_atr, compute_adx, compute_ema_stack_score
 
-        n_bar = RegimeClassifier._TF_NBAR.get(
-            timeframe.upper() if timeframe else "4H", RegimeClassifier._DEFAULT_NBAR
-        )
+        _tf = (timeframe or "4H").upper()
+        n_bar = RegimeClassifier._TF_NBAR.get(_tf, RegimeClassifier._DEFAULT_NBAR)
         close = df["close"]
-        labels = pd.Series(2, index=df.index, dtype=int)
-        conf   = pd.Series(0.5, index=df.index, dtype=np.float32)
+        conf  = pd.Series(0.5, index=df.index, dtype=np.float32)
 
         adx       = df["adx_14"]    if "adx_14"    in df.columns else compute_adx(df, 14)
         ema_stack = df["ema_stack"] if "ema_stack" in df.columns else compute_ema_stack_score(df)
-
         drift = (close - close.shift(n_bar)) / (n_bar * close.shift(n_bar) + 1e-9)
+        drift_p80 = float(drift.abs().quantile(0.80)) + 1e-9
 
         atr = compute_atr(df, n_bar)
         _hist = n_bar * 3
@@ -573,78 +607,124 @@ class RegimeClassifier(BaseModel):
             if len(x) > 1 else 0.5, raw=True
         ).clip(0.0, 1.0).fillna(0.5)
 
-        drift_p80 = float(drift.abs().quantile(0.80)) + 1e-9
-        vol_thresh = float(atr_pctile.quantile(0.80))
-
-        # ── VOLATILE ─────────────────────────────────────────────────────────────
-        volatile_mask = atr_pctile >= vol_thresh
-        labels[volatile_mask] = 3
-        # confidence scales linearly from 0.5 at threshold to 1.0 at atr_pctile=1.0
-        vol_conf = ((atr_pctile - vol_thresh) / (1.0 - vol_thresh + 1e-9)).clip(0.0, 1.0)
-        conf[volatile_mask] = (0.5 + 0.5 * vol_conf[volatile_mask]).astype(np.float32)
-
-        # ── TRENDING_DOWN ─────────────────────────────────────────────────────────
-        td_mask = (adx > 25) & (ema_stack <= -1) & (drift < 0) & ~volatile_mask
-        labels[td_mask] = 1
-        adx_conf_td  = ((adx - 25) / 25.0).clip(0.0, 1.0)                   # 25→50 maps 0→1
-        stack_conf_td = np.where(ema_stack <= -2, 1.0, 0.7)                  # full stack bonus
-        drift_conf_td = (drift.abs() / drift_p80).clip(0.0, 1.0)
-        td_conf = (adx_conf_td * stack_conf_td * drift_conf_td).astype(np.float32)
-        conf[td_mask] = (0.5 + 0.5 * pd.Series(td_conf, index=df.index)[td_mask]).astype(np.float32)
-
-        # ── TRENDING_UP ───────────────────────────────────────────────────────────
-        tu_mask = (adx > 25) & (ema_stack >= 1) & (drift > 0) & ~volatile_mask
-        labels[tu_mask] = 0
-        adx_conf_tu   = ((adx - 25) / 25.0).clip(0.0, 1.0)
-        stack_conf_tu = np.where(ema_stack >= 2, 1.0, 0.7)
-        drift_conf_tu = (drift.abs() / drift_p80).clip(0.0, 1.0)
-        tu_conf = (adx_conf_tu * stack_conf_tu * drift_conf_tu).astype(np.float32)
-        conf[tu_mask] = (0.5 + 0.5 * pd.Series(tu_conf, index=df.index)[tu_mask]).astype(np.float32)
-
-        # ── CONSOLIDATION — pre-breakout compression: very low ATR + negative drift ─
-        # atr_pctile at multi-week low (bottom 20%) AND ATR falling (vol_slope < 0)
-        _hist_consol = n_bar * 3
         atr_slope = atr.rolling(n_bar, min_periods=max(2, n_bar // 2)).apply(
             lambda x: (x[-1] - x[0]) / (x[0] + 1e-9) if len(x) > 1 else 0.0, raw=True
         ).fillna(0.0)
-        consol_vol_thresh = float(atr_pctile.quantile(0.25))  # bottom quartile only
-        consol_mask = (atr_pctile <= consol_vol_thresh) & (atr_slope < 0) & ~volatile_mask & ~tu_mask & ~td_mask
-        labels[consol_mask] = 4
-        # confidence: how deep into low-ATR territory + how negative the slope is
-        consol_atr_conf   = (1.0 - (atr_pctile / (consol_vol_thresh + 1e-9)).clip(0.0, 1.0))
-        consol_slope_conf = (-atr_slope).clip(0.0, 0.5) / 0.5
-        consol_conf = (0.5 * consol_atr_conf + 0.5 * consol_slope_conf).clip(0.1, 1.0)
-        conf[consol_mask] = (0.5 + 0.5 * consol_conf[consol_mask]).astype(np.float32)
 
-        # ── RANGING — confidence based on distance from trend/volatile boundaries ─
-        ranging_mask = ~tu_mask & ~td_mask & ~volatile_mask & ~consol_mask
-        # Deep range: ADX low AND atr_pctile away from breakout threshold → high conf
-        adx_range_conf   = (1.0 - (adx / 25.0).clip(0.0, 1.0))              # low ADX = confident ranging
-        atr_range_conf   = (1.0 - (atr_pctile / vol_thresh).clip(0.0, 1.0)) # low atr_pctile = confident ranging
-        ranging_conf     = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.1, 1.0)
-        conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
+        # ── HTF BIAS mode (3-class: direction-focused) ────────────────────────
+        if mode == "htf_bias":
+            labels = pd.Series(2, index=df.index, dtype=int)  # default BIAS_NEUTRAL
 
-        # ── Minimum persistence filter ────────────────────────────────────────
-        # Regimes that last fewer than MIN_PERSIST bars are almost certainly
-        # noise — the classifier cannot learn a reliable signal from them.
-        # Zero-weight these runs so the MLP treats them as ambiguous.
-        # Threshold: 20 bars at 4H ≈ 80 hours; 48 bars at 1H ≈ 48 hours.
-        _tf = (timeframe or "4H").upper()
-        _min_persist = {"5M": 288, "15M": 96, "1H": 48, "4H": 20, "1D": 5}.get(_tf, 20)
-        _runs = (labels != labels.shift()).cumsum()
-        _run_len = _runs.map(_runs.value_counts())
-        _short_run_mask = _run_len < _min_persist
-        conf[_short_run_mask] = 0.0   # zero weight → treated as ambiguous by trainer
+            # BIAS_UP: ADX>20 AND ema_stack>=1 AND drift>0
+            bu_mask = (adx > 20) & (ema_stack >= 1) & (drift > 0)
+            labels[bu_mask] = 0
+            adx_conf_bu  = ((adx - 20) / 30.0).clip(0.0, 1.0)
+            stack_conf_bu = np.where(ema_stack >= 2, 1.0, 0.7)
+            drift_conf_bu = (drift.abs() / drift_p80).clip(0.0, 1.0)
+            bu_conf = (adx_conf_bu * stack_conf_bu * drift_conf_bu).astype(np.float32)
+            conf[bu_mask] = (0.5 + 0.5 * pd.Series(bu_conf, index=df.index)[bu_mask]).astype(np.float32)
 
-        dist = {CLASSES[c]: int((labels == c).sum()) for c in range(N_CLASSES)}
-        ambiguous = int((conf < 0.4).sum())
-        logger.info("Rule labels [%s]: %s  ambiguous(conf<0.4)=%d (total=%d)  short_runs_zeroed=%d",
-                    timeframe or "?", dist, ambiguous, len(labels), int(_short_run_mask.sum()))
+            # BIAS_DOWN: ADX>20 AND ema_stack<=-1 AND drift<0
+            bd_mask = (adx > 20) & (ema_stack <= -1) & (drift < 0)
+            labels[bd_mask] = 1
+            adx_conf_bd  = ((adx - 20) / 30.0).clip(0.0, 1.0)
+            stack_conf_bd = np.where(ema_stack <= -2, 1.0, 0.7)
+            drift_conf_bd = (drift.abs() / drift_p80).clip(0.0, 1.0)
+            bd_conf = (adx_conf_bd * stack_conf_bd * drift_conf_bd).astype(np.float32)
+            conf[bd_mask] = (0.5 + 0.5 * pd.Series(bd_conf, index=df.index)[bd_mask]).astype(np.float32)
 
-        labels = labels.astype(int)
-        if return_confidence:
-            return labels, conf.astype(np.float32)
-        return labels
+            # BIAS_NEUTRAL: everything else — confidence by distance from trend boundary
+            neutral_mask = ~bu_mask & ~bd_mask
+            adx_neutral_conf = (1.0 - (adx / 20.0).clip(0.0, 1.0))
+            neutral_conf     = adx_neutral_conf.clip(0.1, 1.0)
+            conf[neutral_mask] = neutral_conf[neutral_mask].astype(np.float32)
+
+            # ── Persistence filter (HTF) ──────────────────────────────────────
+            _persist_by_class = {
+                0: {"5M": 576, "15M": 192, "1H": 96, "4H": 20, "1D": 5},  # BIAS_UP
+                1: {"5M": 576, "15M": 192, "1H": 96, "4H": 20, "1D": 5},  # BIAS_DOWN
+                2: {"5M": 144, "15M":  48, "1H": 24, "4H":  5, "1D": 2},  # BIAS_NEUTRAL (shorter)
+            }
+            _runs = (labels != labels.shift()).cumsum()
+            _run_len = _runs.map(_runs.value_counts())
+            _short_run_mask = pd.Series(False, index=labels.index)
+            for cls_id, tf_thresholds in _persist_by_class.items():
+                cls_mask = labels == cls_id
+                min_p = tf_thresholds.get(_tf, tf_thresholds.get("4H", 5))
+                _short_run_mask |= (cls_mask & (_run_len < min_p))
+            conf[_short_run_mask] = 0.0
+
+            dist = {HTF_CLASSES[c]: int((labels == c).sum()) for c in range(len(HTF_CLASSES))}
+            ambiguous = int((conf < 0.4).sum())
+            logger.info("Rule labels HTF_BIAS [%s]: %s  ambiguous=%d (total=%d)  short_runs_zeroed=%d",
+                        timeframe or "?", dist, ambiguous, len(labels), int(_short_run_mask.sum()))
+
+            labels = labels.astype(int)
+            if return_confidence:
+                return labels, conf.astype(np.float32)
+            return labels
+
+        # ── LTF BEHAVIOUR mode (4-class: behaviour-focused, direction-agnostic) ─
+        else:  # ltf_behaviour (default)
+            labels = pd.Series(1, index=df.index, dtype=int)  # default RANGING
+            vol_thresh    = float(atr_pctile.quantile(0.80))
+            consol_thresh = float(atr_pctile.quantile(0.25))
+
+            # VOLATILE (3): ATR expanding — chaotic, unpredictable
+            volatile_mask = atr_pctile >= vol_thresh
+            labels[volatile_mask] = 3
+            vol_conf = ((atr_pctile - vol_thresh) / (1.0 - vol_thresh + 1e-9)).clip(0.0, 1.0)
+            conf[volatile_mask] = (0.5 + 0.5 * vol_conf[volatile_mask]).astype(np.float32)
+
+            # TRENDING (0): directional momentum — direction-agnostic (we know direction from HTF)
+            trend_mask = (adx > 25) & (ema_stack.abs() >= 1) & (drift.abs() > 0) & ~volatile_mask
+            labels[trend_mask] = 0
+            adx_conf_t   = ((adx - 25) / 25.0).clip(0.0, 1.0)
+            stack_conf_t = np.where(ema_stack.abs() >= 2, 1.0, 0.7)
+            drift_conf_t = (drift.abs() / drift_p80).clip(0.0, 1.0)
+            t_conf = (adx_conf_t * stack_conf_t * drift_conf_t).astype(np.float32)
+            conf[trend_mask] = (0.5 + 0.5 * pd.Series(t_conf, index=df.index)[trend_mask]).astype(np.float32)
+
+            # CONSOLIDATING (2): ATR at multi-period low AND falling — pre-breakout compression
+            consol_mask = (atr_pctile <= consol_thresh) & (atr_slope < 0) & ~volatile_mask & ~trend_mask
+            labels[consol_mask] = 2
+            consol_atr_conf   = (1.0 - (atr_pctile / (consol_thresh + 1e-9)).clip(0.0, 1.0))
+            consol_slope_conf = (-atr_slope).clip(0.0, 0.5) / 0.5
+            consol_conf = (0.5 * consol_atr_conf + 0.5 * consol_slope_conf).clip(0.1, 1.0)
+            conf[consol_mask] = (0.5 + 0.5 * consol_conf[consol_mask]).astype(np.float32)
+
+            # RANGING (1): sideways oscillation — everything else
+            ranging_mask = ~trend_mask & ~volatile_mask & ~consol_mask
+            adx_range_conf = (1.0 - (adx / 25.0).clip(0.0, 1.0))
+            atr_range_conf = (1.0 - (atr_pctile / vol_thresh).clip(0.0, 1.0))
+            ranging_conf   = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.1, 1.0)
+            conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
+
+            # ── Persistence filter (LTF) ──────────────────────────────────────
+            _persist_by_class = {
+                0: {"5M": 288, "15M": 96, "1H": 48, "4H": 20, "1D": 5},   # TRENDING (long)
+                1: {"5M": 72,  "15M": 24, "1H": 12, "4H":  5, "1D": 2},   # RANGING (short)
+                2: {"5M": 72,  "15M": 24, "1H": 12, "4H":  5, "1D": 2},   # CONSOLIDATING (short)
+                3: {"5M": 144, "15M": 48, "1H": 24, "4H": 10, "1D": 3},   # VOLATILE (medium)
+            }
+            _runs = (labels != labels.shift()).cumsum()
+            _run_len = _runs.map(_runs.value_counts())
+            _short_run_mask = pd.Series(False, index=labels.index)
+            for cls_id, tf_thresholds in _persist_by_class.items():
+                cls_mask = labels == cls_id
+                min_p = tf_thresholds.get(_tf, tf_thresholds.get("4H", 5))
+                _short_run_mask |= (cls_mask & (_run_len < min_p))
+            conf[_short_run_mask] = 0.0
+
+            dist = {LTF_CLASSES[c]: int((labels == c).sum()) for c in range(len(LTF_CLASSES))}
+            ambiguous = int((conf < 0.4).sum())
+            logger.info("Rule labels LTF_BEHAVIOUR [%s]: %s  ambiguous=%d (total=%d)  short_runs_zeroed=%d",
+                        timeframe or "?", dist, ambiguous, len(labels), int(_short_run_mask.sum()))
+
+            labels = labels.astype(int)
+            if return_confidence:
+                return labels, conf.astype(np.float32)
+            return labels
 
     # ── Train ─────────────────────────────────────────────────────────────────
 
@@ -815,33 +895,36 @@ class RegimeClassifier(BaseModel):
             import torch
             import torch.nn as nn
 
+            # Mode-specific class definitions
+            _n_cls   = self._n_output_classes
+            _classes = self._class_list
+
             if len(X) < 100:
                 return {"error": f"Insufficient data ({len(X)} rows)"}
 
             class_counts = {
-                CLASSES[int(c)]: int(cnt)
+                _classes[int(c)]: int(cnt)
                 for c, cnt in zip(*np.unique(y, return_counts=True))
+                if int(c) < len(_classes)
             }
-            logger.info("RegimeClassifier: %d samples, classes=%s, device=%s",
-                        len(y), class_counts, DEVICE)
+            logger.info("RegimeClassifier[mode=%s]: %d samples, classes=%s, device=%s",
+                        self._mode, len(y), class_counts, DEVICE)
 
-            # Sanity check: all 4 classes must be present with at least 1% of samples.
-            # If a class is missing the model will never predict it, and val accuracy
-            # will reflect label noise rather than model quality.
-            min_class_pct = min(class_counts.get(c, 0) for c in CLASSES) / max(len(y), 1)
-            if len(class_counts) < N_CLASSES:
-                missing = [c for c in CLASSES if c not in class_counts]
+            # Sanity check: all expected classes must be present with at least 1% of samples.
+            if len(class_counts) < _n_cls:
+                missing = [c for c in _classes if c not in class_counts]
                 logger.error(
-                    "RegimeClassifier: MISSING CLASSES %s — label generation is broken. "
-                    "All 4 classes must be present. Check GMM thresholds and create_labels().",
-                    missing
+                    "RegimeClassifier[mode=%s]: MISSING CLASSES %s — label generation is broken. "
+                    "All %d classes must be present. Check create_rule_labels().",
+                    self._mode, missing, _n_cls
                 )
                 return {"error": f"Missing classes: {missing}"}
+            min_class_pct = min(class_counts.get(c, 0) for c in _classes) / max(len(y), 1)
             if min_class_pct < 0.01:
                 rare = {c: v for c, v in class_counts.items() if v / len(y) < 0.01}
                 logger.warning(
-                    "RegimeClassifier: classes with <1%% of samples: %s — "
-                    "model may collapse to majority class", rare
+                    "RegimeClassifier[mode=%s]: classes with <1%% of samples: %s — "
+                    "model may collapse to majority class", self._mode, rare
                 )
 
             # ── Temporal split ────────────────────────────────────────────────
@@ -865,26 +948,26 @@ class RegimeClassifier(BaseModel):
             # ── Build/warm-start model ────────────────────────────────────────
             n_feat = X.shape[1]
             _feature_mismatch = (self._model is not None and self._n_features != n_feat)
-            # Also force cold start if loaded model has wrong number of output classes.
-            # This fires when old 4-class pkl is loaded but labels now include class 4.
-            _loaded_n_cls = getattr(self, "_n_classes", N_CLASSES)
-            _class_mismatch = (self._model is not None and _loaded_n_cls != N_CLASSES)
+            # Force cold start if loaded model has wrong number of output classes.
+            # This fires when old pkl is loaded but mode changed (e.g. 5-class → 3-class HTF).
+            _loaded_n_cls = getattr(self, "_n_classes", _n_cls)
+            _class_mismatch = (self._model is not None and _loaded_n_cls != _n_cls)
             if _feature_mismatch:
-                logger.warning("RegimeClassifier: feature count changed %d→%d, resetting",
-                               self._n_features, n_feat)
+                logger.warning("RegimeClassifier[mode=%s]: feature count changed %d→%d, resetting",
+                               self._mode, self._n_features, n_feat)
             if _class_mismatch:
-                logger.warning("RegimeClassifier: class count changed %d→%d, resetting",
-                               _loaded_n_cls, N_CLASSES)
+                logger.warning("RegimeClassifier[mode=%s]: class count changed %d→%d, resetting",
+                               self._mode, _loaded_n_cls, _n_cls)
             _warm_start = (self._model is not None and not _feature_mismatch and not _class_mismatch)
             if not _warm_start:
                 # Cold start: fresh random init
-                self._model      = _build_mlp(n_feat, N_CLASSES).to(DEVICE)
+                self._model      = _build_mlp(n_feat, _n_cls).to(DEVICE)
                 self._n_features = n_feat
-                self._n_classes  = N_CLASSES
-                logger.info("RegimeClassifier: cold start (no existing weights)")
+                self._n_classes  = _n_cls
+                logger.info("RegimeClassifier[mode=%s]: cold start (no existing weights)", self._mode)
             else:
                 # Warm start: continue from loaded weights — preserves learned structure
-                logger.info("RegimeClassifier: warm start from existing weights")
+                logger.info("RegimeClassifier[mode=%s]: warm start from existing weights", self._mode)
             if DEVICE.type == "cuda" and torch.cuda.device_count() > 1:
                 if not isinstance(self._model, torch.nn.DataParallel):
                     self._model = torch.nn.DataParallel(self._model)
@@ -892,9 +975,9 @@ class RegimeClassifier(BaseModel):
                             torch.cuda.device_count())
 
             # ── Class weights (handle imbalance) ─────────────────────────────
-            counts   = np.bincount(y_tr, minlength=N_CLASSES).astype(np.float32)
+            counts   = np.bincount(y_tr, minlength=_n_cls).astype(np.float32)
             counts   = np.where(counts == 0, 1.0, counts)
-            class_w  = torch.tensor(counts.sum() / (N_CLASSES * counts),
+            class_w  = torch.tensor(counts.sum() / (_n_cls * counts),
                                     dtype=torch.float32).to(DEVICE)
 
             # ── GPU-resident tensors ──────────────────────────────────────────
@@ -1040,8 +1123,8 @@ class RegimeClassifier(BaseModel):
                             all_va_true.extend(yb.cpu().numpy())
                     va_p = np.array(all_va_preds)
                     va_t = np.array(all_va_true)
-                    per_class = {CLASSES[c]: round(float((va_p[va_t == c] == c).mean()), 3)
-                                 if (va_t == c).sum() > 0 else 0.0 for c in range(N_CLASSES)}
+                    per_class = {_classes[c]: round(float((va_p[va_t == c] == c).mean()), 3)
+                                 if (va_t == c).sum() > 0 else 0.0 for c in range(_n_cls)}
                     logger.info("Regime epoch %2d/50 — tr=%.4f va=%.4f acc=%.3f per_class=%s",
                                 epoch + 1, tr_loss, va_loss, val_acc, per_class)
                 else:
@@ -1138,11 +1221,12 @@ class RegimeClassifier(BaseModel):
             payload = {
                 "state_dict": {k: v.cpu() for k, v in m.state_dict().items()},
                 "n_features": self._n_features,
-                "n_classes":  N_CLASSES,
+                "n_classes":  self._n_output_classes,
+                "mode":       self._mode,
             }
             with open(path, "wb") as f:
                 pickle.dump(payload, f)
-            logger.info("RegimeClassifier saved to %s", path)
+            logger.info("RegimeClassifier[mode=%s] saved to %s", self._mode, path)
         except Exception as exc:
             logger.error("RegimeClassifier.save failed: %s", exc)
 
@@ -1153,8 +1237,26 @@ class RegimeClassifier(BaseModel):
                 payload = pickle.load(f)
 
             n_feat     = payload["n_features"]
-            n_cls      = payload.get("n_classes", N_CLASSES)
+            n_cls      = payload.get("n_classes", self._n_output_classes)
+            saved_mode = payload.get("mode", self._mode)
             state_dict = payload["state_dict"]
+
+            # Detect n_classes mismatch (e.g. old 5-class pkl vs new 3/4-class mode)
+            if n_cls != self._n_output_classes:
+                logger.warning(
+                    "RegimeClassifier.load: n_classes mismatch saved=%d expected=%d (mode=%s) "
+                    "— will cold-start on first training call",
+                    n_cls, self._n_output_classes, self._mode,
+                )
+                # Load the model with saved dims so it doesn't crash, but mark stale
+                # The _fit() mismatch detection will cold-start it on next train call
+            else:
+                if saved_mode != self._mode:
+                    logger.warning(
+                        "RegimeClassifier.load: mode mismatch saved=%s current=%s "
+                        "— predictions may be incorrect until retrained",
+                        saved_mode, self._mode,
+                    )
 
             m = _build_mlp(n_feat, n_cls)
             m.load_state_dict(state_dict)
@@ -1166,10 +1268,10 @@ class RegimeClassifier(BaseModel):
 
             self._model      = m
             self._n_features = n_feat
-            self._n_classes  = n_cls
+            self._n_classes  = n_cls   # store loaded value for mismatch detection in _fit
             self._loaded     = True
-            logger.info("RegimeClassifier loaded from %s (device=%s, features=%d)",
-                        path, DEVICE, n_feat)
+            logger.info("RegimeClassifier[mode=%s] loaded from %s (device=%s, features=%d, n_classes=%d)",
+                        self._mode, path, DEVICE, n_feat, n_cls)
         except Exception as exc:
             logger.error("RegimeClassifier.load failed: %s", exc)
             raise

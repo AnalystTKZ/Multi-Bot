@@ -678,12 +678,13 @@ def _precompute_ml_cache(
         return {}
 
     gru_model    = ml_models.get("gru_lstm")
-    regime_4h    = ml_models.get("regime_4h") or ml_models.get("regime")
-    regime_1h    = ml_models.get("regime_1h")
+    regime_4h    = ml_models.get("regime_htf") or ml_models.get("regime_4h") or ml_models.get("regime")
+    regime_1h    = ml_models.get("regime_ltf") or ml_models.get("regime_1h")
     qs_model     = ml_models.get("quality")
 
     if not (gru_model or regime_4h or regime_1h):
         return {}
+
 
     try:
         import torch
@@ -696,7 +697,14 @@ def _precompute_ml_cache(
         # ── Helper: batch regime inference using predict_batch ────────────────
         def _batch_regime(rc_model, df_src, htf_src, step=None):
             """Run predict_batch on df_src, return (filled_ids, filled_conf, regime_preds_dict)."""
-            _classes = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]
+            # Use mode-aware class list from the model instance
+            _mode = getattr(rc_model, "_mode", "ltf_behaviour")
+            if _mode == "htf_bias":
+                _classes = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]
+                _default_id = 2  # BIAS_NEUTRAL
+            else:
+                _classes = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]
+                _default_id = 1  # RANGING
             _n = len(df_src)
             _step = step or max(1, _n // 20_000)
             try:
@@ -711,7 +719,7 @@ def _precompute_ml_cache(
                 del X
                 arr = np.full(_n, -1, dtype=np.int8)
                 arr[row_idx] = ids.astype(np.int8)
-                filled = pd.Series(arr.astype(float)).replace(-1, np.nan).ffill().fillna(2).astype(int).values
+                filled = pd.Series(arr.astype(float)).replace(-1, np.nan).ffill().fillna(_default_id).astype(int).values
                 c_arr = np.full(_n, np.nan, dtype=np.float32)
                 c_arr[row_idx] = conf
                 filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
@@ -721,34 +729,35 @@ def _precompute_ml_cache(
                 logger.error("ML cache: regime batch failed: %s", _e)
                 return None, None, {}
 
-        # ── 4H regime (bias) — build feature matrix on 4H df if available ────
-        # For 4H bias: use the 4H df from htf dict for clean structural resolution.
+        # ── HTF regime (bias) — build feature matrix on 4H df if available ────
+        # For HTF bias: use the 4H df from htf dict for clean structural resolution.
         # Falls back to 15M df with ffill if 4H not separately loaded.
         regime_preds: dict[int, str] = {}
-        _regime_4h_series = None
-        _regime_4h_conf   = None
-        _regime_1h_series = None
-        _regime_1h_conf   = None
+        _regime_htf_series = None
+        _regime_htf_conf   = None
+        _regime_ltf_series = None
+        _regime_ltf_conf   = None
 
         if regime_4h and regime_4h.is_trained and regime_4h._model is not None:
             df_4h_src = htf.get("4H") if htf.get("4H") is not None else htf.get("H4")
             if df_4h_src is not None and len(df_4h_src) >= 50:
                 _r4h, _c4h, _p4h = _batch_regime(regime_4h, df_4h_src, htf)
                 if _r4h is not None:
-                    # Forward-fill 4H labels to 15M resolution
-                    _regime_4h_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
-                    _regime_4h_conf   = _c4h.reindex(df.index, method="ffill").fillna(0.25)
-                    # Map bar indices to regime names (use 15M-aligned)
+                    # Forward-fill HTF labels to 15M resolution
+                    _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
+                    _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
+                    # Map bar indices to regime names (use 15M-aligned, HTF 3-class)
+                    _htf_cls_arr = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
                     regime_preds = {i: str(v) for i, v in enumerate(
-                        np.array(["TRENDING_UP","TRENDING_DOWN","RANGING","VOLATILE","CONSOLIDATION"])[_regime_4h_series.values]
+                        _htf_cls_arr[np.clip(_regime_htf_series.values, 0, len(_htf_cls_arr) - 1)]
                     )}
-                    logger.info("ML cache: 4H regime batch done for %s (%d 4H bars → %d 15M bars)",
+                    logger.info("ML cache: HTF regime batch done for %s (%d 4H bars → %d 15M bars)",
                                 symbol, len(df_4h_src), n)
             else:
                 # Fallback: run on 15M df (less clean but usable)
-                _regime_4h_series, _regime_4h_conf, regime_preds = _batch_regime(
+                _regime_htf_series, _regime_htf_conf, regime_preds = _batch_regime(
                     regime_4h, df, htf)
-                logger.info("ML cache: 4H regime on 15M fallback for %s", symbol)
+                logger.info("ML cache: HTF regime on 15M fallback for %s", symbol)
             gc.collect()
 
         if regime_1h and regime_1h.is_trained and regime_1h._model is not None:
@@ -756,12 +765,12 @@ def _precompute_ml_cache(
             if df_1h_src is not None and len(df_1h_src) >= 50:
                 _r1h, _c1h, _ = _batch_regime(regime_1h, df_1h_src, htf)
                 if _r1h is not None:
-                    _regime_1h_series = _r1h.reindex(df.index, method="ffill").fillna(2).astype(int)
-                    _regime_1h_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
-                    logger.info("ML cache: 1H regime batch done for %s (%d 1H bars → %d 15M bars)",
+                    _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
+                    _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
+                    logger.info("ML cache: LTF regime batch done for %s (%d 1H bars → %d 15M bars)",
                                 symbol, len(df_1h_src), n)
             else:
-                _regime_1h_series, _regime_1h_conf, _ = _batch_regime(regime_1h, df, htf)
+                _regime_ltf_series, _regime_ltf_conf, _ = _batch_regime(regime_1h, df, htf)
             gc.collect()
 
         # Regime distribution diagnostic
@@ -775,10 +784,10 @@ def _precompute_ml_cache(
         try:
             feat_df = fe._build_sequence_df(
                 df, htf, symbol=symbol,
-                regime_4h_series=_regime_4h_series,
-                regime_4h_conf_series=_regime_4h_conf,
-                regime_1h_series=_regime_1h_series,
-                regime_1h_conf_series=_regime_1h_conf,
+                regime_4h_series=_regime_htf_series,
+                regime_4h_conf_series=_regime_htf_conf,
+                regime_1h_series=_regime_ltf_series,
+                regime_1h_conf_series=_regime_ltf_conf,
             )
             seq_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
             seq_arr = np.nan_to_num(seq_arr, nan=0.0, posinf=0.0, neginf=0.0)
@@ -1458,23 +1467,25 @@ def main():
 
         try:
             from models.regime_classifier import RegimeClassifier
-            # Load 4H bias classifier (regime_4h.pkl)
-            regime_4h = RegimeClassifier(timeframe="4H")
-            if _model_ready(regime_4h):
-                ml_models["regime_4h"] = regime_4h
-                logger.info("  [OK] RegimeClassifier[4H] loaded")
+            # Load HTF bias classifier (regime_htf.pkl) — 3-class BIAS_UP/DOWN/NEUTRAL
+            regime_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
+            if _model_ready(regime_htf):
+                ml_models["regime_htf"] = regime_htf
+                ml_models["regime_4h"] = regime_htf   # legacy alias
+                logger.info("  [OK] RegimeClassifier[HTF bias 3-class] loaded")
             else:
-                logger.warning("  [SKIP] RegimeClassifier[4H] unavailable (weights missing)")
-            # Load 1H structure classifier (regime_1h.pkl)
-            regime_1h = RegimeClassifier(timeframe="1H")
-            if _model_ready(regime_1h):
-                ml_models["regime_1h"] = regime_1h
-                logger.info("  [OK] RegimeClassifier[1H] loaded")
+                logger.warning("  [SKIP] RegimeClassifier[HTF] unavailable (weights missing)")
+            # Load LTF behaviour classifier (regime_ltf.pkl) — 4-class TRENDING/RANGING/CONSOLIDATING/VOLATILE
+            regime_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
+            if _model_ready(regime_ltf):
+                ml_models["regime_ltf"] = regime_ltf
+                ml_models["regime_1h"] = regime_ltf   # legacy alias
+                logger.info("  [OK] RegimeClassifier[LTF behaviour 4-class] loaded")
             else:
-                logger.warning("  [SKIP] RegimeClassifier[1H] unavailable (weights missing)")
-            # Legacy key for backwards compat (points to 4H)
-            if "regime_4h" in ml_models:
-                ml_models["regime"] = ml_models["regime_4h"]
+                logger.warning("  [SKIP] RegimeClassifier[LTF] unavailable (weights missing)")
+            # Legacy key for backwards compat (points to HTF)
+            if "regime_htf" in ml_models:
+                ml_models["regime"] = ml_models["regime_htf"]
         except Exception as exc:
             logger.warning("  [SKIP] RegimeClassifier load failed: %s", exc)
 

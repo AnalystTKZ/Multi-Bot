@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """
-Step 5: Strict time-based train/val/test split (70/15/15). No shuffling.
+Step 5: Time-based train/val/test split anchored to calendar years.
+
+Split logic (calendar-based):
+  test  = last 2 years of data  (blind — never touched until Round 2 backtest)
+  val   = 2 years before test   (Round 1 backtest window)
+  train = everything before val
+
+Requires at least 5 years of data (1yr train + 2yr val + 2yr test minimum).
+Exits with an error if the data is too short — no fallbacks.
+
 Input:  processed_data/feature_engineered.parquet
 Output: ml_training/datasets/train.parquet, validation.parquet, test.parquet
+        ml_training/datasets/split_summary.json
 """
 from __future__ import annotations
 import json
@@ -11,6 +21,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("step5_split")
@@ -20,9 +31,9 @@ OUTPUT_DIR = BASE / "processed_data"
 ML_DIR = BASE / "ml_training" / "datasets"
 ML_DIR.mkdir(parents=True, exist_ok=True)
 
-TRAIN_RATIO = 0.70
-VAL_RATIO   = 0.15
-TEST_RATIO  = 0.15
+TEST_YEARS = 2
+VAL_YEARS  = 2
+MIN_TRAIN_YEARS = 1
 
 
 def main():
@@ -36,88 +47,126 @@ def main():
     df = df.sort_index()
     n = len(df)
     logger.info("Loaded %d rows, %d features", n, len(df.columns))
-    if n < 3:
-        logger.error("Need at least 3 rows to create train/validation/test splits, got %d", n)
-        sys.exit(1)
 
-    # Strict time-based cut points
-    train_end_idx = int(n * TRAIN_RATIO)
-    val_end_idx   = int(n * (TRAIN_RATIO + VAL_RATIO))
-    if train_end_idx <= 0 or val_end_idx <= train_end_idx or val_end_idx >= n:
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, utc=True)
+
+    data_start  = df.index[0]
+    data_end    = df.index[-1]
+    total_years = (data_end - data_start).days / 365.25
+    required    = MIN_TRAIN_YEARS + VAL_YEARS + TEST_YEARS
+
+    logger.info("Data span: %s → %s  (%.1f years)", data_start.date(), data_end.date(), total_years)
+
+    if total_years < required:
         logger.error(
-            "Invalid split boundaries for %d rows: train_end=%d val_end=%d",
-            n, train_end_idx, val_end_idx,
+            "Insufficient data: %.1f years available, need at least %d "
+            "(train=%dyr + val=%dyr + test=%dyr). "
+            "Add more historical data and re-run step0.",
+            total_years, required, MIN_TRAIN_YEARS, VAL_YEARS, TEST_YEARS,
         )
         sys.exit(1)
 
-    train_start, train_end = 0, train_end_idx
-    val_start, val_end = train_end_idx, val_end_idx
-    test_start, test_end = val_end_idx, n
+    # Anchor cutoffs to the data end
+    test_start_dt = data_end - relativedelta(years=TEST_YEARS)
+    val_start_dt  = test_start_dt - relativedelta(years=VAL_YEARS)
+
+    # searchsorted: never include the boundary bar in the wrong split
+    test_start_pos = df.index.searchsorted(test_start_dt, side="left")
+    val_start_pos  = df.index.searchsorted(val_start_dt,  side="left")
+
+    if val_start_pos == 0:
+        logger.error(
+            "val_start_dt %s is at or before the first bar %s — "
+            "calendar cutoff leaves no training data.",
+            val_start_dt.date(), data_start.date(),
+        )
+        sys.exit(1)
+
+    if test_start_pos <= val_start_pos:
+        logger.error(
+            "test_start_pos (%d) <= val_start_pos (%d) — "
+            "val window is empty. Check TEST_YEARS/VAL_YEARS constants.",
+            test_start_pos, val_start_pos,
+        )
+        sys.exit(1)
 
     split_meta = {
         "train": {
-            "rows": train_end - train_start,
-            "start": df.index[train_start],
-            "end": df.index[train_end - 1],
-            "slice": slice(train_start, train_end),
-            "path": ML_DIR / "train.parquet",
+            "rows":  val_start_pos,
+            "start": df.index[0],
+            "end":   df.index[val_start_pos - 1],
+            "slice": slice(0, val_start_pos),
+            "path":  ML_DIR / "train.parquet",
         },
         "validation": {
-            "rows": val_end - val_start,
-            "start": df.index[val_start],
-            "end": df.index[val_end - 1],
-            "slice": slice(val_start, val_end),
-            "path": ML_DIR / "validation.parquet",
+            "rows":  test_start_pos - val_start_pos,
+            "start": df.index[val_start_pos],
+            "end":   df.index[test_start_pos - 1],
+            "slice": slice(val_start_pos, test_start_pos),
+            "path":  ML_DIR / "validation.parquet",
         },
         "test": {
-            "rows": test_end - test_start,
-            "start": df.index[test_start],
-            "end": df.index[test_end - 1],
-            "slice": slice(test_start, test_end),
-            "path": ML_DIR / "test.parquet",
+            "rows":  n - test_start_pos,
+            "start": df.index[test_start_pos],
+            "end":   df.index[-1],
+            "slice": slice(test_start_pos, n),
+            "path":  ML_DIR / "test.parquet",
         },
     }
 
-    logger.info("Train: %d bars (%s → %s)", split_meta["train"]["rows"], split_meta["train"]["start"].date(), split_meta["train"]["end"].date())
-    logger.info("Val:   %d bars (%s → %s)", split_meta["validation"]["rows"], split_meta["validation"]["start"].date(), split_meta["validation"]["end"].date())
-    logger.info("Test:  %d bars (%s → %s)", split_meta["test"]["rows"], split_meta["test"]["start"].date(), split_meta["test"]["end"].date())
+    for name, meta in split_meta.items():
+        logger.info(
+            "%-12s %7d bars  %s → %s",
+            name.capitalize() + ":",
+            meta["rows"],
+            meta["start"].date(),
+            meta["end"].date(),
+        )
 
     # Verify no overlap
     assert split_meta["train"]["end"] < split_meta["validation"]["start"], "Train/val overlap!"
-    assert split_meta["validation"]["end"] < split_meta["test"]["start"], "Val/test overlap!"
+    assert split_meta["validation"]["end"] < split_meta["test"]["start"],   "Val/test overlap!"
     logger.info("No leakage confirmed: train < val < test timestamps")
 
     rows = {}
     date_ranges = {}
+    import pyarrow as pa
+    import pyarrow.parquet as pq
     for split_name, meta in split_meta.items():
-        split_df = df.iloc[meta["slice"]]
+        split_df   = df.iloc[meta["slice"]]
         split_path = meta["path"]
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        _tbl = pa.Table.from_pandas(split_df, nthreads=1)
-        pq.write_table(_tbl, split_path, compression="snappy")
-        del _tbl
+        tbl = pa.Table.from_pandas(split_df, nthreads=1)
+        pq.write_table(tbl, split_path, compression="snappy")
+        del tbl
         rows[split_name] = len(split_df)
         date_ranges[split_name] = {
             "start": str(meta["start"]),
-            "end": str(meta["end"]),
+            "end":   str(meta["end"]),
         }
 
     summary = {
-        "split_ratios": {"train": TRAIN_RATIO, "validation": VAL_RATIO, "test": TEST_RATIO},
-        "rows": rows,
+        "split_method": "calendar",
+        "test_years":   TEST_YEARS,
+        "val_years":    VAL_YEARS,
+        "split_ratios": {
+            "train":      round(rows["train"] / n, 4),
+            "validation": round(rows["validation"] / n, 4),
+            "test":       round(rows["test"] / n, 4),
+        },
+        "rows":        rows,
         "date_ranges": date_ranges,
-        "features": len(df.columns),
+        "features":    len(df.columns),
         "leakage_check": "PASS",
     }
     with open(ML_DIR / "split_summary.json", "w") as f:
         json.dump(summary, f, indent=2, default=str)
 
-    print(f"\n=== SPLIT COMPLETE (no shuffling, time-based) ===")
+    print(f"\n=== SPLIT COMPLETE (CALENDAR, no shuffling) ===")
     print(f"  Train:      {rows['train']:>7,} bars  {date_ranges['train']['start'][:10]} → {date_ranges['train']['end'][:10]}")
-    print(f"  Validation: {rows['validation']:>7,} bars  {date_ranges['validation']['start'][:10]} → {date_ranges['validation']['end'][:10]}")
-    print(f"  Test:       {rows['test']:>7,} bars  {date_ranges['test']['start'][:10]} → {date_ranges['test']['end'][:10]}")
-    print(f"  Features: {len(df.columns)}")
+    print(f"  Validation: {rows['validation']:>7,} bars  {date_ranges['validation']['start'][:10]} → {date_ranges['validation']['end'][:10]}  ← Round 1 backtest")
+    print(f"  Test:       {rows['test']:>7,} bars  {date_ranges['test']['start'][:10]} → {date_ranges['test']['end'][:10]}  ← Blind / Round 2 backtest")
+    print(f"  Features:   {len(df.columns)}")
     print(f"  Leakage check: PASS")
     return rows
 

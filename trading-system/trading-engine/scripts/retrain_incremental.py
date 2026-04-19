@@ -79,10 +79,13 @@ MAJOR_SYMBOLS = [
 ALL_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D", "1W", "1MN"]
 # GRU uses short-bar timeframes for sequence patterns
 GRU_TIMEFRAMES = ["5M", "15M", "1H", "4H"]
-# Dual-regime cascade: 4H = bias layer, 1H = structure layer.
-# Each gets its own classifier trained on group-aware GMM labels from that TF.
-REGIME_TF_4H = ["4H"]          # bias classifier source timeframe
-REGIME_TF_1H = ["1H"]          # structure classifier source timeframe
+# Hierarchical regime cascade:
+# HTF (4H): 3-class bias (BIAS_UP/DOWN/NEUTRAL) — trained with mode="htf_bias"
+# LTF (1H): 4-class behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE) — trained with mode="ltf_behaviour"
+REGIME_HTF_TF = ["4H"]         # HTF bias classifier source timeframe (was REGIME_TF_4H)
+REGIME_LTF_TF = ["1H"]         # LTF behaviour classifier source timeframe (was REGIME_TF_1H)
+REGIME_TF_4H = REGIME_HTF_TF   # backward compat alias
+REGIME_TF_1H = REGIME_LTF_TF   # backward compat alias
 REGIME_TIMEFRAMES = ["1H", "4H"]  # kept for backwards compat (covers both)
 # Root of the pipeline processed data
 _PROCESSED_DIR = str(_ENV["processed"] / "histdata")
@@ -124,6 +127,16 @@ def _gru_artifact_exists() -> bool:
 
 def _regime_artifact_exists() -> bool:
     return _path_has_artifact(os.path.join(WEIGHTS_DIR, "regime_classifier.pkl"))
+
+
+def _htf_regime_artifact_exists() -> bool:
+    """Check if the new HTF bias regime weights exist (regime_htf.pkl)."""
+    return _path_has_artifact(os.path.join(WEIGHTS_DIR, "regime_htf.pkl"))
+
+
+def _ltf_regime_artifact_exists() -> bool:
+    """Check if the new LTF behaviour regime weights exist (regime_ltf.pkl)."""
+    return _path_has_artifact(os.path.join(WEIGHTS_DIR, "regime_ltf.pkl"))
 
 
 def _quality_artifact_exists() -> bool:
@@ -414,17 +427,19 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("5M", "1H", "4H", "1D")}
 
         # Rule-based regime labels (consistent with what the regime classifier trains on)
-        _sym_regime_4h: "pd.Series | None" = None
-        _sym_regime_1h: "pd.Series | None" = None
+        # HTF: 3-class bias labels; LTF: 4-class behaviour labels
+        _sym_regime_htf: "pd.Series | None" = None
+        _sym_regime_ltf: "pd.Series | None" = None
         try:
             from models.regime_classifier import RegimeClassifier as _RC_sym
             _df4h_sym = _load_ohlcv(sym, "4H", split="train")
             if _df4h_sym is not None and len(_df4h_sym) > 50:
-                _sym_regime_4h = _RC_sym.create_rule_labels(_df4h_sym, timeframe="4H")
+                _sym_regime_htf = _RC_sym.create_rule_labels(
+                    _df4h_sym, timeframe="4H", mode="htf_bias")
             _df1h_sym = _load_ohlcv(sym, "1H", split="train")
-            if _df1h_sym is not None and len(_df1h_sym) > 50 and _sym_regime_4h is not None:
-                _sym_regime_1h = _sym_regime_4h.reindex(
-                    _df1h_sym.index, method="ffill").fillna(2).astype(int)
+            if _df1h_sym is not None and len(_df1h_sym) > 50:
+                _sym_regime_ltf = _RC_sym.create_rule_labels(
+                    _df1h_sym, timeframe="1H", mode="ltf_behaviour")
         except Exception as _e:
             logger.debug("GRU multi: rule regime labels for %s failed (%s)", sym, _e)
 
@@ -466,9 +481,13 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
                 "df_htf": htf_train,
                 "symbol": sym,
                 "timeframe": tf,
-                "regime_series":    _ffill_regime(_sym_regime_4h, end_ts, df_train.index),
-                "regime_4h_series": _ffill_regime(_sym_regime_4h, end_ts, df_train.index),
-                "regime_1h_series": _ffill_regime(_sym_regime_1h, end_ts, df_train.index),
+                # Canonical new names
+                "regime_htf_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index),
+                "regime_ltf_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index),
+                # Legacy compat aliases (some callers may check these keys)
+                "regime_series":    _ffill_regime(_sym_regime_htf, end_ts, df_train.index),
+                "regime_4h_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index),
+                "regime_1h_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index),
             })
             samples_total += len(df_train)
 
@@ -627,29 +646,30 @@ def retrain_gru(dry_run: bool = False) -> dict:
 
 
 def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
-                           group_gmms: dict, dry_run: bool = False) -> tuple:
+                           group_gmms: dict, dry_run: bool = False,
+                           mode: str = "ltf_behaviour") -> tuple:
     """
     Build (X_all, y_all, sw_all) for one regime classifier.
 
     source_tf: the TF we build feature matrices on (e.g. "4H" or "1H").
-    label_tf:  source TF for rule labels. For 1H classifier, labels are sourced
-               from the 4H df and forward-filled.
+    label_tf:  source TF for rule labels.
+    mode: "htf_bias" → 3-class labels for HTF classifier.
+          "ltf_behaviour" → 4-class labels for LTF classifier.
     Returns (X, y, sample_weight, n_samples).
     sample_weight: float32 array (N,) — per-bar confidence from create_rule_labels.
-      Passed into RegimeClassifier.train_on_arrays so the MLP trains with soft targets
-      on ambiguous bars and hard targets on textbook regime bars.
     """
     from models.regime_classifier import RegimeClassifier as _RC
     import gc as _gc
     import numpy as _np
 
-    _tmp_model = _RC()
+    _tmp_model = _RC(mode=mode)
     X_parts:  list = []
     y_parts:  list = []
     sw_parts: list = []
     samples = 0
+    _default_label = 2 if mode == "htf_bias" else 1  # BIAS_NEUTRAL or RANGING
 
-    # Cache label_tf dfs per symbol (used for 1H → ffill from 4H)
+    # Cache label_tf dfs per symbol
     _label_cache: dict = {}
     for sym in symbols:
         df_l = _load_ohlcv(sym, label_tf, split="train")
@@ -665,11 +685,11 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
 
         df = _load_ohlcv(sym, source_tf, split="train")
         if df is None or len(df) <= 200:
-            logger.warning("Regime[%s]: skipping %s (insufficient data)", source_tf, sym)
+            logger.warning("Regime[%s mode=%s]: skipping %s (insufficient data)", source_tf, mode, sym)
             continue
 
         if dry_run:
-            logger.info("DRY RUN: Regime[%s] %s — %d bars", source_tf, sym, len(df))
+            logger.info("DRY RUN: Regime[%s mode=%s] %s — %d bars", source_tf, mode, sym, len(df))
             samples += len(df)
             del df
             continue
@@ -687,29 +707,17 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         try:
             X_sym = _RC._build_feature_matrix(df, htf_train, sym)
 
-            # Rule-based labels with confidence — consistent across 4H and 1H paths.
-            # 4H: label directly on source df.
-            # 1H: source labels+confidence from 4H df, ffill to 1H bars.
-            #     Confidence is also ffill'd so 1H bars inherit the 4H bar's certainty.
-            if source_tf == "4H":
-                labels, conf = _RC.create_rule_labels(df, timeframe="4H",
+            # Mode-aware rule-based labels with confidence.
+            # HTF: label on source_tf df with htf_bias mode.
+            # LTF: label on source_tf df with ltf_behaviour mode.
+            if mode == "htf_bias":
+                labels, conf = _RC.create_rule_labels(df, timeframe=source_tf, mode="htf_bias",
                                                       return_confidence=True)
-            elif source_tf == "1H":
-                if df_label_sym is not None:
-                    df_l_trimmed = df_label_sym[df_label_sym.index <= end_ts]
-                    if len(df_l_trimmed) > 50:
-                        labels_src, conf_src = _RC.create_rule_labels(
-                            df_l_trimmed, timeframe="4H", return_confidence=True)
-                        labels = labels_src.reindex(df.index, method="ffill").fillna(2).astype(int)
-                        conf   = conf_src.reindex(df.index, method="ffill").fillna(0.5)
-                    else:
-                        labels, conf = _RC.create_rule_labels(df, timeframe="1H",
-                                                              return_confidence=True)
-                else:
-                    labels, conf = _RC.create_rule_labels(df, timeframe="1H",
-                                                          return_confidence=True)
+            elif mode == "ltf_behaviour":
+                labels, conf = _RC.create_rule_labels(df, timeframe=source_tf, mode="ltf_behaviour",
+                                                      return_confidence=True)
             else:
-                # Fallback GMM for any other TF — uniform confidence
+                # Fallback GMM for any other mode — uniform confidence
                 if gmm_grp is not None:
                     _lbl_nbar = 50 if label_tf == "4H" else 24
                     labels = _tmp_model.create_labels_with_gmm(df, gmm_grp, scaler_grp, cl_grp,
@@ -726,9 +734,9 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
             y_parts.append(labels.iloc[idx].values.astype(_np.int64))
             sw_parts.append(conf.iloc[idx].values.astype(_np.float32))
             samples += len(idx)
-            logger.info("Regime[%s]: collected %s — %d samples (group=%s)", source_tf, sym, len(idx), grp)
+            logger.info("Regime[%s mode=%s]: collected %s — %d samples (group=%s)", source_tf, mode, sym, len(idx), grp)
         except Exception as exc:
-            logger.error("Regime[%s]: feature build failed %s: %s", source_tf, sym, exc)
+            logger.error("Regime[%s mode=%s]: feature build failed %s: %s", source_tf, mode, sym, exc)
         finally:
             del df
             _gc.collect()
@@ -772,18 +780,18 @@ def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str) 
 
 def retrain_regime(dry_run: bool = False) -> dict:
     """
-    Train dual-regime cascade:
-      1. 4H classifier (regime_4h.pkl) — market bias layer.
-         Trained on 4H bars, GMM labels from same 4H data.
+    Train hierarchical regime cascade:
+      1. HTF classifier (regime_htf.pkl) — 3-class bias (BIAS_UP/DOWN/NEUTRAL).
+         mode="htf_bias", trained on 4H bars, labels by drift direction.
          GPU-parallel across both T4s via DataParallel.
-      2. 1H classifier (regime_1h.pkl) — intraday structure layer.
-         Trained on 1H bars, labels forward-filled from 4H GMM.
+      2. LTF classifier (regime_ltf.pkl) — 4-class behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE).
+         mode="ltf_behaviour", trained on 1H bars, direction-agnostic labels.
          Same DataParallel setup — both GPUs stay hot across both trains.
 
     Both classifiers share the same REGIME_FEATURES contract (same feature matrix),
     so the same _build_feature_matrix() call produces valid input for both.
     """
-    logger.info("=== RegimeClassifier retrain (dual-TF cascade: 4H bias + 1H structure) ===")
+    logger.info("=== RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===")
     from models.regime_classifier import RegimeClassifier as _RC
     import gc as _gc
 
@@ -792,69 +800,89 @@ def retrain_regime(dry_run: bool = False) -> dict:
     if not dry_run:
         _update_macro_correlations(symbols)
 
-    # Fit per-group GMMs on 4H data — shared by both classifiers.
-    logger.info("Regime: fitting per-group GMMs on 4H data (dollar / cross / gold)...")
+    # Fit per-group GMMs on 4H data for HTF bias — separate GMM for LTF on 1H data.
+    logger.info("Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...")
     group_dfs_4h: dict = {"dollar": [], "cross": [], "gold": []}
+    group_dfs_1h: dict = {"dollar": [], "cross": [], "gold": []}
     for sym in symbols:
         df_4h = _load_ohlcv(sym, "4H", split="train")
         if df_4h is not None and len(df_4h) > 200:
             group_dfs_4h[_group_for_symbol(sym)].append(df_4h)
+        df_1h = _load_ohlcv(sym, "1H", split="train")
+        if df_1h is not None and len(df_1h) > 200:
+            group_dfs_1h[_group_for_symbol(sym)].append(df_1h)
 
-    group_gmms: dict = {}
+    group_gmms_htf: dict = {}
     for grp, dfs in group_dfs_4h.items():
         if dfs:
-            gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="4H")
-            group_gmms[grp] = (gmm, scaler, cluster_labels)
-            logger.info("Regime: GMM '%s' fitted on %d 4H dfs (n_bar=50)", grp, len(dfs))
+            gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="4H", mode="htf_bias")
+            group_gmms_htf[grp] = (gmm, scaler, cluster_labels)
+            logger.info("Regime HTF GMM '%s' fitted on %d 4H dfs (3-class bias)", grp, len(dfs))
         else:
             logger.warning("Regime: no 4H data for group '%s'", grp)
-    del group_dfs_4h
+
+    group_gmms_ltf: dict = {}
+    for grp, dfs in group_dfs_1h.items():
+        if dfs:
+            gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="1H", mode="ltf_behaviour")
+            group_gmms_ltf[grp] = (gmm, scaler, cluster_labels)
+            logger.info("Regime LTF GMM '%s' fitted on %d 1H dfs (4-class behaviour)", grp, len(dfs))
+        else:
+            logger.warning("Regime LTF: no 1H data for group '%s'", grp)
+
+    # For backward compat, pass htf GMMs to _build_regime_dataset (which uses group_gmms)
+    group_gmms = group_gmms_htf
+    del group_dfs_4h, group_dfs_1h
     _gc.collect()
 
     results: dict = {}
     total_samples = 0
 
-    # ── 4H bias classifier ────────────────────────────────────────────────────
-    logger.info("Regime: training 4H bias classifier...")
+    # ── HTF bias classifier (3-class) ────────────────────────────────────────
+    logger.info("Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...")
     X_4h, y_4h, sw_4h, n_4h = _build_regime_dataset(
         symbols, source_tf="4H", label_tf="4H",
-        group_gmms=group_gmms, dry_run=dry_run,
+        group_gmms=group_gmms_htf, dry_run=dry_run, mode="htf_bias",
     )
     total_samples += n_4h
     if not dry_run and X_4h is not None:
-        _backup_weights(os.path.join(WEIGHTS_DIR, "regime_4h.pkl"))
-        model_4h = _RC(timeframe="4H")
-        res_4h = model_4h.train_on_arrays(X_4h, y_4h, sample_weight=sw_4h)
+        _backup_weights(os.path.join(WEIGHTS_DIR, "regime_htf.pkl"))
+        model_htf = _RC(timeframe="4H", mode="htf_bias")
+        res_4h = model_htf.train_on_arrays(X_4h, y_4h, sample_weight=sw_4h)
         del X_4h, y_4h, sw_4h; _gc.collect()
         if res_4h.get("error"):
-            logger.error("Regime 4H training failed: %s", res_4h["error"])
-            results["4H"] = res_4h
+            logger.error("Regime HTF training failed: %s", res_4h["error"])
+            results["HTF"] = res_4h
         else:
-            logger.info("Regime 4H complete: acc=%.3f, n=%d", res_4h.get("accuracy", 0), n_4h)
-            _regime_diagnostics(model_4h, group_gmms, symbols, "4H")
-            results["4H"] = res_4h
-            log_retrain("regime_classifier_4h", {**res_4h, "status": "complete"})
+            logger.info("Regime HTF complete: acc=%.3f, n=%d", res_4h.get("accuracy", 0), n_4h)
+            _regime_diagnostics(model_htf, group_gmms_htf, symbols, "4H")
+            results["HTF"] = res_4h
+            log_retrain("regime_classifier_htf", {**res_4h, "status": "complete"})
+        if not _htf_regime_artifact_exists():
+            logger.error("Regime HTF weights were not created at regime_htf.pkl")
 
-    # ── 1H structure classifier ────────────────────────────────────────────────
-    logger.info("Regime: training 1H structure classifier...")
+    # ── LTF behaviour classifier (4-class) ───────────────────────────────────
+    logger.info("Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...")
     X_1h, y_1h, sw_1h, n_1h = _build_regime_dataset(
-        symbols, source_tf="1H", label_tf="4H",  # labels sourced from 4H, ffill'd to 1H
-        group_gmms=group_gmms, dry_run=dry_run,
+        symbols, source_tf="1H", label_tf="1H",  # labels sourced from 1H directly (ltf_behaviour mode)
+        group_gmms=group_gmms_ltf, dry_run=dry_run, mode="ltf_behaviour",
     )
     total_samples += n_1h
     if not dry_run and X_1h is not None:
-        _backup_weights(os.path.join(WEIGHTS_DIR, "regime_1h.pkl"))
-        model_1h = _RC(timeframe="1H")
-        res_1h = model_1h.train_on_arrays(X_1h, y_1h, sample_weight=sw_1h)
+        _backup_weights(os.path.join(WEIGHTS_DIR, "regime_ltf.pkl"))
+        model_ltf = _RC(timeframe="1H", mode="ltf_behaviour")
+        res_1h = model_ltf.train_on_arrays(X_1h, y_1h, sample_weight=sw_1h)
         del X_1h, y_1h, sw_1h; _gc.collect()
         if res_1h.get("error"):
-            logger.error("Regime 1H training failed: %s", res_1h["error"])
-            results["1H"] = res_1h
+            logger.error("Regime LTF training failed: %s", res_1h["error"])
+            results["LTF"] = res_1h
         else:
-            logger.info("Regime 1H complete: acc=%.3f, n=%d", res_1h.get("accuracy", 0), n_1h)
-            _regime_diagnostics(model_1h, group_gmms, symbols, "1H")
-            results["1H"] = res_1h
-            log_retrain("regime_classifier_1h", {**res_1h, "status": "complete"})
+            logger.info("Regime LTF complete: acc=%.3f, n=%d", res_1h.get("accuracy", 0), n_1h)
+            _regime_diagnostics(model_ltf, group_gmms_ltf, symbols, "1H")
+            results["LTF"] = res_1h
+            log_retrain("regime_classifier_ltf", {**res_1h, "status": "complete"})
+        if not _ltf_regime_artifact_exists():
+            logger.error("Regime LTF weights were not created at regime_ltf.pkl")
 
     if dry_run:
         return {"dry_run": True, "samples": total_samples}  # n_4h + n_1h already accumulated

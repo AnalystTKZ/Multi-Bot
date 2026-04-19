@@ -2,11 +2,17 @@
 """
 Step 6: Backtest + Reinforced Training Loop
 
-Flow per round (3 rounds total):
-  1. Run backtest across all 5 traders × 11 symbols × all timeframes
-  2. Convert trade_log → JSONL journal entries (same format as live engine)
-  3. Retrain GRU, Regime, Quality, RL models on the journal
-  4. Log improvement metrics (win_rate, profit_factor, sharpe) per round
+Blind-backtest pipeline (3 rounds):
+  Round 1 — train window (data_start → val_end):   val set as the "seen" evaluation window
+  Round 2 — test window  (test_start → test_end):  fully blind OOS evaluation
+  Round 3 — last 3yr     (3yr_before_end → end):   post-incremental-retrain evaluation
+
+Control via BT_WINDOW env var:
+  BT_WINDOW=round1   — val period only   (default; protects test set)
+  BT_WINDOW=round2   — test period only  (blind backtest)
+  BT_WINDOW=round3   — last 3yr          (post-full-retrain evaluation)
+
+Date windows are derived from split_summary.json produced by step5_split.py.
 
 Data source: processed_data/histdata/{SYM}_{TF}.parquet (step0 outputs, full history).
 No CSV intermediaries. Run step0_resample.py first if histdata/ is empty.
@@ -60,46 +66,54 @@ def _build_env() -> dict:
     return env
 
 
-def _check_histdata() -> tuple[str, str]:
-    """
-    Return the backtest date range: start of histdata → end of val split.
-    Restricts to train+val only so the held-out test set is never touched,
-    and avoids running 17 years of ML inference when only 8 are needed.
-    """
-    parquets = sorted(HIST_DIR.glob("*_15M.parquet"))
-    if not parquets:
+def _load_split_summary() -> dict:
+    split_path = BASE / "ml_training" / "datasets" / "split_summary.json"
+    if not split_path.exists():
         logger.error(
-            "processed_data/histdata/ is empty — run pipeline/step0_resample.py first"
+            "split_summary.json not found at %s — run step5_split.py first", split_path
+        )
+        sys.exit(1)
+    return json.loads(split_path.read_text())
+
+
+def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
+    """
+    Return (bt_start, bt_end) for the requested backtest window.
+
+    round1 — val window: val_start → val_end   (test set protected)
+    round2 — test window: test_start → test_end (blind OOS)
+    round3 — last 3yr: (test_end - 3yr) → test_end (post-incremental-retrain eval)
+    """
+    if not HIST_DIR.exists() or not list(HIST_DIR.glob("*_15M.parquet")):
+        logger.error("processed_data/histdata/ is empty — run step0_resample.py first")
+        sys.exit(1)
+
+    summary = _load_split_summary()
+    dr = summary["date_ranges"]
+
+    val_start  = dr["validation"]["start"][:10]
+    val_end    = dr["validation"]["end"][:10]
+    test_start = dr["test"]["start"][:10]
+    test_end   = dr["test"]["end"][:10]
+
+    if bt_window == "round2":
+        bt_start, bt_end = test_start, test_end
+        logger.info("BT_WINDOW=round2 — BLIND backtest: %s → %s (test set)", bt_start, bt_end)
+    elif bt_window == "round3":
+        from dateutil.relativedelta import relativedelta
+        end_dt   = pd.Timestamp(test_end)
+        bt_start = (end_dt - relativedelta(years=3)).strftime("%Y-%m-%d")
+        bt_end   = test_end
+        logger.info("BT_WINDOW=round3 — post-retrain eval: %s → %s (last 3yr)", bt_start, bt_end)
+    elif bt_window == "round1":
+        bt_start, bt_end = val_start, val_end
+        logger.info("BT_WINDOW=round1 — val-window backtest: %s → %s (test set protected)", bt_start, bt_end)
+    else:
+        logger.error(
+            "Unknown BT_WINDOW=%r — must be one of: round1, round2, round3", bt_window
         )
         sys.exit(1)
 
-    min_dates = []
-    for p in parquets:
-        try:
-            idx = pd.read_parquet(p, columns=[]).index
-            min_dates.append(idx.min())
-        except Exception:
-            pass
-
-    detected = min(min_dates).strftime("%Y-%m-%d") if min_dates else "2016-01-01"
-    # Floor at BT_START_FLOOR (default 2021-01-01 for reinforcement loop speed).
-    # Full history trains are done in step7a; the reinforcement loop only needs
-    # enough recent trades to retrain Quality + RL, so 3-4 years is sufficient.
-    bt_floor = os.getenv("BT_START_FLOOR", "2021-01-01")
-    bt_start = max(detected, bt_floor)
-
-    # Cap at val split end — keeps test set clean and halves runtime vs full history
-    split_path = BASE / "ml_training" / "datasets" / "split_summary.json"
-    bt_end = "2024-08-27"  # default: known val end
-    if split_path.exists():
-        try:
-            import json as _json
-            summary = _json.loads(split_path.read_text())
-            bt_end = summary["date_ranges"]["validation"]["end"][:10]
-        except Exception:
-            pass
-
-    logger.info("Backtest date range: %s → %s (reinforcement loop, test set protected; set BT_START_FLOOR env to change)", bt_start, bt_end)
     return bt_start, bt_end
 
 
@@ -239,7 +253,15 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             pnl_net    = round(pnl - commission, 4)
 
             # Build real 43-dim RL state from backtest trade fields
-            regime_map = {"TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 3.0, "CONSOLIDATION": 4.0}
+            # HTF bias encoding: BIAS_UP=0, BIAS_DOWN=1, BIAS_NEUTRAL=2 → /2.0
+            regime_map = {
+                "BIAS_UP": 0.0, "BIAS_DOWN": 1.0, "BIAS_NEUTRAL": 2.0,
+                # Legacy compat
+                "TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0,
+                "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATION": 2.0,
+                # LTF classes also map (approximate)
+                "TRENDING": 0.0, "CONSOLIDATING": 2.0,
+            }
             _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
             trader_idx = int(trader.split("_")[1]) - 1 if "_" in trader else 0  # 0-4
 
@@ -248,7 +270,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             state_vec[0] = float(tr.get("p_bull", 0.5))
             state_vec[1] = float(tr.get("p_bear", 0.5))
             state_vec[2] = float(np.clip(conf, 0.0, 1.0))            # entry_depth proxy
-            state_vec[3] = float(regime_map.get(tr.get("regime", "RANGING"), 2.0) / 4.0)
+            state_vec[3] = float(regime_map.get(tr.get("regime", "BIAS_NEUTRAL"), 2.0) / 2.0)
             state_vec[4] = 0.0                                        # sentiment — unavailable
             state_vec[5] = float(tr.get("quality_score", 0.5))
             # [6-13] Market structure
@@ -402,9 +424,14 @@ def run_retrain(round_num: int) -> dict:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    logger.info("=== STEP 6: BACKTEST + REINFORCED TRAINING (%d rounds) ===", N_ROUNDS)
+    bt_window = os.getenv("BT_WINDOW", "").lower().strip()
+    if not bt_window:
+        logger.error("BT_WINDOW env var not set — must be one of: round1, round2, round3")
+        sys.exit(1)
+    logger.info("=== STEP 6: BACKTEST + REINFORCED TRAINING (%d rounds, window=%s) ===",
+                N_ROUNDS, bt_window)
 
-    bt_start, bt_end = _check_histdata()
+    bt_start, bt_end = _resolve_bt_window(bt_window)
 
     # Clear journal before round 1 so we accumulate only backtest-sourced trades
     if JOURNAL_PATH.exists():

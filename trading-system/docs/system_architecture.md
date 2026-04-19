@@ -21,18 +21,19 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
   └─ run_backtest._backtest_trader("ml_trader", all_symbols)
        └─ _precompute_ml_cache(df, symbol, htf, ml_models)
             │
-            ├─ Step 1: RegimeClassifier (4H bias)
+            ├─ Step 1: RegimeClassifier HTF (4H bias, 3-class)
             │    Input:  31 REGIME_4H_FEATURES from 4H + 1D bars
-            │    Output: regime_4h (0–4) + conf_4h (max softmax)
+            │    Output: htf_bias (0=UP, 1=DOWN, 2=NEUTRAL) + htf_conf
             │
-            ├─ Step 2: RegimeClassifier (1H structure)
+            ├─ Step 2: RegimeClassifier LTF (1H behaviour, 4-class)
             │    Input:  15 REGIME_1H_FEATURES from 1H + 4H bars
-            │    Output: regime_1h (0–4) + conf_1h
+            │    Output: ltf_behaviour (0=TRENDING, 1=RANGING, 2=CONSOLIDATING, 3=VOLATILE) + ltf_conf
             │
             ├─ Step 3: Build sequence features
             │    74 SEQUENCE_FEATURES including:
-            │      - regime_4h one-hot (indices 26–30) + conf_4h (31)
-            │      - regime_1h one-hot (indices 32–36) + conf_1h (37)
+            │      - htf_bias_up/down/neutral (indices 26–28) + htf_bias_conf (29)
+            │      - ltf_trending/ranging/consolidating/volatile (30–33) + ltf_conf (34)
+            │      - htf_ltf_align (35), htf_regime_dur (36), ltf_regime_dur (37)
             │      - ICT structure distances (BOS age/strength, FVG dist/fill,
             │        sweep wick depth, Asian range context)
             │    Regime BEFORE sequence build — order is load-bearing.
@@ -58,33 +59,47 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
 
 ## ML Models In Depth
 
-### 1. RegimeClassifier (dual-cascade)
+### 1. RegimeClassifier (hierarchical dual-cascade)
 
 **File:** `models/regime_classifier.py`
-**Weights:** `weights/regime_4h.pkl` (bias) + `weights/regime_1h.pkl` (structure)
+**Weights:** `weights/regime_htf.pkl` (HTF bias) + `weights/regime_ltf.pkl` (LTF behaviour)
 
-Two independent MLP classifiers, each architecture: `N → 128 → 64 → 5` with BatchNorm, GELU, residual skip, Dropout 0.5.
+Two independent MLP classifiers, architecture: `N → 128 → 64 → N_CLASSES` with BatchNorm, GELU, residual skip, Dropout 0.5.
 
-**5 Classes:** `0=TRENDING_UP`, `1=TRENDING_DOWN`, `2=RANGING`, `3=VOLATILE`, `4=CONSOLIDATION`
+**HTF Classifier — "What is the directional bias?" (3 classes)**
+- `0=BIAS_UP`, `1=BIAS_DOWN`, `2=BIAS_NEUTRAL`
+- Answers macro trend direction only. Simple, clean, high-accuracy target.
+- Architecture: `31 → 128 → 64 → 3`
+- Accuracy target: ≥65% (random baseline = 33%)
 
 **4H Bias Classifier (31 features):**
 - 4H base: ADX, EMA stack, ATR ratio, BB width, realised vol
 - 1D context: ADX, EMA stack, ATR ratio, BB width
 - Dynamics: vol_slope, regime_duration, ATR percentile
 - Macro: 17 index returns + VIX level + yield spread
-- Trained on 4H data only, per-group GMMs (dollar/cross/gold)
+- Trained on 4H data only; mode="htf_bias"
 
-**1H Structure Classifier (15 features):**
+**LTF Classifier — "How is price behaving right now?" (4 classes)**
+- `0=TRENDING`, `1=RANGING`, `2=CONSOLIDATING`, `3=VOLATILE`
+- Direction-agnostic intraday price behaviour. Trained on 1H data only.
+- Architecture: `15 → 128 → 64 → 4`
+- Accuracy target: ≥55% (random baseline = 25%)
+
+**1H Behaviour Classifier (15 features):**
 - 1H base: ADX, EMA stack, ATR ratio, BB width, realised vol
 - Session: session_code
 - Market structure: swing HH/HL count, liquidity sweep count
 - 4H context: ADX, EMA stack, ATR ratio, BB width
 - Dynamics: vol_slope, regime_duration, ATR percentile
-- Trained on 1H data with 4H labels forward-filled
+- Trained on 1H-native labels; mode="ltf_behaviour"
 
-**Outputs injected into GRU sequence at every timestep:**
+**GRU receives both classifiers at every timestep:**
 ```python
-{"regime_4h": 0–4, "regime_4h_conf": float, "regime_1h": 0–4, "regime_1h_conf": float}
+# Slots 26–37 of SEQUENCE_FEATURES:
+htf_bias_up, htf_bias_down, htf_bias_neutral, htf_bias_conf,  # HTF 3-class
+ltf_trending, ltf_ranging, ltf_consolidating, ltf_volatile, ltf_conf,  # LTF 4-class
+htf_ltf_align, htf_regime_dur, ltf_regime_dur  # alignment + duration
+# Example: HTF=BIAS_UP + LTF=CONSOLIDATING → expect breakout entry
 ```
 
 **Hysteresis:** 3 consecutive bars required to switch regime.
@@ -128,10 +143,11 @@ Input: (batch, 30, 74)
 - 18–20: 1H (ADX, EMA21 dist, EMA50 dist)
 - 21–23: 4H (EMA21-50 diff, ADX, RSI)
 - 24–25: 1D (EMA21 dist, EMA stack)
-- 26–31: 4H regime one-hot (5 dims) + confidence
-- 32–37: 1H regime one-hot (5 dims) + confidence
-- 38: vol_slope_seq
-- 39–40: time_sin, time_cos
+- 26–29: HTF bias one-hot (BIAS_UP, BIAS_DOWN, BIAS_NEUTRAL) + htf_bias_conf
+- 30–34: LTF behaviour one-hot (TRENDING, RANGING, CONSOLIDATING, VOLATILE) + ltf_conf
+- 35: htf_ltf_align (1.0 when HTF directional + LTF TRENDING)
+- 36–37: htf_regime_dur, ltf_regime_dur (bars since last change / 100)
+- 38–40: vol_slope_seq, time_sin, time_cos
 - 41–71: ICT structure distances (EMA pullback zone, BOS age/strength, FVG dist/fill, sweep wick, Asian range, candle body/wicks, oscillators, ADX, regime dynamics, session timing)
 - 72–73: macro_vix_level, macro_yield_spread
 
@@ -263,4 +279,4 @@ No silent fallbacks anywhere. Every failure raises and propagates.
 | `main.py` imports deleted `Trader1NYEMA` etc. | `trading-engine/main.py` | Live engine won't start |
 | `signal_pipeline.py` calls `trader.analyze_market()` | `services/signal_pipeline.py` | Live pipeline broken |
 | RL policy collapsed (action=1 always) | `models/rl_agent.py` | Needs ≥200 trades + entropy tuning |
-| Regime accuracy 4H ~49%, 1H ~41% | `models/regime_classifier.py` | Investigate GMM label quality |
+| Regime accuracy low (pre-redesign) | `models/regime_classifier.py` | Redesigned: HTF 3-class (target ≥65%), LTF 4-class (target ≥55%). Needs cold-start retrain. |
