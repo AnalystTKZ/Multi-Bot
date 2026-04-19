@@ -301,7 +301,7 @@ class SignalPipeline:
             return None
 
         # Gate 5: LTF behaviour filter
-        _ltf_behaviour = str(ml_preds.get("regime_ltf", "RANGING"))
+        _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
         _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
 
         _range_valid    = bool(bar.get("range_valid", False))

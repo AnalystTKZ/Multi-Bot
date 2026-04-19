@@ -1038,9 +1038,17 @@ class RegimeClassifier(BaseModel):
                 log_probs = torch.log_softmax(logits_f, dim=1)
                 soft_ce   = -(smooth_targets * log_probs).sum(dim=1)
 
-                # Class-imbalance re-weighting (apply class_w to the hard label's class)
+                # Class-imbalance re-weighting applied INDEPENDENTLY of bar confidence.
+                # Multiplying cw_per_bar × bar_weights suppresses minority classes
+                # (RANGING, BIAS_NEUTRAL) because they are inherently low-confidence,
+                # causing the model to collapse and never predict them.
+                # Fix: class weight and bar confidence weight are additive influences,
+                # not multiplicative. Class weight ensures rare classes are learned;
+                # bar weight scales each bar's contribution to training stability.
                 cw_per_bar = class_w[labels]
-                weighted_ce = (soft_ce * cw_per_bar * bar_weights).mean()
+                # Hard floor on bar_weights so ambiguous bars still contribute.
+                bar_w_floored = torch.clamp(bar_weights, min=0.3)
+                weighted_ce = (soft_ce * cw_per_bar * bar_w_floored).mean()
 
                 # Entropy regularisation: encourages uncertainty on ambiguous bars
                 probs   = torch.softmax(logits_f, dim=1)

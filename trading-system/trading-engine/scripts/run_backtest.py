@@ -979,7 +979,7 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     # CONSOLIDATING → block (tight pre-breakout squeeze — wait for the move)
     # RANGING       → allow ONLY when a significant, clearly-bounded range is
     #                 detected AND the GRU direction matches the near boundary.
-    _ltf_behaviour = str(ml_preds.get("regime_ltf", "RANGING"))
+    _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
     _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
 
     _range_valid    = bool(bar.get("range_valid", False))
