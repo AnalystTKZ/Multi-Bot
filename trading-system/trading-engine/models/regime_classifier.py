@@ -625,10 +625,22 @@ class RegimeClassifier(BaseModel):
         ranging_conf     = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.1, 1.0)
         conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
 
+        # ── Minimum persistence filter ────────────────────────────────────────
+        # Regimes that last fewer than MIN_PERSIST bars are almost certainly
+        # noise — the classifier cannot learn a reliable signal from them.
+        # Zero-weight these runs so the MLP treats them as ambiguous.
+        # Threshold: 20 bars at 4H ≈ 80 hours; 48 bars at 1H ≈ 48 hours.
+        _tf = (timeframe or "4H").upper()
+        _min_persist = {"5M": 288, "15M": 96, "1H": 48, "4H": 20, "1D": 5}.get(_tf, 20)
+        _runs = (labels != labels.shift()).cumsum()
+        _run_len = _runs.map(_runs.value_counts())
+        _short_run_mask = _run_len < _min_persist
+        conf[_short_run_mask] = 0.0   # zero weight → treated as ambiguous by trainer
+
         dist = {CLASSES[c]: int((labels == c).sum()) for c in range(4)}
         ambiguous = int((conf < 0.4).sum())
-        logger.info("Rule labels [%s]: %s  ambiguous(conf<0.4)=%d (total=%d)",
-                    timeframe or "?", dist, ambiguous, len(labels))
+        logger.info("Rule labels [%s]: %s  ambiguous(conf<0.4)=%d (total=%d)  short_runs_zeroed=%d",
+                    timeframe or "?", dist, ambiguous, len(labels), int(_short_run_mask.sum()))
 
         labels = labels.astype(int)
         if return_confidence:

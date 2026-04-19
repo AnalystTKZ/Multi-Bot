@@ -166,22 +166,25 @@ class QualityScorer(BaseModel):
         don't always store all fields).
         """
         exit_reason = str(r.get("exit_reason", "")).lower()
-        is_win  = "tp" in exit_reason
-        is_loss = "sl" in exit_reason
-        if not is_win and not is_loss:
-            return None
+        rr_planned  = float(r.get("rr_ratio", 1.5))
 
-        rr_planned = float(r.get("rr_ratio", 1.5))
-
-        # Use rr_ratio directly as the EV label. This is already in R-multiples
-        # and is consistent across all symbols/sizes/currencies.
-        # Wins: +rr_ratio (e.g. +1.5 for a 1.5R winner, +2.0 for TP2 hit).
-        # Losses: -1.0 (lost exactly 1R regardless of pip size or lot size).
-        # This avoids the pnl/risk_staked calculation which produces out-of-range
-        # values when pnl is in account currency and entry_risk is in price units.
-        if is_win:
+        # Tiered EV labels — model learns to aim for tp2 (highest reward):
+        #   tp2         → full TP hit: best outcome, full rr_ratio
+        #   tp1         → TP1 hit, held for more: good, 0.75× rr
+        #   be_or_trail → TP1 hit then trailed/stopped: partial win, 0.4× rr
+        #   sl_*        → stopped out: -1.0R
+        #   time_exit   → timed out with no clear outcome: skip (return None)
+        if exit_reason == "tp2":
             return float(np.clip(rr_planned, 0.1, 10.0))
-        return -1.0
+        if exit_reason == "tp1":
+            return float(np.clip(rr_planned * 0.75, 0.1, 10.0))
+        if exit_reason == "be_or_trail":
+            return float(np.clip(rr_planned * 0.4, 0.1, 10.0))
+        if "sl" in exit_reason:
+            return -1.0
+        if "tp" in exit_reason:
+            return float(np.clip(rr_planned, 0.1, 10.0))
+        return None
 
     def create_labels(self, journal_path: str) -> pd.DataFrame:
         """

@@ -231,7 +231,9 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             conf    = float(tr.get("confidence", 0.7))
             ts_str  = str(tr.get("entry_time", tr.get("timestamp",
                           datetime.now(timezone.utc).isoformat())))
-            exit_reason = str(tr.get("exit_reason", "sl"))
+            # Preserve granular exit reason — _compute_ev_label uses tiered EV values.
+            # be_or_trail → partial win (trailed after TP1), tp1 → TP1 hit, tp2 → full TP.
+            exit_reason = str(tr.get("exit_reason", "sl")).lower()
 
             commission = abs(pnl) * 0.001
             pnl_net    = round(pnl - commission, 4)
@@ -318,14 +320,17 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "state_at_entry":  state_vec,
                 "rl_action":       int(trader.split("_")[1]) if "_" in trader else 1,
                 "ml_model_scores": {
-                    "p_bull":        float(tr.get("p_bull", 0.5)),
-                    "p_bear":        float(tr.get("p_bear", 0.5)),
-                    "quality_score": float(tr.get("quality_score", 0.5)),
-                    "regime":        str(tr.get("regime", "RANGING")),
-                    "sentiment_score": 0.0,
-                    "ensemble_score":  float(tr.get("confidence", 0.5)),
-                    "sentiment_label": "neutral",
-                    "sentiment_backend": "neutral",
+                    "p_bull":              float(tr.get("p_bull", 0.5)),
+                    "p_bear":              float(tr.get("p_bear", 0.5)),
+                    "quality_score":       float(tr.get("quality_score", 0.5)),
+                    "regime":              str(tr.get("regime", "RANGING")),
+                    "expected_variance":   float(tr.get("expected_variance", 0.1)),
+                    "regime_duration":     float(tr.get("regime_duration", 0.5)),
+                    "vol_slope":           float(tr.get("vol_slope", 0.0)),
+                    "sentiment_score":     0.0,
+                    "ensemble_score":      float(tr.get("confidence", 0.5)),
+                    "sentiment_label":     "neutral",
+                    "sentiment_backend":   "neutral",
                     "sentiment_confidence": 0.0,
                 },
                 "signal_metadata": {

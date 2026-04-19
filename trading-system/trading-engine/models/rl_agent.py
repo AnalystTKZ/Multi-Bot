@@ -45,13 +45,9 @@ _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # tra
 MODEL_DIR = os.path.join(_MODEL_ROOT, "weights", "rl_ppo") + os.sep
 
 
-def _rl_device() -> str:
-    import torch
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-_RL_DEVICE = _rl_device()
+# PPO with MLP policy is faster on CPU — GPU gives poor utilisation for small nets.
+# SB3 explicitly warns against running MlpPolicy on GPU.
+_RL_DEVICE = "cpu"
 _BUFFER_TRIGGER = 64
 
 
@@ -369,18 +365,18 @@ class RLAgent(BaseModel):
         if self._model is not None:
             try:
                 os.makedirs(path, exist_ok=True)
-                self._model.save(os.path.join(path, "model"))
+                self._model.save(os.path.join(path, "model.zip"))
             except Exception as exc:
                 logger.error("RLAgent.save failed: %s", exc)
 
     def load(self, path: str) -> None:
         try:
             from stable_baselines3 import PPO
-            model_file = os.path.join(path, "model")
-            if os.path.exists(model_file + ".zip") or os.path.exists(model_file):
+            model_file = os.path.join(path, "model.zip")
+            if os.path.exists(model_file):
                 self._model = PPO.load(model_file, device=_RL_DEVICE)
                 self._loaded = True
-                logger.info("RLAgent: PPO model loaded")
+                logger.info("RLAgent: PPO model loaded from %s", model_file)
         except ImportError:
             logger.warning("RLAgent.load: stable-baselines3 not available")
         except Exception as exc:
