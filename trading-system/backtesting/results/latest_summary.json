@@ -1,16 +1,16 @@
 {
-  "total_trades": 2586,
-  "avg_win_rate": 0.4528,
-  "avg_profit_factor": 2.046,
-  "avg_sharpe": 3.715,
+  "total_trades": 2584,
+  "avg_win_rate": 0.4551,
+  "avg_profit_factor": 2.064,
+  "avg_sharpe": 3.718,
   "traders": {
     "ml_trader": {
-      "trades": 2586,
-      "win_rate": 0.4528,
-      "profit_factor": 2.046,
-      "total_return": 14.9084,
-      "max_drawdown": 0.0284,
-      "sharpe": 3.715
+      "trades": 2584,
+      "win_rate": 0.4551,
+      "profit_factor": 2.064,
+      "total_return": 15.3103,
+      "max_drawdown": 0.0272,
+      "sharpe": 3.718
     }
   },
   "round": 3
