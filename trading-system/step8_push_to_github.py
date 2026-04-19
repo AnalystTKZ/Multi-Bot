@@ -147,12 +147,12 @@ def main() -> None:
 
     remote_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
 
-    # The clone at /kaggle/working/remote/Multi-Bot is already up to date with
-    # GitHub — no fetch/merge needed. Just set committer identity and ensure
-    # the remote URL carries the token for push auth.
     _run(["git", "config", "user.name",  GITHUB_USER],  cwd=REPO_ROOT)
     _run(["git", "config", "user.email", GITHUB_EMAIL], cwd=REPO_ROOT)
     _run(["git", "remote", "set-url", "origin", remote_url], cwd=REPO_ROOT)
+
+    logger.info("Pulling latest from origin/%s ...", GITHUB_BRANCH)
+    _run(["git", "pull", "--ff-only", "origin", GITHUB_BRANCH], cwd=REPO_ROOT)
 
     # ── Copy new artifacts into the working tree ──────────────────────────────
     logger.info("Collecting artifacts ...")
