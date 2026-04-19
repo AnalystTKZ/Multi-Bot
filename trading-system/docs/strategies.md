@@ -1,6 +1,6 @@
 # Trading Strategies Reference
 
-Last updated: 2026-04-17.
+Last updated: 2026-04-19.
 
 All traders inherit from `BaseTrader` (`traders/base_trader.py`). Each runs independently
 with its own capital allocation, session window, and risk limits. ICT/SMC conditions
@@ -19,7 +19,7 @@ Every signal passes through these in order. Any returning `None` rejects the tra
 | 2 | Dead zone 12:00–13:00 UTC → reject (all traders) |
 | 3 | Symbol in cooldown (`COOLDOWN_MINUTES`) → reject |
 | 4 | `trades_today[symbol] ≥ MAX_TRADES_PER_SESSION` → reject |
-| 5 | Circuit breaker: daily loss > limit OR drawdown > limit → reject |
+| 5 | Circuit breaker: daily loss > 2% OR drawdown > 8% → reject |
 | 6 | Spread: XAUUSD > 50 pips OR Forex > 3 pips → reject |
 | 7 | EV gate: `ev < MIN_EV_THRESHOLD (0.10)` OR `expected_variance > 0.80` OR `p_dir < ML_DIRECTION_THRESHOLD` → reject |
 | 8 | RL gate: PPO does not approve this trader OR EV < RL selectivity threshold → reject |
@@ -100,11 +100,11 @@ All except USDJPY
 3. Volume on breakout bar > 20-bar SMA × 1.3
 4. ADX > 20
 5. **Regime: TRENDING_UP or TRENDING_DOWN only** — RANGING/VOLATILE blocked at signal level
-   (not a runtime error, just returns None)
+   (returns None, not a RuntimeError)
 
 ### Additional Filters
 - `breakout_strength`: ATR-normalized range of breakout bar
-- `fakeout_prob`: >55% → reject (historical fakeout rate for this setup type)
+- `fakeout_prob`: > 55% → reject
 - `range_compression`: tight Asian range increases breakout reliability
 
 ### Parameters
@@ -114,21 +114,21 @@ All except USDJPY
 
 ---
 
-## Trader 4 — News Momentum
+## Trader 4 — News Structural Breakout
 
 **File:** `traders/trader_4_news_momentum.py`  **ID:** `trader_4`
 
 ### Session
-Any time (no session restriction override)
+Any time (no session restriction)
 
 ### Symbols
 EURUSD, GBPUSD, XAUUSD
 
 ### Signal Logic
-1. `news_in_15min = True` required (high-impact event imminent)
-2. `sentiment_score ≥ 0.65` **hard gate** (not EV-adjustable)
-3. Structural breakout in direction of sentiment (NOT a fade)
-4. Hard close 60 min post-news
+1. `sentiment_score ≥ 0.65` **hard gate** (FinBERT primary, VADER fallback)
+2. Structural breakout in direction of sentiment (NOT a fade)
+3. Hard close 60 min post-news
+4. Max 1 trade per session
 
 ### Parameters
 - `MAX_TRADES_PER_SESSION = 1`
@@ -152,9 +152,8 @@ USDJPY, EURJPY, AUDJPY, EURUSD, AUDUSD (XAUUSD and GBPJPY excluded)
 1. **Regime: RANGING required** — raises `RuntimeError` if missing when `ML_ENABLED=true`
 2. `volatility_stable`: ATR expansion ratio < 1.3× (not a breakout setup)
 3. Price at Asian range extreme (near high or low)
-4. Dual oscillator confirmation (RSI + stochastic oversold/overbought)
-   — one oscillator OK if `p_win ≥ 0.65` from QualityScorer
-5. `distance_from_mean_atr`: how far price is stretched from range midpoint
+4. Dual oscillator confirmation: RSI + Stochastic oversold/overbought
+5. `distance_from_mean_atr`: price stretched from range midpoint
 
 ### Parameters
 - `MAX_TRADES_PER_SESSION = 2`
@@ -187,9 +186,11 @@ USDJPY, EURJPY, AUDJPY, EURUSD, AUDUSD (XAUUSD and GBPJPY excluded)
 ACCOUNT_BALANCE    = 10000.0
 CAPITAL_PER_TRADER = 0.20     (20% each × 5 = 100%)
 RISK_PER_TRADE     = 0.01     (1% of allocated capital per trade)
+MAX_DAILY_LOSS_PCT = 0.02     (2% daily loss → circuit breaker)
+MAX_DRAWDOWN_PCT   = 0.08     (8% drawdown → circuit breaker)
 ```
 
-Position size: `risk_amount / (|entry - sl| in price)`  
+Position size: `risk_amount / (|entry - sl| in price)`
 ATR-scaled stop loss. Take profit at `entry ± (sl_distance × rr_ratio)`.
 
 ---
@@ -207,4 +208,16 @@ Ensemble scoring           ← final confidence: (ict × 0.5 + ml × 0.5 + senti
 ```
 
 Regime affects both the ICT logic (some traders require specific regimes) and the ensemble
-multiplier (TRENDING ×1.2, RANGING ×0.9, VOLATILE ×0.85).
+multiplier (TRENDING aligned ×1.2, TRENDING against ×0.9, RANGING ×0.9, VOLATILE ×0.85).
+
+**EV label tiers** (QualityScorer learns to aim for tp2):
+
+| Exit | EV label |
+|---|---|
+| `tp2` | `+rr_ratio` (best) |
+| `tp1` | `+rr × 0.75` |
+| `be_or_trail` | `+rr × 0.4` |
+| `sl_*` | `-1.0` |
+| `time_exit` | skipped |
+
+Exit reasons are preserved raw in the journal — never collapsed to `tp/sl`.

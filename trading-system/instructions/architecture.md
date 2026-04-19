@@ -1,6 +1,6 @@
 # System Architecture — Multi-Bot ICT/Smart Money Trading System
 
-Updated 2026-04-18. For the full living reference see `docs/CLAUDE.md`.
+Updated 2026-04-19. For the full living reference see `docs/system_architecture.md` and `docs/TRAINING_AND_BACKTEST.md`.
 
 > **ML_ENABLED=true is the default.** The engine raises `ModelNotTrainedError` if any model weight is missing. Train all models before starting — see `docs/TRAINING_AND_BACKTEST.md`.
 
@@ -80,19 +80,25 @@ Redis pub/sub → backend WebSocket manager → frontend WebSocket → Redux sto
 
 ## ML Models (current)
 
-All models are PyTorch on GPU. **LightGBM and XGBoost have been removed.**
+All models are PyTorch on GPU except RL. **LightGBM and XGBoost have been removed.**
 
 | Model | Algorithm | Weight | Role |
 |---|---|---|---|
 | RegimeClassifier | PyTorch MLP 59→128→64→4, BatchNorm, GELU, residual | `weights/regime_4h.pkl` / `regime_1h.pkl` | 4-class market regime |
 | GRU-LSTM | PyTorch GRU(256, 2L) + LayerNorm → 3 heads | `weights/gru_lstm/model.pt` | p_bull, p_bear, magnitude, uncertainty |
-| QualityScorer | PyTorch MLP 17→64→32→1, Huber loss | `weights/quality_scorer.pkl` | EV in R-multiples |
+| QualityScorer | PyTorch MLP 17→64→32→1, Huber loss, identity output | `weights/quality_scorer.pkl` | EV in R-multiples (tiered labels) |
 | SentimentModel | FinBERT (HuggingFace) + VADER fallback | pre-trained | News/macro directional bias |
-| RLAgent | PPO via stable-baselines3, 42-dim state, 16 actions | `weights/rl_ppo/` | Strategy selector + EV threshold |
+| RLAgent | PPO via stable-baselines3, CPU, 42-dim state, 16 actions | `weights/rl_ppo/model.zip` | Strategy selector + EV threshold |
 
 **No fallback values** — untrained models always raise `ModelNotTrainedError(RuntimeError)`.
 
-**Warm-start incremental retraining:** all models detect existing weights at fit time and continue training at 5× lower LR rather than reinitialising. GRU is excluded from the per-round reinforcement loop (catastrophic forgetting — 7.4M sequence knowledge would be destroyed by fine-tuning on ~3k journal trades).
+**Warm-start incremental retraining:** all models detect existing weights at fit time and continue training at 5× lower LR rather than reinitialising. GRU is excluded from the per-round reinforcement loop (catastrophic forgetting — 7M sequence knowledge would be destroyed by fine-tuning on ~3k journal trades).
+
+**Tiered EV labels (QualityScorer):** exit_reason drives label value: `tp2=rr_ratio`, `tp1=0.75×rr`, `be_or_trail=0.4×rr`, `sl=-1.0`. Model learns a gradient so it aims for tp2 outcomes. Raw exit reasons preserved in journal — never collapsed.
+
+**Minimum persistence filter (RegimeClassifier):** regime runs shorter than 20 bars (4H) / 48 bars (1H) are zero-weighted during training to prevent label noise from transient flips.
+
+**RL device:** PPO with MLP policy always runs on CPU — faster than GPU for small MLP networks per SB3 guidance. Weights saved as explicit `model.zip` to prevent SB3 directory creation bug.
 
 ---
 
@@ -127,7 +133,7 @@ All models are PyTorch on GPU. **LightGBM and XGBoost have been removed.**
 
 ## Offline Data Pipeline (`pipeline/`)
 
-9-step pipeline for building training datasets, running backtests, and training ML models. Runs on Kaggle T4 × 2 GPUs.
+9-step pipeline for building training datasets, running backtests, and training ML models. Runs on Kaggle T4 × 2 GPUs via `kaggle_train.py`.
 
 | Step | Script | Output |
 |---|---|---|
@@ -139,10 +145,10 @@ All models are PyTorch on GPU. **LightGBM and XGBoost have been removed.**
 | 5 | `step5_split.py` | `ml_training/datasets/train|val|test.parquet` (70/15/15) |
 | 6 | `step6_backtest.py` | 3-round reinforcement backtest + warm-start retraining |
 | 7 | `step7_train.py` | GRU + Regime weights |
-| 7b | `step7b_train.py` | Quality + RL weights (from 8,203 journal trades) |
-| 8 | `step8_push_to_github.py` | Push weights + metrics to GitHub (git init + soft-reset + push) |
+| 7b | `step7b_train.py` | Quality + RL weights |
+| 8 | `step8_push_to_github.py` | Push weights + metrics to GitHub via fresh clone |
 
-**Run on Kaggle:** `python run_pipeline.py`
+**Kaggle split-dataset:** Code from GitHub clone (`/kaggle/input/datasets/tysonsiwela/multi-bot-system`), OHLCV from separate dataset (`/kaggle/input/datasets/tysonsiwela/trading-data`), weights pushed via fresh clone at `/kaggle/working/remote/Multi-Bot`.
 
 ---
 
@@ -163,7 +169,7 @@ All retrains are warm-start — existing weights loaded and fine-tuned at 5× lo
 |---|---|---|
 | trading_backend | 3000 | FastAPI |
 | trading_frontend | 3001 | React/Nginx |
-| trading_postgres | 5432 | |
+| trading_postgres | 5432 | Trade journal, state |
 | trading_redis | 6379 | pub/sub + state |
 | trading_engine_main | 8000 (internal) | Trading engine |
 | trading_model_retrainer | — | `retrain_scheduler.py` |
@@ -180,16 +186,13 @@ Batched GPU inference: `_precompute_ml_cache` builds all sequences upfront, runs
 3. GRU batch inference → `gru_preds`
 4. Merge into `cache[bar_idx]`
 
-**Latest results (2026-04-18, Jan 2021 – Aug 2024):**
+**Latest results (2026-04-18, Jan 2021 – Aug 2024, $10k capital):**
 
-| Metric | Round 1 | Round 3 |
-|---|---|---|
-| Trades | 2,712 | 2,769 |
-| Win Rate | 45.5% | 44.9% |
-| Profit Factor | 1.99 | 1.93 |
-| Sharpe | 3.50 | 3.40 |
-| Max Drawdown | 2.72% | 2.45% |
-| Total Return | +20.1% | +18.0% |
+| Round | Trades | WR | PF | Sharpe | MaxDD | Return |
+|---|---|---|---|---|---|---|
+| 1 | 2,571 | 45.4% | 2.08 | 3.77 | 2.8% | 1,549% |
+| 2 | 2,610 | 44.8% | 2.04 | 3.70 | 3.6% | 1,458% |
+| 3 | 2,586 | 45.3% | 2.05 | 3.71 | 2.8% | 1,491% |
 
 ---
 
@@ -210,7 +213,7 @@ Batched GPU inference: `_precompute_ml_cache` builds all sequences upfront, runs
 | 1 | Redis event schemas (MARKET_DATA, SIGNAL_GENERATED, TRADE_EXECUTED) |
 | 2 | Redis state keys (`engine:status`, `trader:{id}:state`, `strategy_allocations:{id}`) |
 | 3 | Health endpoint: `{status, timestamp, traders, mode}` |
-| 4 | Journal JSONL: all CSV fields + state_at_entry[42], rl_action, ml_model_scores, ev, expected_variance |
+| 4 | Journal JSONL: all CSV fields + state_at_entry[42], rl_action, ml_model_scores, ev, expected_variance, exit_reason (raw) |
 | 5 | Backtest JSON: `{run_at, start, end, config, results, trade_log}` |
 | 6 | Trader IDs: `trader_1` through `trader_5` |
 | 7 | Feature flags: `ML_ENABLED`, `PAPER_TRADING` from `.env` |

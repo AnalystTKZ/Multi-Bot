@@ -1,8 +1,8 @@
 # Multi-Bot ICT/Smart Money Trading System
 
-Updated 2026-04-12.
+Updated 2026-04-19.
 
-A production-grade, fully containerised automated trading system implementing Inner Circle Trader (ICT) and Smart Money Concepts (SMC) across Forex and Gold. Five independent strategy bots run concurrently against a Capital.com account with a Hybrid ML + RL signal layer.
+A production-grade, fully containerised automated trading system implementing Inner Circle Trader (ICT) and Smart Money Concepts (SMC) across Forex and Gold. Five independent strategy bots run concurrently against a Capital.com account with a Hybrid ML + RL signal layer trained on Kaggle T4 × 2 GPUs.
 
 ---
 
@@ -11,11 +11,12 @@ A production-grade, fully containerised automated trading system implementing In
 - **5 trading bots** each running a distinct session-aware strategy (NY trend, FVG/BOS, London breakout, news momentum, Asian mean reversion)
 - **Paper trading mode** with realistic slippage, commission, and execution delay simulation
 - **PortfolioManager** — per-trade TP1/TP2 targets, SL→breakeven, trailing stop, correlation cap, streak-based size scaling
-- **PPO RL agent** (stable-baselines3) that selects which strategy to activate per bar
-- **5 ML models** that hot-reload weekly without container restarts (GRU-LSTM PyTorch, LightGBM Regime, XGBoost Quality, FinBERT Sentiment, PPO RL)
-- **Weekly automatic retraining** via the `model-retrainer` service (Sunday 02:00 UTC)
+- **PPO RL agent** (stable-baselines3) that selects which strategy to activate per bar — runs on CPU (MLP policy is faster on CPU per SB3 guidance)
+- **4 ML models** that hot-reload without container restarts (GRU-LSTM PyTorch, PyTorch RegimeClassifier, PyTorch QualityScorer EV regressor, PPO RL)
+- **Tiered retraining** via `retrain_scheduler.py`: Quality + RL weekly (Sun 02:00 UTC), Regime + GRU monthly (1st Sun 03:00 UTC)
 - **Two trade journals** — a clean CSV and a detailed JSONL — that feed back into the ML training pipeline
 - **Event-driven architecture** over Redis pub/sub (zero shared state between bots)
+- **Kaggle split-dataset** training: code cloned from GitHub, OHLCV data from a separate Kaggle dataset, weights pushed back to GitHub post-training
 
 ---
 
@@ -23,18 +24,20 @@ A production-grade, fully containerised automated trading system implementing In
 
 | Layer | Technology |
 |---|---|
-| Trading Engine | Python 3.11, asyncio |
+| Trading Engine | Python 3.12, asyncio |
 | Backend API | FastAPI |
 | Frontend | React 18, Vite, Redux Toolkit, MUI |
 | Broker | Capital.com REST API (demo + live) |
 | Data fallback | yfinance |
 | Message bus | Redis pub/sub |
 | Persistence | PostgreSQL 15, Redis 7 |
-| ML — time series | PyTorch CPU (GRU-LSTM) |
-| ML — tabular | LightGBM (regime), XGBoost (quality) |
-| ML — NLP | FinBERT `ProsusAI/finbert` primary, VADER fallback |
-| ML — RL | stable-baselines3 PPO |
+| ML — time series | PyTorch GPU (GRU-LSTM, 256 hidden, 2 layers, 3 heads) |
+| ML — tabular | PyTorch GPU (RegimeClassifier MLP, QualityScorer EV regressor) |
+| ML — RL | stable-baselines3 PPO (CPU) |
+| Training hardware | Kaggle T4 × 2 GPUs (DataParallel) |
 | Infrastructure | Docker Compose |
+
+> LightGBM and XGBoost have been fully replaced by PyTorch models.
 
 ---
 
@@ -44,7 +47,7 @@ A production-grade, fully containerised automated trading system implementing In
 
 - Docker and Docker Compose
 - Capital.com account (demo or live)
-- Optional: NewsAPI key (improves Trader 4 news awareness)
+- Trained model weights in `trading-engine/weights/` (see [TRAINING_AND_BACKTEST.md](TRAINING_AND_BACKTEST.md))
 
 ### 1. Configure environment
 
@@ -60,8 +63,6 @@ cp .env.example .env
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-This starts the full production stack: postgres, redis, backend, trading-engine, frontend, model-retrainer.
-
 ### 3. Access
 
 | Interface | URL |
@@ -74,8 +75,6 @@ This starts the full production stack: postgres, redis, backend, trading-engine,
 
 ## Environment Variables
 
-All services read from a single `.env` file in `trading-system/`.
-
 ```env
 # Capital.com broker
 CAPITAL_API_KEY=your_key
@@ -84,7 +83,7 @@ CAPITAL_PASSWORD=your_password
 CAPITAL_ENV=demo                  # change to live when ready
 
 # Trading mode
-PAPER_TRADING=true                # set false only after live verification
+PAPER_TRADING=true
 ML_ENABLED=true                   # requires trained weights in trading-engine/weights/
 TRADING_PAIRS=EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,XAUUSD
 
@@ -106,27 +105,32 @@ NEWS_API_KEY=                     # improves Trader 4 event awareness
 TELEGRAM_BOT_TOKEN=               # trade alerts
 TELEGRAM_CHAT_ID=
 
-# Retrainer schedule (defaults: sunday 02:00 UTC)
-RETRAIN_DAY=sunday
-RETRAIN_HOUR=2
+# EV and uncertainty gates (Guard 7)
+MIN_EV_THRESHOLD=0.10
+MAX_UNCERTAINTY=0.80
+
+# Retrainer schedule
+RETRAIN_QUALITY_DAY=sunday
+RETRAIN_QUALITY_HOUR=2
+RETRAIN_MONTHLY_HOUR=3
+MIN_JOURNAL_QUALITY=200
+MIN_JOURNAL_RL=500
 ```
 
-> **ML_ENABLED=true is the default.** All 5 model weights must be present in `trading-engine/weights/` before enabling. Models raise `ModelNotTrainedError` if weights are missing — there is no silent fallback.
+> **`ML_ENABLED=true` is the default.** All model weights must be present in `trading-engine/weights/` before starting the engine. Models raise `ModelNotTrainedError` (no silent fallback) if weights are missing.
 
 ---
 
 ## Services
 
-`docker-compose.dev.yml` runs 6 containers:
-
-| Container | Image | Port | Purpose |
-|---|---|---|---|
-| `trading_postgres` | postgres:15-alpine | 5432 | Trade journal, state |
-| `trading_redis` | redis:7-alpine | 6379 | Event bus, state cache |
-| `trading_backend` | Custom build | 3000 | FastAPI — REST + WebSocket |
-| `trading_engine_main` | Custom build | 8000 (internal) | 5 traders, ML inference |
-| `trading_frontend` | Custom build | 3001 | React dashboard (Nginx) |
-| `trading_model_retrainer` | Same as engine | — | Weekly model retraining |
+| Container | Port | Purpose |
+|---|---|---|
+| `trading_postgres` | 5432 | Trade journal, state |
+| `trading_redis` | 6379 | Event bus, state cache |
+| `trading_backend` | 3000 | FastAPI — REST + WebSocket |
+| `trading_engine_main` | 8000 (internal) | 5 traders, ML inference |
+| `trading_frontend` | 3001 | React dashboard (Nginx) |
+| `trading_model_retrainer` | — | `retrain_scheduler.py` |
 
 ---
 
@@ -138,19 +142,19 @@ Capital.com REST API → DataFetcher.get_ohlcv(symbol, tf, bars=300)
         ▼  MARKET_DATA (Redis pub/sub)
   SignalPipeline.process_bar()
         │
-        ├── Step 1: ML inference (if ML_ENABLED)
-        │     GRULSTMPredictor  → p_bull, p_bear, entry_depth
+        ├── Step 1: ML inference (load-bearing order)
         │     RegimeClassifier  → TRENDING_UP/DOWN/RANGING/VOLATILE
-        │     QualityScorer     → P(signal hits TP)
+        │     GRULSTMPredictor  → p_bull, p_bear, entry_depth, expected_variance
+        │     QualityScorer     → ev (R-multiples), quality_score
         │     SentimentModel    → score [-1,1], label, backend
         │
         ├── Step 2: All 5 traders → BaseTrader.analyze_market()
-        │     8 guards → _compute_signal() → ML quality gate → RL gate
+        │     8 guards → _compute_signal() → EV gate → RL gate
         │
-        ├── Step 3: Ensemble score filter (≥ 0.5)
+        ├── Step 3: Ensemble score
         │     score = (ict × 0.5 + ml × 0.5 + sentiment_bonus) × regime_mult
         │
-        ├── Step 4: Confidence gate (≥ 0.55)
+        ├── Step 4: Confidence gate ≥ 0.55
         └── Step 5: SIGNAL_GENERATED → Redis pub/sub
                 │
                 ▼
@@ -161,17 +165,20 @@ Capital.com REST API → DataFetcher.get_ohlcv(symbol, tf, bars=300)
           — TP1/TP2, R:R ≥ 2.0, correlation cap, vol scalar, streak scalar
                 │
                 ▼
-        ExecutionEngine
-          → PaperTradingService (slippage + commission simulation)
-          → BrokerConnector (live Capital.com orders)
+        ExecutionEngine → PaperTradingService / BrokerConnector
                 │
                 ▼  TRADE_EXECUTED
-        PortfolioManager.manage_open_positions() (per bar)
+        PortfolioManager.manage_open_positions()
           — partial close @ TP1, SL→breakeven, trailing stop @ TP2
                 │
         TradeJournal
-          ├── logs/trade_journal.csv           (clean 12-column)
-          └── logs/trade_journal_detailed.jsonl (full: ML scores, RL state, sentiment backend)
+          ├── logs/trade_journal.csv
+          └── logs/trade_journal_detailed.jsonl
+                │
+                ▼  feedback loop
+        retrain_scheduler.py
+          ├── Weekly  (Sun 02:00 UTC): Quality + RL  (≥200/500 journal entries)
+          └── Monthly (1st Sun 03:00 UTC): Regime + GRU  (OHLCV-based)
 
 Redis pub/sub → backend WebSocket → frontend Redux store
 ```
@@ -180,138 +187,127 @@ Redis pub/sub → backend WebSocket → frontend Redux store
 
 ## Trading Strategies
 
-See [strategies.md](strategies.md) for full details.
-
-| Bot | Strategy | Session (UTC) | Instruments |
+| Bot | Strategy | Session (UTC) | Regime Requirement |
 |---|---|---|---|
-| T1 | NY EMA Trend Pullback | 13:00–17:00 | EURUSD, GBPUSD, USDJPY, XAUUSD |
-| T2 | Structure Break + FVG Continuation | London + NY | EURUSD, GBPUSD, USDJPY, XAUUSD |
-| T3 | London Breakout + Liquidity Sweep | 07:00–10:00 | EURUSD, GBPUSD, XAUUSD |
-| T4 | News Structural Breakout | Any (news-driven) | All pairs |
-| T5 | Asian Range Mean Reversion | 02:00–06:45 | USDJPY, EURJPY, AUDJPY, EURUSD, AUDUSD |
+| T1 | NY EMA Trend Pullback | 13:00–17:00 | TRENDING_UP or DOWN required |
+| T2 | Structure Break + FVG Continuation | London + NY | Any |
+| T3 | London Breakout + Liquidity Sweep | 07:00–10:00 | TRENDING only |
+| T4 | News Structural Breakout | Any | Any (sentiment ≥ 0.65 hard gate) |
+| T5 | Asian Range Mean Reversion | 02:00–06:45 | RANGING required |
 
-**Dead zone**: 12:00–13:00 UTC — all traders blocked every day.
+**Dead zone:** 12:00–13:00 UTC — all traders blocked.
 
-### Risk Controls
-
-All traders enforce via `BaseTrader` 8-guard chain:
+### Risk Controls (BaseTrader 8 guards)
 
 | Guard | Check |
 |---|---|
 | 0 | Symbol exclusion list per trader |
-| 1 | Session window (UTC start/end) |
+| 1 | Session window |
 | 2 | Dead zone 12:00–13:00 UTC |
 | 3 | Per-symbol cooldown |
 | 4 | Session trade cap |
-| 5 | Circuit breaker — 2% daily loss or 8% drawdown halts all trading |
-| 6 | Spread gate — Forex > 3 pips, Gold > 50 pips |
-| 7 | ML quality gate — QualityScorer + directional probability threshold |
-| 8 | RL gate — PPO action must approve this trader |
-
-Capital isolation: 20% per trader, 1% risk per trade.
+| 5 | Circuit breaker (2% daily loss / 8% drawdown) |
+| 6 | Spread gate (Forex > 3 pips, Gold > 50 pips) |
+| 7 | EV gate: `ev ≥ 0.10` AND `expected_variance ≤ 0.80` AND `p_dir ≥ threshold` |
+| 8 | RL gate: PPO approves trader + sets EV selectivity tier |
 
 ---
 
 ## ML / AI Layer
 
-See [models.md](models.md) for full details.
-
 | Model | Algorithm | Role |
 |---|---|---|
-| GRULSTMPredictor | GRU(20)→LSTM(128)→Linear(64)→Linear(3) — PyTorch CPU | Directional probability: p_bull, p_bear, entry_depth |
-| RegimeClassifier | LightGBM 4-class + 3-bar hysteresis | Market regime gate |
-| QualityScorer | XGBoost binary (journal outcomes) | P(signal hits TP) |
-| SentimentModel | FinBERT `ProsusAI/finbert` + VADER fallback | News/macro bias; Gold inverts USD score |
-| RLAgent | PPO (stable-baselines3), 42-dim state, 16 actions | Strategy selector + confidence threshold |
+| RegimeClassifier | PyTorch MLP 59→128→64→4, BatchNorm, GELU, residual | TRENDING_UP/DOWN/RANGING/VOLATILE |
+| GRULSTMPredictor | GRU(256, 2L) + LayerNorm → 3 heads | p_bull, p_bear, magnitude, uncertainty |
+| QualityScorer | PyTorch MLP 17→64→32→1, Huber loss | Expected value in R-multiples |
+| SentimentModel | FinBERT + VADER fallback | News/macro directional bias |
+| RLAgent | PPO (stable-baselines3), CPU, 42-dim state, 16 actions | Strategy selector + EV threshold |
 
-**Ensemble**: `(ict_score × 0.5 + ml_score × 0.5 + sentiment_bonus) × regime_mult`
+**EV label tiers** (QualityScorer training):
 
-Every journal entry records `sentiment_backend` (`finbert` / `vader` / `neutral`) and the full ensemble breakdown so every decision is explainable.
+| Exit | EV label |
+|---|---|
+| `tp2` | `+rr_ratio` (best — model aims here) |
+| `tp1` | `+rr × 0.75` |
+| `be_or_trail` | `+rr × 0.4` |
+| `sl_*` | `-1.0` |
+| `time_exit` | skipped |
 
-### Weekly Retraining
+**Regime persistence filter:** short regime runs (<20 bars at 4H, <48 bars at 1H) are zero-weighted during training to prevent label noise from short-lived flips.
 
-The `model-retrainer` container runs `retrain_scheduler.py` which fires `retrain_incremental.py --model all` every Sunday at 02:00 UTC. Schedule is configurable via `.env`:
+**Retraining schedule:**
 
-```env
-RETRAIN_DAY=sunday
-RETRAIN_HOUR=2
-```
+| Cadence | Models | Min data |
+|---|---|---|
+| Weekly (Sun 02:00 UTC) | Quality + RL | 200 (Quality), 500 (RL) journal entries |
+| Monthly (1st Sun 03:00 UTC) | Regime + GRU | OHLCV only |
 
-To retrain manually:
+All retrains warm-start from existing weights at 5× lower LR. GRU is excluded from the per-round reinforcement loop (catastrophic forgetting risk).
 
-```bash
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model gru
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model all
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --dry-run
+---
 
-To keep RAM stable on large datasets, retraining runs one symbol at a time and supports symbol scoping via env vars:
-```bash
-docker exec -e RETRAIN_SYMBOLS_GRU="EURUSD,GBPUSD,USDJPY,XAUUSD" \
-  -e RETRAIN_SYMBOLS_REGIME="EURUSD,USDJPY,XAUUSD" \
-  trading_model_retrainer python /app/scripts/retrain_incremental.py --model gru
-```
-```
+## Latest Backtest Results
 
-Hot-reload: `BaseModel.reload_if_updated()` checks weight file mtime every 5 min — no container restart needed after retraining.
+Period: Jan 2021 – Aug 2024 · Capital: $10,000 · 3 reinforcement rounds
+
+| Round | Trades | WR | PF | Sharpe | Max DD | Return |
+|---|---|---|---|---|---|---|
+| 1 | 2,571 | 45.4% | 2.08 | 3.77 | 2.8% | 1,549% |
+| 2 | 2,610 | 44.8% | 2.04 | 3.70 | 3.6% | 1,458% |
+| 3 | 2,586 | 45.3% | 2.05 | 3.71 | 2.8% | 1,491% |
+
+All 4 regime classes active in backtest. Calibration OK across all symbols.
 
 ---
 
 ## Trade Journals
 
-Every executed trade writes to two logs in `trading-engine/logs/`:
-
-**`trade_journal.csv`** — clean one-liner:
+**`trade_journal.csv`** — 12-column clean log:
 ```
 timestamp, trader, symbol, side, size, entry, stop_loss, take_profit, rr_ratio, confidence, pnl, commission
 ```
 
-**`trade_journal_detailed.jsonl`** — full decision record:
-```json
-{
-  "trader": "trader_2",
-  "symbol": "XAUUSD",
-  "side": "buy",
-  "rr_ratio": 2.8,
-  "confidence": 0.74,
-  "pnl": 142.50,
-  "exit_reason": "tp1",
-  "session": "LONDON",
-  "ml_model_scores": {
-    "p_bull": 0.71,
-    "p_bear": 0.18,
-    "quality_score": 0.68,
-    "ensemble_score": 0.72,
-    "regime": "TRENDING_UP",
-    "sentiment_score": 0.31,
-    "sentiment_label": "positive",
-    "sentiment_backend": "finbert",
-    "sentiment_confidence": 0.84,
-    "rl_action": 2
-  },
-  "state_at_entry": [0.12, -0.03, "...42 dims"],
-  "signal_metadata": {"strategy": "fvg_continuation", "ict_score": 0.68}
-}
-```
+**`trade_journal_detailed.jsonl`** — full decision record including:
+- `ev`, `quality_score`, `expected_variance`
+- `ml_model_scores`: `p_bull`, `p_bear`, `regime`, `sentiment_score`, `sentiment_backend`
+- `state_at_entry` (42-dim RL state vector)
+- `rl_action`, `exit_reason`, `session`, `source`
 
-Journals feed into:
-- `retrain_incremental.py` — QualityScorer labels (TP hit = 1, SL hit = 0)
-- `RLAgent.record_outcome()` — online PPO reward buffer
+Journal exit reasons and their meaning:
+- `tp2` — full TP hit (best)
+- `tp1` — TP1 hit, held for more
+- `be_or_trail` — TP1 hit then trailed/stopped
+- `sl_full` — stopped out at SL
+- `time_exit` — timed out
+
+---
+
+## Kaggle Training Setup
+
+The system uses a **split-dataset** approach on Kaggle:
+
+1. **Code dataset** — GitHub repo clone at `/kaggle/input/datasets/tysonsiwela/multi-bot-system`
+2. **Data dataset** — OHLCV + processed data at `/kaggle/input/datasets/tysonsiwela/trading-data`
+3. **Fresh clone** at `/kaggle/working/remote/Multi-Bot` for GitHub push (via `step8_push_to_github.py`)
+
+`env_config.py` resolves all paths automatically for both Kaggle and local environments.
+
+Full pipeline: `python kaggle_train.py`
 
 ---
 
 ## Operations
 
 ```bash
-# Start production stack
-cd trading-system
+# Start stack
 docker compose -f docker-compose.dev.yml up -d --build
 
-# Rebuild a single service after code changes
+# Rebuild a single service
 docker compose -f docker-compose.dev.yml build trading-engine
 docker compose -f docker-compose.dev.yml up -d trading-engine
 
-# View live trade journal
-tail -f trading-engine/logs/trade_journal.csv
+# Live trade journal
+tail -f trading-engine/logs/trade_journal_detailed.jsonl | python -m json.tool
 
 # Engine logs
 docker compose -f docker-compose.dev.yml logs trading-engine --tail=50 -f
@@ -319,16 +315,11 @@ docker compose -f docker-compose.dev.yml logs trading-engine --tail=50 -f
 # Health check
 docker exec trading_backend curl -s http://trading-engine:8000/health
 
-# Run backtest (all 5 traders)
-docker exec trading_engine_main python /app/scripts/run_backtest.py
-
 # Manual retrain
+docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model quality
+docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model rl
+docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model regime
 docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model gru
-docker exec trading_model_retrainer python /app/scripts/retrain_incremental.py --model all
-
-# Full reset (clears all volumes)
-docker compose -f docker-compose.dev.yml down --volumes
-docker compose -f docker-compose.dev.yml up -d --build
 ```
 
 ---
@@ -337,42 +328,41 @@ docker compose -f docker-compose.dev.yml up -d --build
 
 ```
 trading-system/
+├── kaggle_train.py                   ← Kaggle entrypoint (full pipeline)
+├── env_config.py                     ← Path resolver (local + Kaggle)
+├── step8_push_to_github.py           ← Push weights + metrics to GitHub
 ├── .env                              ← Single source of truth for all services
-├── docker-compose.dev.yml            ← Production stack (6 services)
-├── docs/
+├── docker-compose.dev.yml
+├── docs/                             ← Documentation
 │   ├── README.md                     ← This file
-│   ├── CLAUDE.md                     ← Full Claude Code reference
 │   ├── models.md                     ← ML model details
 │   ├── strategies.md                 ← Trading strategy details
-│   └── system_assessment.md
+│   ├── system_architecture.md        ← Full architecture reference
+│   ├── system_assessment.md          ← Current status + bug history
+│   └── TRAINING_AND_BACKTEST.md      ← Training runbook
+├── instructions/                     ← Design docs
+│   ├── project-description.md
+│   ├── architecture.md
+│   └── research-plan.md
+├── pipeline/                         ← 9-step data + training pipeline
+│   ├── step0_resample.py  → step7b_train.py
+│   └── step6_backtest.py             ← 3-round reinforcement loop
 ├── backend/                          ← FastAPI (port 3000)
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── src/
-│       ├── routes/                   ← auth, traders, positions, analytics, system
-│       ├── services/                 ← redis_client, event_bus, state_reader
-│       └── websocket/manager.py      ← Redis pub/sub → WebSocket broadcast
-├── frontend/                         ← React/Nginx dashboard (port 3001)
-│   ├── Dockerfile
-│   └── src/
-│       ├── pages/                    ← Dashboard, Traders, Analytics, ML, TradeHistory
-│       ├── store/slices/             ← auth, traders, positions, analytics
-│       └── services/                 ← api, traderService, analyticsService
 └── trading-engine/                   ← Core engine (port 8000 internal)
-    ├── main.py                       ← ProductionTradingEngine + health server
-    ├── Dockerfile
-    ├── requirements.txt
-    ├── config/settings.py            ← Pydantic BaseSettings
+    ├── models/
+    │   ├── regime_classifier.py      ← PyTorch MLP, dual-TF cascade
+    │   ├── gru_lstm_predictor.py     ← GRU(256) + 3 heads
+    │   ├── quality_scorer.py         ← EV regressor, tiered Huber loss
+    │   ├── sentiment_model.py        ← FinBERT + VADER
+    │   └── rl_agent.py               ← PPO, CPU, model.zip save/load
+    ├── scripts/
+    │   ├── retrain_incremental.py    ← Manual / scheduled retraining
+    │   └── retrain_scheduler.py      ← Weekly/monthly trigger daemon
     ├── traders/                      ← trader_1 through trader_5
-    ├── models/                       ← GRULSTMPredictor, RegimeClassifier, QualityScorer,
-    │                                    SentimentModel, RLAgent
-    ├── monitors/portfolio_manager.py ← TP1/TP2, trailing stop, correlation, streak scaling
-    ├── services/                     ← SignalPipeline, EventBus, TradeJournal,
-    │                                    RiskEngine, PortfolioManager, DataFetcher
-    ├── indicators/market_structure.py← Vectorized ICT indicators (FVG, BOS, CHoCH, OB)
-    ├── scripts/                      ← run_backtest, retrain_incremental, retrain_scheduler
-    ├── weights/                      ← Trained model weights (volume-mounted)
-    └── logs/                         ← trade_journal.csv, trade_journal_detailed.jsonl
+    ├── services/                     ← SignalPipeline, DataFetcher, TradeJournal
+    ├── indicators/market_structure.py← Vectorized ICT (FVG, BOS, CHoCH, OB)
+    ├── weights/                      ← Trained model weights
+    └── logs/                         ← trade_journal.csv + trade_journal_detailed.jsonl
 ```
 
 ---
