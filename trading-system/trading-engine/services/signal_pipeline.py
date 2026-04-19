@@ -385,6 +385,7 @@ class SignalPipeline:
             "TRENDING_DOWN": 1.2 if signal_direction == "sell" else 0.9,
             "RANGING": 0.9,
             "VOLATILE": 0.85,
+            "CONSOLIDATION": 1.05,  # pre-breakout compression — slight positive bias for breakout traders
         }
         regime_mult = regime_mult_map.get(regime, 1.0)
 

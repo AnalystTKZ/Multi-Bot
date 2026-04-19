@@ -80,11 +80,11 @@ trading-system/
     │   └── trade_journal.py          ← CSV + JSONL; source of QualityScorer labels
     ├── models/
     │   ├── base_model.py             ← BaseModel(ABC); reload_if_updated() mtime check
-    │   ├── regime_classifier.py      ← PyTorch MLP 4-class; GMM labels; group-aware
+    │   ├── regime_classifier.py      ← PyTorch MLP 5-class; GMM labels; group-aware; 8-feature GMM with autocorr+hurst_proxy
     │   ├── gru_lstm_predictor.py     ← PyTorch GRU 3-head; regime-conditioned
     │   ├── quality_scorer.py         ← PyTorch MLP EV regressor; Huber loss
     │   ├── sentiment_model.py        ← FinBERT primary; VADER fallback
-    │   ├── rl_agent.py               ← PPO via SB3; 42-dim state; 16 actions
+    │   ├── rl_agent.py               ← PPO via SB3; 43-dim state; 16 actions
     │   └── weights/                  ← cwd-relative; run scripts from trading-engine/
     │       ├── gru_lstm/model.pt
     │       ├── regime_classifier.pkl
@@ -112,7 +112,7 @@ trading-system/
 
 | Model | Role | Output | Latest |
 |-------|------|--------|--------|
-| RegimeClassifier | Labels market state (4 classes) | `regime`, `regime_id`, `proba[4]`, `regime_confidence` | 4H 48.8% / 1H 41.1% acc |
+| RegimeClassifier | Labels market state (5 classes) | `regime`, `regime_id`, `proba[5]`, `regime_confidence` | 4H 48.8% / 1H 41.1% acc (4-class baseline; 5-class cold-start required) |
 | GRU-LSTM | Predicts direction + magnitude + uncertainty | `p_bull`, `p_bear`, `expected_move`, `expected_variance` | 7.45M samples, 44 combos |
 | QualityScorer | Predicts EV in R-multiples | `ev`, `quality_score` | 8,203 journal trades |
 | SentimentModel | News sentiment | `sentiment_score`, `sentiment_label` | Pre-trained (FinBERT) |
@@ -131,10 +131,10 @@ trading-system/
 
 | List | Length | Model |
 |------|--------|-------|
-| `SEQUENCE_FEATURES` | 53 | GRU |
-| `REGIME_FEATURES` | 59 | RegimeClassifier |
+| `SEQUENCE_FEATURES` | 74 | GRU |
+| `REGIME_FEATURES` | 61 | RegimeClassifier |
 | `QUALITY_FEATURES` | 17 | QualityScorer |
-| `RL_STATE_DIM` | 42 | RLAgent |
+| `RL_STATE_DIM` | 43 | RLAgent |
 
 **Known issues (2026-04-18):**
 - Quality score = 0.0 on all backtest trades — scorer trained but output not reaching inference path (P0)

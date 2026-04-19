@@ -27,7 +27,7 @@ from services.feature_engine import REGIME_FEATURES, REGIME_4H_FEATURES, REGIME_
 
 logger = logging.getLogger(__name__)
 
-CLASSES = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE"]
+CLASSES = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]
 N_FEATURES  = len(REGIME_FEATURES)   # full matrix width for _build_feature_matrix
 N_CLASSES   = len(CLASSES)
 
@@ -321,38 +321,34 @@ class RegimeClassifier(BaseModel):
         scaler   = StandardScaler()
         X_scaled = scaler.fit_transform(feat_df.values)
 
-        gmm = GaussianMixture(n_components=4, covariance_type="full",
+        gmm = GaussianMixture(n_components=5, covariance_type="full",
                                random_state=42, max_iter=200)
         cluster_ids = gmm.fit_predict(X_scaled)
 
-        # ── Map clusters → regime labels (same logic as fit_global_gmm) ──────
+        # ── Map clusters → regime labels (rank-based — guaranteed all 5 classes) ──
         centroids = scaler.inverse_transform(gmm.means_)
-        # cols: [eff, vol, drift, comp, vol_slope, atr_pctile]
-        vol_med     = np.median(centroids[:, 1])
-        drift_med   = np.median(np.abs(centroids[:, 2]))
-        eff_med     = np.median(centroids[:, 0])
-        atr_pct_med = np.median(centroids[:, 5]) if centroids.shape[1] > 5 else 0.5
-
+        remaining = list(range(5))
         cluster_labels: dict[int, int] = {}
-        remaining = set(range(4))
 
-        # VOLATILE first — highest vol, lowest efficiency (most distinct cluster)
         vol_c = max(remaining, key=lambda c: centroids[c, 1] - centroids[c, 0])
         cluster_labels[vol_c] = 3
-        remaining.discard(vol_c)
+        remaining.remove(vol_c)
 
-        # TRENDING_UP: most positive drift + above-median efficiency
         tu = max(remaining, key=lambda c: centroids[c, 2])
         cluster_labels[tu] = 0
-        remaining.discard(tu)
+        remaining.remove(tu)
 
-        # TRENDING_DOWN: most negative drift
         td = min(remaining, key=lambda c: centroids[c, 2])
         cluster_labels[td] = 1
-        remaining.discard(td)
+        remaining.remove(td)
 
-        # RANGING (consolidation or dead drift): the remainder
-        cluster_labels[remaining.pop()] = 2
+        # CONSOLIDATION (4): lowest atr_pctile + lowest autocorr (pre-breakout compression)
+        consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
+        cluster_labels[consol] = 4
+        remaining.remove(consol)
+
+        # RANGING (2): the remainder — moderate vol, near-zero drift, stable ATR
+        cluster_labels[remaining[0]] = 2
 
         labels = pd.Series(2, index=df.index, dtype=int)
         labels.loc[feat_df.index] = [cluster_labels[int(c)] for c in cluster_ids]
@@ -367,7 +363,7 @@ class RegimeClassifier(BaseModel):
 
     @staticmethod
     def _extract_gmm_features(df: pd.DataFrame, n_bar: int = 14) -> tuple[pd.DataFrame, pd.Index]:
-        """Extract 6 GMM labeling features from a single df. Returns (feat_df, valid_index).
+        """Extract 8 GMM labeling features from a single df. Returns (feat_df, valid_index).
 
         Features:
           eff        — efficiency ratio: how directional price movement is [0→1]
@@ -376,9 +372,12 @@ class RegimeClassifier(BaseModel):
           comp       — price range / ATR: how wide the range is vs current noise
           vol_slope  — Δ(ATR/close) over n_bar: volatility expanding or contracting
           atr_pctile — ATR percentile rank in own 3×n_bar history [0→1]
-                       Consolidation = low atr_pctile (bottom 20%) with low eff.
-                       Ranges from dead drift (atr_pctile≈0.5) differ from
-                       pre-breakout compression (atr_pctile≈0.1).
+          autocorr   — lag-1 autocorrelation of log-returns over n_bar window.
+                       High autocorr (>0) = momentum/trending. Near-zero = ranging.
+                       Mean-reverting = negative. This is a true time-series discriminator.
+          hurst_proxy — simplified Hurst exponent proxy: ratio of n_bar range to
+                       sqrt(n_bar) × realized vol. H>1 ≈ trending, H<1 ≈ mean-reverting.
+                       Uses log-log slope approximation: range_n / range_1 vs sqrt(n).
         """
         from indicators.market_structure import compute_atr
         close = df["close"]
@@ -390,21 +389,38 @@ class RegimeClassifier(BaseModel):
         drift     = (close - close.shift(n_bar)) / (n_bar * close + 1e-9)
         hi        = df["high"].rolling(n_bar, min_periods=n_bar).max()
         lo        = df["low"].rolling(n_bar, min_periods=n_bar).min()
-        # Absolute range / ATR: consolidation shrinks both, but this ratio stays
-        # informative — a tight BB squeeze has comp < 1.0, an expansion has comp > 2.0
         compression = (hi - lo) / (atr + 1e-9)
         vol_slope = rel_vol.diff(n_bar)
-        # ATR percentile rank in own rolling 3×n_bar history — the key consolidation signal.
-        # Pre-breakout compression drives atr_pctile toward 0 (ATR at multi-week low).
-        # Dead ranging keeps atr_pctile near 0.5 (ATR stable, not compressing).
         _hist_window = n_bar * 3
         atr_pctile = atr.rolling(_hist_window, min_periods=n_bar).apply(
             lambda x: float(np.searchsorted(np.sort(x[:-1]), x[-1])) / max(len(x) - 1, 1)
             if len(x) > 1 else 0.5, raw=True
         ).clip(0.0, 1.0)
+
+        # Lag-1 autocorrelation of log-returns over a rolling n_bar window.
+        # Trending markets have positive autocorr (momentum); ranging markets ≈ 0;
+        # mean-reverting have negative autocorr. This is the core time-series discriminator
+        # that pure cross-sectional features (ADX, ATR) miss.
+        log_ret = np.log(close / close.shift(1))
+        autocorr = log_ret.rolling(n_bar, min_periods=max(4, n_bar // 2)).apply(
+            lambda x: float(pd.Series(x).autocorr(lag=1)) if len(x) > 3 else 0.0,
+            raw=False
+        ).fillna(0.0).clip(-1.0, 1.0)
+
+        # Hurst exponent proxy: R/S statistic over n_bar window, normalized.
+        # R/S ∝ n^H; we approximate H by comparing range at n_bar vs range at n_bar//2.
+        # H > 0.5 → trending (persistent), H < 0.5 → mean-reverting (anti-persistent).
+        # Proxy: (range_n / range_half) / sqrt(2) — equals 1.0 at H=0.5, >1 at H>0.5.
+        range_n    = (hi - lo).clip(1e-9)
+        hi_half    = df["high"].rolling(max(2, n_bar // 2), min_periods=2).max()
+        lo_half    = df["low"].rolling(max(2, n_bar // 2), min_periods=2).min()
+        range_half = (hi_half - lo_half).clip(1e-9)
+        hurst_proxy = (range_n / range_half / (2 ** 0.5)).clip(0.2, 3.0)
+
         feat_df = pd.DataFrame({
             "eff": eff_ratio, "vol": rel_vol, "drift": drift,
             "comp": compression, "vol_slope": vol_slope, "atr_pctile": atr_pctile,
+            "autocorr": autocorr, "hurst_proxy": hurst_proxy,
         }).dropna()
         return feat_df, feat_df.index
 
@@ -444,76 +460,44 @@ class RegimeClassifier(BaseModel):
         gmm.fit(X_scaled)
 
         centroids = scaler.inverse_transform(gmm.means_)
-        # centroids cols: [eff, vol, drift, comp, vol_slope, atr_pctile]  (indices 0–5)
-        # Priority order: VOLATILE first (most distinct), then directional, then
-        # RANGING vs CONSOLIDATION split by atr_pctile.
+        # centroids cols: [eff, vol, drift, comp, vol_slope, atr_pctile, autocorr, hurst_proxy]
         #
-        # CONSOLIDATION = low atr_pctile (ATR at multi-period low, compression building)
-        #                 + low efficiency (price oscillating in tight band)
-        # RANGING       = moderate atr_pctile (ATR stable, not compressing) + low drift
+        # Rank-based assignment — guaranteed to assign exactly one cluster per class
+        # regardless of centroid magnitudes. Constraint-based logic fails for small or
+        # correlated groups (e.g. forex crosses) where all drift centroids are near zero.
         #
-        # We keep 4 classes to avoid changing SEQUENCE_FEATURES width. RANGING (class 2)
-        # maps to "dead ranging / consolidation not yet compressing". VOLATILE (class 3)
-        # maps to "expansion / breakout in progress". The GRU sees regime_4h_conf so it
-        # can weight ambiguous bars appropriately.
-        vol_med      = np.median(centroids[:, 1])
-        drift_med    = np.median(np.abs(centroids[:, 2]))
-        eff_med      = np.median(centroids[:, 0])
-        atr_pct_med  = np.median(centroids[:, 5]) if centroids.shape[1] > 5 else 0.5
-
+        # Assignment order (greedy, most-distinguishable first):
+        #   1. VOLATILE    — highest (vol - eff): high noise, low directionality
+        #   2. TRENDING_UP — highest drift among remaining (most positive momentum)
+        #   3. TRENDING_DOWN — lowest drift among remaining (most negative momentum)
+        #   4. RANGING     — the leftover cluster (low vol, low drift, low autocorr)
+        remaining = list(range(4))
         cluster_labels: dict[int, int] = {}
-        for c in range(4):
-            eff  = centroids[c, 0]
-            vol  = centroids[c, 1]
-            drift = centroids[c, 2]
-            atr_p = centroids[c, 5] if centroids.shape[1] > 5 else 0.5
-            if vol >= vol_med and eff <= eff_med:
-                cluster_labels[c] = 3   # VOLATILE: high vol, low efficiency
-            elif drift > drift_med * 0.5 and eff >= eff_med:
-                cluster_labels[c] = 0   # TRENDING_UP: positive drift + efficient
-            elif drift < -drift_med * 0.5 and eff >= eff_med:
-                cluster_labels[c] = 1   # TRENDING_DOWN: negative drift + efficient
-            elif atr_p < atr_pct_med and eff < eff_med:
-                # ATR compressing (below median percentile) + low efficiency =
-                # consolidation / pre-breakout squeeze. Still mapped to RANGING (2)
-                # so SEQUENCE_FEATURES stays at 71, but now labelled consistently.
-                cluster_labels[c] = 2
-            else:
-                cluster_labels[c] = 2   # dead ranging / ambiguous
 
-        # Resolve duplicate assignments: keep the most extreme cluster per class,
-        # demote extras to RANGING (class 2) which is the safest fallback.
-        assigned: dict[int, list] = {}
-        for c, label in cluster_labels.items():
-            assigned.setdefault(label, []).append(c)
-        for label, clusters in assigned.items():
-            if len(clusters) > 1:
-                if label == 3:   # VOLATILE — keep highest vol
-                    best = max(clusters, key=lambda c: centroids[c, 1])
-                elif label == 0:  # TU — keep highest drift
-                    best = max(clusters, key=lambda c: centroids[c, 2])
-                elif label == 1:  # TD — keep lowest drift
-                    best = min(clusters, key=lambda c: centroids[c, 2])
-                else:
-                    best = clusters[0]
-                for c in clusters:
-                    if c != best:
-                        cluster_labels[c] = 2
+        # 1. VOLATILE: highest (vol - eff) — chaotic expansion, low directional efficiency
+        vol_c = max(remaining, key=lambda c: centroids[c, 1] - centroids[c, 0])
+        cluster_labels[vol_c] = 3
+        remaining.remove(vol_c)
 
-        # Ensure all 4 classes are represented; if RANGING still has no cluster
-        # (shouldn't happen but defensive) assign the leftover cluster with
-        # minimum |drift| and lowest vol_slope.
-        used = set(cluster_labels.values())
-        if 2 not in used:
-            unassigned = [c for c in range(4) if cluster_labels.get(c) not in (0, 1, 3)]
-            if not unassigned:
-                # find the RANGING duplicate with least extreme features
-                ranging_cs = [c for c, v in cluster_labels.items() if v == 2]
-                if ranging_cs:
-                    pass  # already have ranging
-            # nothing to do — 2 is default fallback so it's always present via above logic
+        # 2. TRENDING_UP: highest signed drift among remaining 3
+        tu_c = max(remaining, key=lambda c: centroids[c, 2])
+        cluster_labels[tu_c] = 0
+        remaining.remove(tu_c)
 
-        dist = {CLASSES[v]: 0 for v in range(4)}
+        # 3. TRENDING_DOWN: lowest signed drift among remaining 2
+        td_c = min(remaining, key=lambda c: centroids[c, 2])
+        cluster_labels[td_c] = 1
+        remaining.remove(td_c)
+
+        # 4. CONSOLIDATION (4): lowest atr_pctile + lowest autocorr among remaining 2
+        consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
+        cluster_labels[consol] = 4
+        remaining.remove(consol)
+
+        # 5. RANGING (2): the last cluster — moderate vol, near-zero drift, stable ATR
+        cluster_labels[remaining[0]] = 2
+
+        dist = {CLASSES[v]: 0 for v in range(N_CLASSES)}
         for v in cluster_labels.values():
             dist[CLASSES[v]] += 1
         logger.info("GMM fitted on %d samples — cluster→regime: %s dist: %s",
@@ -617,8 +601,23 @@ class RegimeClassifier(BaseModel):
         tu_conf = (adx_conf_tu * stack_conf_tu * drift_conf_tu).astype(np.float32)
         conf[tu_mask] = (0.5 + 0.5 * pd.Series(tu_conf, index=df.index)[tu_mask]).astype(np.float32)
 
+        # ── CONSOLIDATION — pre-breakout compression: very low ATR + negative drift ─
+        # atr_pctile at multi-week low (bottom 20%) AND ATR falling (vol_slope < 0)
+        _hist_consol = n_bar * 3
+        atr_slope = atr.rolling(n_bar, min_periods=max(2, n_bar // 2)).apply(
+            lambda x: (x[-1] - x[0]) / (x[0] + 1e-9) if len(x) > 1 else 0.0, raw=True
+        ).fillna(0.0)
+        consol_vol_thresh = float(atr_pctile.quantile(0.25))  # bottom quartile only
+        consol_mask = (atr_pctile <= consol_vol_thresh) & (atr_slope < 0) & ~volatile_mask & ~tu_mask & ~td_mask
+        labels[consol_mask] = 4
+        # confidence: how deep into low-ATR territory + how negative the slope is
+        consol_atr_conf   = (1.0 - (atr_pctile / (consol_vol_thresh + 1e-9)).clip(0.0, 1.0))
+        consol_slope_conf = (-atr_slope).clip(0.0, 0.5) / 0.5
+        consol_conf = (0.5 * consol_atr_conf + 0.5 * consol_slope_conf).clip(0.1, 1.0)
+        conf[consol_mask] = (0.5 + 0.5 * consol_conf[consol_mask]).astype(np.float32)
+
         # ── RANGING — confidence based on distance from trend/volatile boundaries ─
-        ranging_mask = ~tu_mask & ~td_mask & ~volatile_mask
+        ranging_mask = ~tu_mask & ~td_mask & ~volatile_mask & ~consol_mask
         # Deep range: ADX low AND atr_pctile away from breakout threshold → high conf
         adx_range_conf   = (1.0 - (adx / 25.0).clip(0.0, 1.0))              # low ADX = confident ranging
         atr_range_conf   = (1.0 - (atr_pctile / vol_thresh).clip(0.0, 1.0)) # low atr_pctile = confident ranging
@@ -637,7 +636,7 @@ class RegimeClassifier(BaseModel):
         _short_run_mask = _run_len < _min_persist
         conf[_short_run_mask] = 0.0   # zero weight → treated as ambiguous by trainer
 
-        dist = {CLASSES[c]: int((labels == c).sum()) for c in range(4)}
+        dist = {CLASSES[c]: int((labels == c).sum()) for c in range(N_CLASSES)}
         ambiguous = int((conf < 0.4).sum())
         logger.info("Rule labels [%s]: %s  ambiguous(conf<0.4)=%d (total=%d)  short_runs_zeroed=%d",
                     timeframe or "?", dist, ambiguous, len(labels), int(_short_run_mask.sum()))

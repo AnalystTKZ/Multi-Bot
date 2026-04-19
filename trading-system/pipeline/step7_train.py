@@ -184,7 +184,7 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
                 "p_bull": round(rng.uniform(0.3, 0.8), 3),
                 "p_bear": round(rng.uniform(0.2, 0.7), 3),
                 "quality_score": round(rng.uniform(0.4, 0.9), 3),
-                "regime": rng.choice(["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE"]),
+                "regime": rng.choice(["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]),
                 "sentiment_score": round(rng.uniform(-0.5, 0.5), 3),
             },
             "signal_metadata": {

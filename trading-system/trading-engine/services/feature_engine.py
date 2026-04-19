@@ -74,18 +74,20 @@ SEQUENCE_FEATURES = [
     "regime_4h_1",          # 27  one-hot: 4H regime is TRENDING_DOWN
     "regime_4h_2",          # 28  one-hot: 4H regime is RANGING
     "regime_4h_3",          # 29  one-hot: 4H regime is VOLATILE
-    "regime_4h_conf",       # 30  4H regime classifier confidence (max softmax)
+    "regime_4h_4",          # 30  one-hot: 4H regime is CONSOLIDATION
+    "regime_4h_conf",       # 31  4H regime classifier confidence (max softmax)
     # ── 1H regime context (structure layer) ─────────────────────────────────
-    "regime_1h_0",          # 31  one-hot: 1H regime is TRENDING_UP
-    "regime_1h_1",          # 32  one-hot: 1H regime is TRENDING_DOWN
-    "regime_1h_2",          # 33  one-hot: 1H regime is RANGING
-    "regime_1h_3",          # 34  one-hot: 1H regime is VOLATILE
-    "regime_1h_conf",       # 35  1H regime classifier confidence
+    "regime_1h_0",          # 32  one-hot: 1H regime is TRENDING_UP
+    "regime_1h_1",          # 33  one-hot: 1H regime is TRENDING_DOWN
+    "regime_1h_2",          # 34  one-hot: 1H regime is RANGING
+    "regime_1h_3",          # 35  one-hot: 1H regime is VOLATILE
+    "regime_1h_4",          # 36  one-hot: 1H regime is CONSOLIDATION
+    "regime_1h_conf",       # 37  1H regime classifier confidence
     # ── Volatility dynamics ───────────────────────────────────────────────────
-    "vol_slope_seq",        # 36
+    "vol_slope_seq",        # 38
     # ── Time encoding (cyclic) ────────────────────────────────────────────────
-    "time_sin",             # 37
-    "time_cos",             # 38
+    "time_sin",             # 39
+    "time_cos",             # 40
     # ── ICT structural features ───────────────────────────────────────────────
     # EMA structure
     "ema_pullback_zone",    # 39  price in EMA21-50 band normalised by ATR (0=outside, ±1=inside)
@@ -136,7 +138,7 @@ SEQUENCE_FEATURES = [
     "macro_vix_level",          # 70  VIX percentile — risk-off context for sizing
     "macro_yield_spread",       # 71  10Y-2Y spread — macro regime signal
 ]
-# Total: 72 features
+# Total: 74 features (72 + regime_4h_4 + regime_1h_4 for CONSOLIDATION class)
 
 # ─── 4H BIAS classifier features ─────────────────────────────────────────────
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
@@ -239,10 +241,11 @@ REGIME_FEATURES = [
     "atr_pctile",           # 36  ATR percentile rank — consolidation signal
     # ── Regime memory ─────────────────────────────────────────────────────────
     "prev_regime_0",        # 37
-    "prev_regime_1",        # 37
-    "prev_regime_2",        # 38
-    "prev_regime_3",        # 39
-    "regime_confidence",    # 40
+    "prev_regime_1",        # 38
+    "prev_regime_2",        # 39
+    "prev_regime_3",        # 40
+    "prev_regime_4",        # 41  one-hot: previous regime was CONSOLIDATION
+    "regime_confidence",    # 42
 ] + INDEX_FEATURES + [
     "macro_vix_level",
     "macro_yield_spread",
@@ -276,7 +279,7 @@ QUALITY_FEATURES = [
 # [24-29] Portfolio state  (open_pos, drawdown, daily_pnl, trades_today, last_result, equity_norm)
 # [30-33] Instrument one-hot (EURUSD, GBPUSD, USDJPY, XAUUSD)
 # [34-41] ATR history ratios (8 lags: 1,4,8,24,48,96,168,336 bars)
-RL_STATE_DIM = 42
+RL_STATE_DIM = 43
 
 _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
 _ATR_LAGS = [1, 4, 8, 24, 48, 96, 168, 336]
@@ -590,10 +593,10 @@ class FeatureEngine:
         def _regime_onehot(series, conf_series, prefix):
             if series is not None:
                 cur = series.reindex(out.index, method="ffill").fillna(2).astype(int)
-                for k in range(4):
+                for k in range(5):
                     extra[f"{prefix}_{k}"] = (cur == k).to_numpy(dtype=np.float32)
             else:
-                for k in range(4):
+                for k in range(5):
                     extra[f"{prefix}_{k}"] = np.zeros(n, dtype=np.float32)
             if conf_series is not None:
                 extra[f"{prefix}_conf"] = (
@@ -1056,13 +1059,13 @@ class FeatureEngine:
             _sorted = np.sort(_atr_window[:-1])
             feats[36] = float(np.searchsorted(_sorted, _cur_atr)) / max(len(_sorted), 1)
 
-        # ── Regime memory (indices 37–40) — prev_regime one-hot ─────────
+        # ── Regime memory (indices 37–41) — prev_regime one-hot ─────────
         # Populated externally by callers that track regime state over time.
-        # Defaults to RANGING (class 2) = [0, 0, 1, 0] when not set.
+        # Defaults to RANGING (class 2) = [0, 0, 1, 0, 0] when not set.
 
-        # ── Macro features (indices 42–60) ────────────────────────────────
+        # ── Macro features (indices 43–61) ────────────────────────────────
         macro_df = self._build_macro_frame(df.index, symbol)
-        base_macro = 42  # after 8 base + 5×4 MTF + 6 S/R + 3 regime dynamics + 4 prev_regime + 1 confidence
+        base_macro = 43  # after 8 base + 5×4 MTF + 6 S/R + 3 regime dynamics + 5 prev_regime + 1 confidence
         for i, name in enumerate(INDEX_NAMES):
             feats[base_macro + i] = float(np.clip(macro_df[f"idx_{name}_ret"].iloc[-1] * 100, -5, 5))
         feats[base_macro + len(INDEX_NAMES)]     = float(np.clip(macro_df["macro_vix_level"].iloc[-1], 0, 2))
@@ -1090,7 +1093,7 @@ class FeatureEngine:
         feats[3] = float(np.clip(ml_base.get("p_bull_gru", 0.5), 0, 1))
         feats[4] = float(np.clip(ml_base.get("p_bear_gru", 0.5), 0, 1))
 
-        regime_map = {"TRENDING_UP": 0, "TRENDING_DOWN": 1, "RANGING": 2, "VOLATILE": 3}
+        regime_map = {"TRENDING_UP": 0, "TRENDING_DOWN": 1, "RANGING": 2, "VOLATILE": 3, "CONSOLIDATION": 4}
         feats[5] = float(regime_map.get(ml_base.get("regime", "RANGING"), 2))
         feats[6] = float(np.clip(ml_base.get("sentiment_score", 0.0), -1, 1))
 
@@ -1159,8 +1162,8 @@ class FeatureEngine:
         state[0] = _safe(ml_preds, "p_bull", 0.5)
         state[1] = _safe(ml_preds, "p_bear", 0.5)
         state[2] = _safe(ml_preds, "entry_depth", 0.3)
-        regime_map = {"TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 3.0}
-        state[3] = regime_map.get(ml_preds.get("regime", "RANGING"), 2.0) / 3.0
+        regime_map = {"TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 3.0, "CONSOLIDATION": 4.0}
+        state[3] = regime_map.get(ml_preds.get("regime", "RANGING"), 2.0) / 4.0
         state[4] = _safe(ml_preds, "sentiment_score", 0.0)
         state[5] = _safe(ml_preds, "quality_score", 0.5)
 

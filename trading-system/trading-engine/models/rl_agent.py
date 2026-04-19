@@ -1,7 +1,7 @@
 """
 rl_agent.py — PPO-based strategy selector via Stable-Baselines3.
 
-State: 42-dim vector.
+State: 43-dim vector.
 Actions (v2 — expanded): 16
   0           = NoTrade
   1–5         = Trader 1–5 @ default threshold (0.55)
@@ -30,7 +30,7 @@ from models.base_model import BaseModel
 
 logger = logging.getLogger(__name__)
 
-N_STATE = 42
+N_STATE = 43
 
 # Action space layout
 # [0]       NoTrade

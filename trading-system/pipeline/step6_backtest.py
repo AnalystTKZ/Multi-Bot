@@ -238,17 +238,17 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             commission = abs(pnl) * 0.001
             pnl_net    = round(pnl - commission, 4)
 
-            # Build real 42-dim RL state from backtest trade fields
-            regime_map = {"TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 3.0}
+            # Build real 43-dim RL state from backtest trade fields
+            regime_map = {"TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 3.0, "CONSOLIDATION": 4.0}
             _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
             trader_idx = int(trader.split("_")[1]) - 1 if "_" in trader else 0  # 0-4
 
-            state_vec = [0.0] * 42
+            state_vec = [0.0] * 43
             # [0-5] ML predictions
             state_vec[0] = float(tr.get("p_bull", 0.5))
             state_vec[1] = float(tr.get("p_bear", 0.5))
             state_vec[2] = float(np.clip(conf, 0.0, 1.0))            # entry_depth proxy
-            state_vec[3] = float(regime_map.get(tr.get("regime", "RANGING"), 2.0) / 3.0)
+            state_vec[3] = float(regime_map.get(tr.get("regime", "RANGING"), 2.0) / 4.0)
             state_vec[4] = 0.0                                        # sentiment — unavailable
             state_vec[5] = float(tr.get("quality_score", 0.5))
             # [6-13] Market structure

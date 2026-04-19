@@ -696,7 +696,7 @@ def _precompute_ml_cache(
         # ── Helper: batch regime inference using predict_batch ────────────────
         def _batch_regime(rc_model, df_src, htf_src, step=None):
             """Run predict_batch on df_src, return (filled_ids, filled_conf, regime_preds_dict)."""
-            _classes = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE"]
+            _classes = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]
             _n = len(df_src)
             _step = step or max(1, _n // 20_000)
             try:
@@ -740,7 +740,7 @@ def _precompute_ml_cache(
                     _regime_4h_conf   = _c4h.reindex(df.index, method="ffill").fillna(0.25)
                     # Map bar indices to regime names (use 15M-aligned)
                     regime_preds = {i: str(v) for i, v in enumerate(
-                        np.array(["TRENDING_UP","TRENDING_DOWN","RANGING","VOLATILE"])[_regime_4h_series.values]
+                        np.array(["TRENDING_UP","TRENDING_DOWN","RANGING","VOLATILE","CONSOLIDATION"])[_regime_4h_series.values]
                     )}
                     logger.info("ML cache: 4H regime batch done for %s (%d 4H bars → %d 15M bars)",
                                 symbol, len(df_4h_src), n)
