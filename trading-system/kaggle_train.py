@@ -157,17 +157,30 @@ if not env["on_kaggle"] and env["weights"].exists():
 
 # ── Step 8: Push training outputs to GitHub ───────────────────────────────────
 push_script = env["base"] / "step8_push_to_github.py"
-if os.getenv("GITHUB_TOKEN") and push_script.exists():
-    print("\n=== STEP 8: Pushing outputs to GitHub ===")
-    result = subprocess.run(
-        [sys.executable, str(push_script)],
-        cwd=str(env["base"]),
-        env={
-            **os.environ,
-            "PYTHONPATH": f"{env['base']}:{env['base'] / 'trading-engine'}",
-        },
-    )
-    if result.returncode != 0:
-        print("WARNING: GitHub push failed (non-fatal — weights still saved locally)")
+github_token = os.getenv("GITHUB_TOKEN", "")
+if not github_token:
+    print("\nWARNING: GITHUB_TOKEN not set — skipping GitHub push")
+elif not push_script.exists():
+    print(f"\nWARNING: step8 script not found at {push_script} — skipping GitHub push")
+else:
+    # Verify the fresh clone exists (created by notebook cell 0)
+    remote_clone = Path("/kaggle/working/remote/Multi-Bot")
+    if env["on_kaggle"] and not remote_clone.exists():
+        print(f"\nWARNING: remote clone not found at {remote_clone}")
+        print("  Cell 0 should have run: git clone https://...@github.com/AnalystTKZ/Multi-Bot.git /kaggle/working/remote/Multi-Bot")
+        print("  Skipping GitHub push.")
     else:
-        print("=== GitHub push complete ===")
+        print("\n=== STEP 8: Pushing outputs to GitHub ===")
+        result = subprocess.run(
+            [sys.executable, str(push_script)],
+            cwd=str(env["base"]),
+            env={
+                **os.environ,
+                "GITHUB_TOKEN": github_token,   # explicit — survives subprocess boundary
+                "PYTHONPATH": f"{env['base']}:{env['base'] / 'trading-engine'}",
+            },
+        )
+        if result.returncode != 0:
+            print("WARNING: GitHub push failed (non-fatal — weights still saved locally)")
+        else:
+            print("=== GitHub push complete ===")

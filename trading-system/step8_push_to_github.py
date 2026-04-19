@@ -74,8 +74,8 @@ ARTIFACTS: list[tuple[Path, Path]] = [
     (ENGINE / "weights" / "quality_scorer.pkl",
      Path("trading-system/trading-engine/weights/quality_scorer.pkl")),
 
-    (ENGINE / "weights" / "rl_ppo" / "policy.pt",
-     Path("trading-system/trading-engine/weights/rl_ppo/policy.pt")),
+    (ENGINE / "weights" / "rl_ppo" / "model.zip",
+     Path("trading-system/trading-engine/weights/rl_ppo/model.zip")),
 
     (ENGINE / "weights" / "macro_correlations.json",
      Path("trading-system/trading-engine/weights/macro_correlations.json")),
