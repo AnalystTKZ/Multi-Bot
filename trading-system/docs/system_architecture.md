@@ -19,7 +19,7 @@ Capital.com REST
             └─ SignalPipeline.process_bar(symbol, df, df_htf)
 
                 Step 1: ML Inference (_run_ml_inference)
-                  ├─ RegimeClassifier  → regime, regime_id, proba[4], regime_confidence
+                  ├─ RegimeClassifier  → regime, regime_id, proba[5], regime_confidence
                   ├─ GRU-LSTM          → p_bull, p_bear, expected_move, expected_variance
                   ├─ QualityScorer     → ev, quality_score
                   └─ SentimentModel    → sentiment_score, sentiment_label
@@ -61,13 +61,13 @@ The four models run in a strict order. Each feeds the next.
 
 ### 1. RegimeClassifier
 
-**What it does:** Labels the current market state as one of 4 regimes.
+**What it does:** Labels the current market state as one of 5 regimes.
 
-- Architecture: PyTorch MLP — `59 → 128 → 64 → 4` with BatchNorm, GELU, residual skip, Dropout 0.5
-- Classes: `0=TRENDING_UP`, `1=TRENDING_DOWN`, `2=RANGING`, `3=VOLATILE`
-- Output: `{"regime": str, "regime_id": int, "proba": [4 floats], "regime_confidence": float}`
+- Architecture: PyTorch MLP — `61 → 128 → 64 → 5` with BatchNorm, GELU, residual skip, Dropout 0.5
+- Classes: `0=TRENDING_UP`, `1=TRENDING_DOWN`, `2=RANGING`, `3=VOLATILE`, `4=CONSOLIDATION`
+- Output: `{"regime": str, "regime_id": int, "proba": [5 floats], "regime_confidence": float}`
 - 3-bar hysteresis: regime must be predicted 3 consecutive bars before switching
-- Latest accuracy: 4H → 47.7%, 1H → 39.5% (4-class balanced; random = 25%)
+- Requires cold-start retrain (feature contract changed: 61 REGIME_FEATURES, 5 classes)
 
 **Warm-start:** `_warm_start` flag checked before `_build_mlp()` — weights preserved if feature count matches. Trains at `lr=6e-5` (warm) vs `lr=3e-4` (cold).
 

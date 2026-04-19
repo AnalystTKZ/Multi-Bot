@@ -455,7 +455,7 @@ class RegimeClassifier(BaseModel):
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_all)
 
-        gmm = GaussianMixture(n_components=4, covariance_type="full",
+        gmm = GaussianMixture(n_components=5, covariance_type="full",
                               random_state=42, max_iter=300)
         gmm.fit(X_scaled)
 
