@@ -974,7 +974,8 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
 
     # ── Gate 5: LTF behaviour filter ─────────────────────────────────────────
     _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
-    _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
+    # Default tracks direction threshold — 0.72 blocked almost all VOLATILE bars
+    _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", str(_dir_thresh)))
 
     _range_valid    = bool(bar.get("range_valid", False))
     _range_side     = str(bar.get("range_side", ""))
@@ -985,7 +986,8 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     )
 
     if _ltf_behaviour == "CONSOLIDATING":
-        return None
+        if str(os.getenv("BLOCK_LTF_CONSOLIDATING", "0")).lower() in ("1", "true", "yes"):
+            return None
 
     if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
         return None
@@ -1004,10 +1006,15 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
                 return None
 
     if _ltf_behaviour == "RANGING":
-        if not _range_valid:
-            return None                         # no identifiable range — skip
-        if _range_side != side:
-            return None                         # price is at the wrong wall
+        _strict_rng = str(os.getenv("RANGING_REQUIRE_RANGE", "0")).lower() in ("1", "true", "yes")
+        if _strict_rng:
+            if not _range_valid:
+                return None
+            if str(_range_side or "") != side:
+                return None
+        else:
+            if _range_valid and str(_range_side or "") and str(_range_side) != side:
+                return None
 
     # ── ATR-based entry / SL / TP ─────────────────────────────────────────────
     # For RANGING entries: TP is the far wall of the range rather than a fixed
@@ -1314,12 +1321,14 @@ def _backtest_trader(
             _ev = float(_qs_result["ev"])
             ml_preds["ev"]            = _ev
             ml_preds["quality_score"] = float(_qs_result["quality_score"])
-            if _ev < float(os.getenv("MIN_EV_THRESHOLD", "0.10")):
+            # Default -1.0 R: cold/OOD quality heads often sit slightly negative; 0.10
+            # starved the journal. Set MIN_EV_THRESHOLD=0.10 in .env for production.
+            if _ev < float(os.getenv("MIN_EV_THRESHOLD", "-1.0")):
                 _dbg["quality_block"] += 1
                 continue
         elif ml_preds and ml_preds.get("ev") is not None:
             # Cache had ev (e.g. from _run_bar_ml fallback path)
-            if float(ml_preds["ev"]) < float(os.getenv("MIN_EV_THRESHOLD", "0.10")):
+            if float(ml_preds["ev"]) < float(os.getenv("MIN_EV_THRESHOLD", "-1.0")):
                 _dbg["quality_block"] += 1
                 continue
 
@@ -1397,9 +1406,18 @@ def _backtest_trader(
         _dbg["no_signal"], _dbg["pm_reject"]
     )
     if not trades:
-        return {"trades": 0, "win_rate": 0.0, "total_return": 0.0,
-                "profit_factor": 0.0, "max_drawdown": 0.0, "sharpe": 0.0,
-                "tp1_rate": 0.0, "tp2_rate": 0.0}
+        return {
+            "trades": 0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "tp1_rate": 0.0,
+            "tp2_rate": 0.0,
+            "trade_log": [],
+            "gate_diagnostics": dict(_dbg),
+        }
 
     pnls = [t["pnl"] for t in trades]
     wins = [p for p in pnls if p > 0]
@@ -1450,6 +1468,7 @@ def _backtest_trader(
         "gross_profit": round(gross_profit, 2),
         "gross_loss": round(gross_loss, 2),
         "trade_log": trades,
+        "gate_diagnostics": dict(_dbg),
     }
 
 
@@ -1699,6 +1718,14 @@ def main():
             f" {r['total_return']:>7.1%} {r['tp1_rate']:>5.1%} {r['tp2_rate']:>5.1%}"
             f" {r['max_drawdown']:>6.1%} {r['sharpe']:>7.2f}"
         )
+        gd = r.get("gate_diagnostics") or {}
+        if gd:
+            print(
+                f"  gate_diagnostics: bars={gd.get('total')} no_signal={gd.get('no_signal')} "
+                f"quality_block={gd.get('quality_block')} session_skip={gd.get('session')} "
+                f"density={gd.get('density')} pm_reject={gd.get('pm_reject')} "
+                f"daily_skip={gd.get('daily')} cooldown={gd.get('cooldown')}"
+            )
 
     # Print calibration summary
     if calibration_report.get("traders"):

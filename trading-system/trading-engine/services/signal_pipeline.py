@@ -302,7 +302,7 @@ class SignalPipeline:
 
         # Gate 5: LTF behaviour filter
         _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
-        _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
+        _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", str(_dir_thresh)))
 
         _range_valid    = bool(bar.get("range_valid", False))
         _range_side     = str(bar.get("range_side", ""))
@@ -313,7 +313,8 @@ class SignalPipeline:
         )
 
         if _ltf_behaviour == "CONSOLIDATING":
-            return None
+            if str(os.getenv("BLOCK_LTF_CONSOLIDATING", "0")).lower() in ("1", "true", "yes"):
+                return None
 
         if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
             return None
@@ -329,10 +330,15 @@ class SignalPipeline:
                     return None
 
         if _ltf_behaviour == "RANGING":
-            if not _range_valid:
-                return None
-            if _range_side != side:
-                return None
+            _strict_rng = str(os.getenv("RANGING_REQUIRE_RANGE", "0")).lower() in ("1", "true", "yes")
+            if _strict_rng:
+                if not _range_valid:
+                    return None
+                if str(_range_side or "") != side:
+                    return None
+            else:
+                if _range_valid and str(_range_side or "") and str(_range_side) != side:
+                    return None
 
         # ATR-based entry / SL / TP
         # For RANGING entries: TP targets the far wall of the range.
