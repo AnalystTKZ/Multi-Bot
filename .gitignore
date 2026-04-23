@@ -30,6 +30,7 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+.codex/
 
 # Coverage
 **/coverage/
