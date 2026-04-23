@@ -254,7 +254,7 @@ class SignalPipeline:
           3. GRU direction ≥ ML_DIRECTION_THRESHOLD  →  determines side
           4. HTF bias must agree with GRU side
           5. LTF behaviour must permit entry:
-               TRENDING   → valid pullback/retest required (HH+HL or LH+LL + retest)
+               TRENDING   → optional pullback filter (REQUIRE_TRENDING_PULLBACK=1 is strict)
                VOLATILE   → high-conviction GRU only
                RANGING    → significant range + price at correct boundary
                CONSOLIDATING → blocked
@@ -277,10 +277,10 @@ class SignalPipeline:
         if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
             return None
 
-        # Gate 3: GRU direction
+        # Gate 3: GRU direction (default 0.58 matches config.settings)
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
-        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.52"))
+        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
             conf = p_bull
@@ -292,7 +292,7 @@ class SignalPipeline:
 
         # Gate 4: HTF bias alignment
         _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.65"))
+        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.58"))
         if _htf_bias == "BIAS_UP" and side == "sell":
             return None
         if _htf_bias == "BIAS_DOWN" and side == "buy":
@@ -308,6 +308,9 @@ class SignalPipeline:
         _range_side     = str(bar.get("range_side", ""))
         _pullback_valid = bool(bar.get("pullback_valid", False))
         _pullback_side  = str(bar.get("pullback_side", ""))
+        _strict_trend_pb = str(os.getenv("REQUIRE_TRENDING_PULLBACK", "0")).lower() in (
+            "1", "true", "yes",
+        )
 
         if _ltf_behaviour == "CONSOLIDATING":
             return None
@@ -316,10 +319,14 @@ class SignalPipeline:
             return None
 
         if _ltf_behaviour == "TRENDING":
-            if not _pullback_valid:
-                return None                     # no confirmed HH/HL or LH/LL retest
-            if _pullback_side != side:
-                return None                     # pullback structure disagrees with GRU side
+            if _strict_trend_pb:
+                if not _pullback_valid:
+                    return None
+                if str(_pullback_side or "") != side:
+                    return None
+            else:
+                if _pullback_valid and str(_pullback_side or "") and str(_pullback_side) != side:
+                    return None
 
         if _ltf_behaviour == "RANGING":
             if not _range_valid:

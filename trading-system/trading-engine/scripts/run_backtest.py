@@ -918,15 +918,15 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
       1. ATR sanity
       2. GRU variance ≤ MAX_UNCERTAINTY
       3. GRU direction ≥ ML_DIRECTION_THRESHOLD  →  determines side (buy/sell)
-      4. HTF bias must AGREE with GRU side:
-           buy  → regime must be BIAS_UP   (or BIAS_NEUTRAL when p_bull is strong)
-           sell → regime must be BIAS_DOWN (or BIAS_NEUTRAL when p_bear is strong)
+      4. HTF bias must AGREE with GRU side
       5. LTF behaviour must PERMIT entry:
-           TRENDING   → allow (price is moving, follow the move)
-           VOLATILE   → allow if GRU conviction is high (p ≥ VOLATILE_THRESHOLD)
-           RANGING    → block (no directional momentum; GRU already encodes this,
-                               but explicit block prevents false breakout entries)
-           CONSOLIDATING → block (tight range, likely to reverse; wait for breakout)
+           TRENDING   → by default, GRU+HTF gates only; if a swing pullback is
+                        detected, require it to match GRU side (set
+                        REQUIRE_TRENDING_PULLBACK=1 to require a pullback for every
+                        TRENDING bar — that mode is very sparse)
+           VOLATILE   → high GRU confidence only
+           RANGING    → significant range + correct boundary
+           CONSOLIDATING → blocked
 
     EV gate runs after PM enrichment in _backtest_trader (needs rr_ratio).
     """
@@ -946,7 +946,8 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     # ── Gate 3: GRU direction ─────────────────────────────────────────────────
     p_bull = float(ml_preds.get("p_bull", 0.5))
     p_bear = float(ml_preds.get("p_bear", 0.5))
-    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.52"))
+    # Default 0.58 matches config.settings.ML_DIRECTION_THRESHOLD and published docs
+    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
     if p_bull >= p_bear and p_bull >= _dir_thresh:
         side = "buy"
         conf = p_bull
@@ -959,10 +960,10 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     # ── Gate 4: HTF bias alignment ────────────────────────────────────────────
     # BIAS_UP   → only buys allowed (HTF trend is up)
     # BIAS_DOWN → only sells allowed (HTF trend is down)
-    # BIAS_NEUTRAL → allow both directions only when GRU conviction is strong;
-    #                neutral means no clear structural bias — require higher bar.
+    # BIAS_NEUTRAL → require at least the same bar as the direction threshold
+    # (0.65 was stricter than the direction gate and filtered almost all NEUTRAL bars)
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.65"))
+    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.58"))
 
     if _htf_bias == "BIAS_UP" and side == "sell":
         return None   # HTF is bullish — no sells
@@ -972,13 +973,6 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
         return None   # no structural bias — require stronger GRU conviction
 
     # ── Gate 5: LTF behaviour filter ─────────────────────────────────────────
-    # TRENDING      → allow ONLY at a valid pullback/retest (HH+HL or LH+LL
-    #                 confirmed, price retesting the last HL/LH before next leg).
-    #                 Entering mid-trend on a breakout is chasing — wait for retest.
-    # VOLATILE      → allow only when GRU is highly confident
-    # CONSOLIDATING → block (tight pre-breakout squeeze — wait for the move)
-    # RANGING       → allow ONLY when a significant, clearly-bounded range is
-    #                 detected AND the GRU direction matches the near boundary.
     _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
     _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.72"))
 
@@ -986,6 +980,9 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     _range_side     = str(bar.get("range_side", ""))
     _pullback_valid = bool(bar.get("pullback_valid", False))
     _pullback_side  = str(bar.get("pullback_side", ""))
+    _strict_trend_pb = str(os.getenv("REQUIRE_TRENDING_PULLBACK", "0")).lower() in (
+        "1", "true", "yes",
+    )
 
     if _ltf_behaviour == "CONSOLIDATING":
         return None
@@ -994,10 +991,17 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
         return None
 
     if _ltf_behaviour == "TRENDING":
-        if not _pullback_valid:
-            return None                         # no confirmed HH/HL or LH/LL retest
-        if _pullback_side != side:
-            return None                         # pullback structure disagrees with GRU side
+        if _strict_trend_pb:
+            if not _pullback_valid:
+                return None
+            if str(_pullback_side or "") != side:
+                return None
+        else:
+            # When a retest is detected, it must not contradict the GRU side; when
+            # none is detected, rely on direction + HTF gates (REQUIRE_TRENDING_PULLBACK=1
+            # restores the old "pullback on every TRENDING bar" rule, which is ~0 signals).
+            if _pullback_valid and str(_pullback_side or "") and str(_pullback_side) != side:
+                return None
 
     if _ltf_behaviour == "RANGING":
         if not _range_valid:
@@ -1256,7 +1260,7 @@ def _backtest_trader(
         raw_signal["confidence"] = float(raw_signal["confidence"]) * _density_mult
 
         # If after density penalty confidence falls below direction threshold, skip.
-        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.52"))
+        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
         # High-conviction mode: MIN_CONFIDENCE env var (e.g. 0.90) filters to 67% WR tier.
         _min_conf = float(os.getenv("MIN_CONFIDENCE", "0.0"))
         if _min_conf > 0 and raw_signal["confidence"] < _min_conf:
