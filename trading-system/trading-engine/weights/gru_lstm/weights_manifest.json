@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-19T15:19:42.582896+00:00",
+  "saved_at": "2026-04-19T15:46:35.920003+00:00",
   "gru": {
     "n_features": 74,
     "feature_hash": "de7064f59f88cad2",
@@ -83,8 +83,8 @@
     "num_layers": 1
   },
   "regime_4h": {
-    "n_features": 31,
-    "feature_hash": "8fe39ce2bfa80e3a",
+    "n_features": 34,
+    "feature_hash": "d6513db1389ee178",
     "feature_names": [
       "adx_14_base",
       "ema_stack_score",
@@ -98,6 +98,9 @@
       "vol_slope",
       "regime_duration",
       "atr_pctile",
+      "efficiency_ratio",
+      "autocorr_lag1",
+      "hurst_proxy",
       "idx_asx200_ret",
       "idx_cac40_ret",
       "idx_dax_ret",
@@ -120,8 +123,8 @@
     ]
   },
   "regime_1h": {
-    "n_features": 15,
-    "feature_hash": "2605e7349f68cf81",
+    "n_features": 18,
+    "feature_hash": "ec077f384f0de792",
     "feature_names": [
       "adx_14_base",
       "ema_stack_score",
@@ -137,7 +140,10 @@
       "mtf_4h_bb_width",
       "vol_slope",
       "regime_duration",
-      "atr_pctile"
+      "atr_pctile",
+      "efficiency_ratio",
+      "autocorr_lag1",
+      "hurst_proxy"
     ]
   },
   "quality": {
