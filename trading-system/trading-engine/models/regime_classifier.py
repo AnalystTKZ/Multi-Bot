@@ -807,10 +807,24 @@ class RegimeClassifier(BaseModel):
                  np.where((h >= 13) & (h < 18), 3, 0))))
             X[:, 5] = sc.astype(np.float32)
 
-        # BOS and sweep counts — detect_break_of_structure uses rolling(center=True)
-        # which reads swing_n future bars. Until these indicators are made strictly
-        # causal, indices 6–7 stay zero to avoid lookahead contamination.
-        # X[:, 6] and X[:, 7] already initialised to 0 above.
+        # BOS and sweep counts — causal rolling sums over 24 bars.
+        # Reads pre-computed bos_bull/bos_bear and sweep_bull/sweep_bear columns
+        # if present; falls back to zero if the columns are absent so inference
+        # remains safe on DataFrames that lack these indicators.
+        try:
+            _bos_window = 24
+            if "bos_bull" in df.columns or "bos_bear" in df.columns:
+                _bos_bull = df["bos_bull"].fillna(0) if "bos_bull" in df.columns else pd.Series(0, index=df.index)
+                _bos_bear = df["bos_bear"].fillna(0) if "bos_bear" in df.columns else pd.Series(0, index=df.index)
+                _bos_count = (_bos_bull + _bos_bear).rolling(_bos_window, min_periods=1).sum()
+                X[:, 6] = np.clip(np.nan_to_num(_bos_count.values.astype(np.float32), nan=0.0), 0, 20)
+            if "sweep_bull" in df.columns or "sweep_bear" in df.columns:
+                _sw_bull = df["sweep_bull"].fillna(0) if "sweep_bull" in df.columns else pd.Series(0, index=df.index)
+                _sw_bear = df["sweep_bear"].fillna(0) if "sweep_bear" in df.columns else pd.Series(0, index=df.index)
+                _sw_count = (_sw_bull + _sw_bear).rolling(_bos_window, min_periods=1).sum()
+                X[:, 7] = np.clip(np.nan_to_num(_sw_count.values.astype(np.float32), nan=0.0), 0, 20)
+        except Exception:
+            pass  # columns absent — X[:, 6] and X[:, 7] remain zero (safe fallback)
 
         # ── MTF features (indices 8–27): 5 TFs × 4 features each ─────────────
         _tf_map = {"5M": (8, "5M"), "15M": (12, "15M"), "1H": (16, "1H"),
@@ -875,6 +889,20 @@ class RegimeClassifier(BaseModel):
             X[:, 35] = np.clip(duration, 0, 50) / 50.0
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: regime_duration failed: {exc}") from exc
+
+        # ── ATR percentile (index 36) ─────────────────────────────────────────
+        # Mirrors create_rule_labels exactly: rolling(n_bar*3) searchsorted rank.
+        # n_bar=14, window=42 — same as _hist = n_bar * 3 in the label path.
+        try:
+            _atr_feat = compute_atr(df, 14)
+            _atr_hist_window = 14 * 3  # 42 bars — matches _hist = n_bar * 3
+            _atr_pctile = _atr_feat.rolling(_atr_hist_window, min_periods=14).apply(
+                lambda x: float(np.searchsorted(np.sort(x[:-1]), x[-1])) / max(len(x) - 1, 1)
+                if len(x) > 1 else 0.5, raw=True
+            ).clip(0.0, 1.0).fillna(0.5)
+            X[:, 36] = _atr_pctile.values.astype(np.float32)
+        except Exception as exc:
+            raise RuntimeError(f"_build_feature_matrix: atr_pctile failed: {exc}") from exc
 
         # ── Time-series discriminators (indices 45–47) ───────────────────────
         # efficiency_ratio, autocorr_lag1, hurst_proxy — same features used
@@ -1043,7 +1071,7 @@ class RegimeClassifier(BaseModel):
             # LTF RANGING (1) collapses to 0% — 2× boost on top of inverse-freq weight.
             # HTF BIAS_NEUTRAL (2) stalls at ~33% — 1.5× boost.
             if self._mode == "ltf_behaviour":
-                class_w[1] *= 2.0   # RANGING
+                class_w[1] *= 3.0   # RANGING
             elif self._mode == "htf_bias":
                 class_w[2] *= 1.5   # BIAS_NEUTRAL
             class_w = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
@@ -1109,10 +1137,12 @@ class RegimeClassifier(BaseModel):
                 # bar weight scales each bar's contribution to training stability.
                 cw_per_bar = class_w[labels]
                 # Hard floor on bar_weights so ambiguous bars still contribute.
-                # Raised from 0.3 → 0.4: RANGING bars have legitimately low confidence
-                # (they're defined as "not trending/volatile/consolidating") and were
-                # being suppressed below the learning threshold at 0.3.
-                bar_w_floored = torch.clamp(bar_weights, min=0.4)
+                # Lowered from 0.4 → 0.1: RANGING bars have legitimately low confidence
+                # (they're defined as "not trending/volatile/consolidating") but were
+                # over-weighted at 0.4, drowning out high-confidence TRENDING/VOLATILE
+                # gradient signal. 0.1 keeps ambiguous bars in training without
+                # overwhelming the loss.
+                bar_w_floored = torch.clamp(bar_weights, min=0.1)
                 weighted_ce = (soft_ce * cw_per_bar * bar_w_floored).mean()
 
                 # Entropy regularisation: encourages uncertainty on ambiguous bars

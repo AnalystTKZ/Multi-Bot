@@ -139,6 +139,7 @@ class GRULSTMPredictor(BaseModel):
     def __init__(self):
         super().__init__()
         self._model = None
+        self._temperature: float = 1.0
         os.makedirs(WEIGHT_DIR, exist_ok=True)
         if self.is_trained:
             try:
@@ -197,7 +198,7 @@ class GRULSTMPredictor(BaseModel):
             self._model.eval()
             with torch.no_grad():
                 dir_logits, mag_pred, log_variance_pred = self._model(x)
-                p_bull = float(torch.sigmoid(dir_logits)[0].item())
+                p_bull = float(torch.sigmoid(dir_logits[0] / self._temperature).item())
                 expected_move = float(torch.relu(mag_pred)[0].item())
                 expected_variance = float((torch.nn.functional.softplus(log_variance_pred) + 1e-6)[0].item())
                 expected_volatility = float(np.sqrt(expected_variance))
@@ -289,6 +290,60 @@ class GRULSTMPredictor(BaseModel):
         except Exception as exc:
             logger.warning("GRULSTMPredictor.get_embedding_batch failed: %s", exc)
             return None
+
+    def fit_temperature(
+        self,
+        logits: np.ndarray,
+        labels: np.ndarray,
+    ) -> float:
+        """
+        Fit a scalar temperature T that minimises binary cross-entropy (NLL) on
+        the calibration set, then save it as `temperature.pt` alongside `model.pt`.
+
+        logits : (N,) float32 — raw direction logits (before sigmoid)
+        labels : (N,) float32 — binary labels (0.0 or 1.0); NaN rows are ignored
+
+        Returns the fitted temperature T.
+        """
+        import torch
+        from scipy.optimize import minimize_scalar
+
+        logits = np.asarray(logits, dtype=np.float64).ravel()
+        labels = np.asarray(labels, dtype=np.float64).ravel()
+
+        # Drop NaN labels (dead-zone bars)
+        mask = ~np.isnan(labels)
+        logits = logits[mask]
+        labels = labels[mask]
+
+        if len(logits) == 0:
+            logger.warning("fit_temperature: no valid samples after NaN mask — keeping T=1.0")
+            return self._temperature
+
+        def _nll(T: float) -> float:
+            """Binary cross-entropy under temperature T (scalar, minimised)."""
+            T = max(T, 1e-6)
+            scaled = logits / T
+            # Numerically stable: log(1 + exp(z)) - y*z
+            loss = np.logaddexp(0.0, scaled) - labels * scaled
+            return float(np.mean(loss))
+
+        result = minimize_scalar(_nll, bounds=(0.05, 10.0), method="bounded")
+        T_opt = float(result.x)
+
+        self._temperature = T_opt
+        logger.info("fit_temperature: T=%.4f  (NLL before=%.4f, after=%.4f)",
+                    T_opt, _nll(1.0), _nll(T_opt))
+
+        # Save sidecar
+        _temp_file = os.path.join(WEIGHT_DIR, "temperature.pt")
+        try:
+            torch.save(torch.tensor(T_opt, dtype=torch.float32), _temp_file)
+            logger.info("fit_temperature: saved %s", _temp_file)
+        except Exception as exc:
+            logger.error("fit_temperature: could not save %s: %s", _temp_file, exc)
+
+        return T_opt
 
     def train(
         self,
@@ -953,6 +1008,17 @@ class GRULSTMPredictor(BaseModel):
             m.eval()
             self._model = m
             self._loaded = True
+            # Load temperature sidecar if present
+            _temp_file = os.path.join(WEIGHT_DIR, "temperature.pt")
+            if os.path.exists(_temp_file):
+                try:
+                    self._temperature = float(torch.load(_temp_file, map_location="cpu", weights_only=True).item())
+                    logger.info("GRULSTMPredictor: loaded temperature=%.4f from %s", self._temperature, _temp_file)
+                except Exception as _te:
+                    logger.warning("GRULSTMPredictor: could not load temperature.pt: %s", _te)
+                    self._temperature = 1.0
+            else:
+                self._temperature = 1.0
             logger.info("GRULSTMPredictor loaded from %s (device=%s)", WEIGHT_FILE, DEVICE)
         except Exception as exc:
             logger.error("GRULSTMPredictor.load failed: %s", exc)

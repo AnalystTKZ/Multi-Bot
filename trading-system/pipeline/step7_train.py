@@ -111,14 +111,29 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
 
         rr = round(tp_dist / (sl_dist + 1e-9), 2)
 
-        # Outcome: ~55% win rate (realistic for ICT strategies)
-        win = rng.random() < 0.55
-        if win:
-            exit_reason = "tp1"
+        # Outcome distribution matching real backtest:
+        #   tp2         ~25%  full TP hit
+        #   tp1         ~20%  partial TP, held on
+        #   be_or_trail ~10%  TP1 then trailed/stopped
+        #   sl          ~40%  stopped out
+        #   time_exit    ~5%  timed out
+        outcome_roll = rng.random()
+        if outcome_roll < 0.25:
+            exit_reason = "tp2"
             pnl = tp_dist * size
-        else:
+        elif outcome_roll < 0.45:
+            exit_reason = "tp1"
+            pnl = tp_dist * 0.75 * size
+        elif outcome_roll < 0.55:
+            exit_reason = "be_or_trail"
+            pnl = tp_dist * 0.4 * size
+        elif outcome_roll < 0.95:
             exit_reason = "sl"
             pnl = -sl_dist * size
+        else:
+            exit_reason = "time_exit"
+            # Small residual PnL for timed-out trades (can be positive or negative)
+            pnl = float(rng.uniform(-sl_dist * 0.3, tp_dist * 0.2)) * size
 
         commission = abs(pnl) * 0.001
         pnl_net = round(pnl - commission, 4)
@@ -184,13 +199,21 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
                 "p_bull": round(rng.uniform(0.3, 0.8), 3),
                 "p_bear": round(rng.uniform(0.2, 0.7), 3),
                 "quality_score": round(rng.uniform(0.4, 0.9), 3),
-                "regime": rng.choice(["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]),
+                "regime": rng.choice(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL", "TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]),
                 "sentiment_score": round(rng.uniform(-0.5, 0.5), 3),
             },
             "signal_metadata": {
                 "atr": round(atr, 6),
-                "adx": float(bar.get("adx_14", 20.0)),
-                "ema_stack": float(bar.get("ema_stack", 0)),
+                # Bar-derived values consumed by quality_scorer.create_labels()
+                "adx_at_signal":        float(bar.get("adx_14", 20.0)),
+                "atr_ratio_at_signal":  float(bar.get("atr_normalized", 1.0))
+                                        if bar.get("atr_normalized") else
+                                        round(atr / (close * 0.001 + 1e-12), 4),
+                "volume_ratio":         float(bar.get("volume_ratio", 1.0)),
+                "spread_at_signal":     round(atr * rng.uniform(0.05, 0.20), 6),
+                "news_in_30min":        int(rng.random() < 0.10),   # ~10% chance of nearby news
+                "strategy_win_rate_20": round(float(rng.uniform(0.40, 0.70)), 3),
+                "ema_stack":            float(bar.get("ema_stack", 0)),
             },
         })
 

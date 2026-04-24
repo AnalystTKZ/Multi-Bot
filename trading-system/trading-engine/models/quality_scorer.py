@@ -173,7 +173,8 @@ class QualityScorer(BaseModel):
         #   tp1         → TP1 hit, held for more: good, 0.75× rr
         #   be_or_trail → TP1 hit then trailed/stopped: partial win, 0.4× rr
         #   sl_*        → stopped out: -1.0R
-        #   time_exit   → timed out with no clear outcome: skip (return None)
+        #   time_exit   → timed out: +0.2×rr_planned if pnl>0, -0.5 if pnl<0, 0.0 if flat
+        pnl = float(r.get("pnl", 0.0))
         if exit_reason == "tp2":
             return float(np.clip(rr_planned, 0.1, 10.0))
         if exit_reason == "tp1":
@@ -184,6 +185,12 @@ class QualityScorer(BaseModel):
             return -1.0
         if "tp" in exit_reason:
             return float(np.clip(rr_planned, 0.1, 10.0))
+        if "time" in exit_reason:
+            if pnl > 0:
+                return float(np.clip(rr_planned * 0.2, 0.01, 10.0))
+            if pnl < 0:
+                return -0.5
+            return 0.0
         return None
 
     def create_labels(self, journal_path: str) -> pd.DataFrame:
@@ -214,7 +221,8 @@ class QualityScorer(BaseModel):
                 continue
 
             rr = float(r.get("rr_ratio", 1.5))
-            ml_scores = r.get("ml_model_scores", {})
+            ml_scores = r.get("ml_model_scores", {}) or {}
+            sig_meta  = r.get("signal_metadata",  {}) or {}
             rows.append({
                 "strategy_id":          r.get("trader", ""),
                 "signal_direction":     1 if r.get("side") == "buy" else 0,
@@ -223,13 +231,31 @@ class QualityScorer(BaseModel):
                 "p_bear_gru":           float(ml_scores.get("p_bear", 0.5)),
                 "regime_class":         ml_scores.get("regime", "RANGING"),
                 "sentiment_score":      float(ml_scores.get("sentiment_score", 0.0)),
-                "adx_at_signal":        20.0,
-                "atr_ratio_at_signal":  1.0,
-                "volume_ratio":         1.0,
-                "spread_at_signal":     1.0,
+                # Read real bar-derived values from signal_metadata; fall back to
+                # ml_model_scores for fields that some recorders put there, and
+                # only use the neutral default when both are absent.
+                "adx_at_signal":        float(
+                    sig_meta.get("adx_at_signal",
+                    sig_meta.get("adx",
+                    ml_scores.get("adx_at_signal", 20.0)))),
+                "atr_ratio_at_signal":  float(
+                    sig_meta.get("atr_ratio_at_signal",
+                    sig_meta.get("atr_ratio",
+                    ml_scores.get("atr_ratio_at_signal", 1.0)))),
+                "volume_ratio":         float(
+                    sig_meta.get("volume_ratio",
+                    ml_scores.get("volume_ratio", 1.0))),
+                "spread_at_signal":     float(
+                    sig_meta.get("spread_at_signal",
+                    sig_meta.get("spread",
+                    ml_scores.get("spread_at_signal", 1.0)))),
                 "session_at_signal":    r.get("session", "NY"),
-                "news_in_30min":        0,
-                "strategy_win_rate_20": 0.5,
+                "news_in_30min":        int(
+                    sig_meta.get("news_in_30min",
+                    ml_scores.get("news_in_30min", 0))),
+                "strategy_win_rate_20": float(
+                    sig_meta.get("strategy_win_rate_20",
+                    ml_scores.get("strategy_win_rate_20", 0.5))),
                 "gru_uncertainty":      float(ml_scores.get("expected_variance", 0.1)),
                 "regime_duration":      float(ml_scores.get("regime_duration", 0.5)),
                 "vol_slope_at_signal":  float(ml_scores.get("vol_slope", 0.0)),

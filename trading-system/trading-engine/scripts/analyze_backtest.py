@@ -125,8 +125,11 @@ def check_regime_distribution(trades: list[dict]) -> dict:
         flags.append(
             f"{dominant} = {regime_counts[dominant]/total*100:.0f}% of trades — regime collapse?"
         )
-    missing = [r for r in ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "CONSOLIDATION"]
-               if r not in regime_counts]
+    _EXPECTED_REGIMES = {
+        "BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL",
+        "TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE",
+    }
+    missing = [r for r in sorted(_EXPECTED_REGIMES) if r not in regime_counts]
     if missing:
         flags.append(f"Regimes never traded: {missing}")
 

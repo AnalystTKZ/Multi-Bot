@@ -824,6 +824,7 @@ def _precompute_ml_cache(
                     # Stream batches directly from seq_arr — no full (N,SEQ,F) tensor.
                     # sliding_window_view of the whole array would be ~1 GB per symbol;
                     # slicing batch-sized windows keeps peak RAM to batch_size×SEQ_LEN×F.
+                    _T = getattr(gru_model, "_temperature", 1.0)
                     with torch.no_grad():
                         for b_start in range(0, n_valid, batch_size):
                             b_end = min(b_start + batch_size, n_valid)
@@ -835,7 +836,7 @@ def _precompute_ml_cache(
                             xb = torch.from_numpy(batch_raw.copy()).to(DEVICE)
                             with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
                                 dl, mp, lv = m(xb)
-                            all_p_bull[b_start:b_end]  = torch.sigmoid(dl).cpu().numpy()
+                            all_p_bull[b_start:b_end]  = torch.sigmoid(dl / _T).cpu().numpy()
                             all_mag[b_start:b_end]     = torch.relu(mp).cpu().numpy()
                             all_log_var[b_start:b_end] = lv.cpu().numpy()
                             del xb, dl, mp, lv, batch_raw

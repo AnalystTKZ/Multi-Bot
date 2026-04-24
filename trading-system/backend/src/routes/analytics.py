@@ -25,9 +25,12 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
 REGIME_SCORE_MAP = {
-    "TRENDING_DOWN": -1,
+    "BIAS_DOWN": -1,
+    "BIAS_NEUTRAL": 0,
+    "BIAS_UP": 1,
+    "TRENDING": 2,
     "RANGING": 0,
-    "TRENDING_UP": 1,
+    "CONSOLIDATING": 0,
     "VOLATILE": 2,
     "UNKNOWN": 0,
 }

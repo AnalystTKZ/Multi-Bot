@@ -384,6 +384,11 @@ class SignalPipeline:
                 "strategy":          "ml_native",
                 "pullback_valid":    _pullback_valid,
                 "pullback_level":    float(bar.get("pullback_level", float("nan"))),
+                "adx_at_signal":     float(ml_preds.get("adx_14", ml_preds.get("adx", 20.0))),
+                "atr_ratio_at_signal": float(ml_preds.get("atr_normalized", ml_preds.get("atr_ratio", 1.0))),
+                "volume_ratio":      float(ml_preds.get("volume_ratio", 1.0)),
+                "spread_at_signal":  float(ml_preds.get("spread_pips", 1.0)),
+                "news_in_30min":     int(ml_preds.get("news_in_30min", 0)),
             },
         }
 
