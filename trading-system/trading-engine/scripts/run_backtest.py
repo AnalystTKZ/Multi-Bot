@@ -75,6 +75,14 @@ TRADER_NAMES = {
 }
 
 
+def _env_ml_enabled() -> bool:
+    """Avoid importing config.settings (pydantic) — Kaggle images can ship mismatched pydantic_core."""
+    v = os.getenv("ML_ENABLED", "true").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
 def _csv_columns(path: str) -> list[str]:
     with open(path, newline="") as fh:
         return next(csv.reader(fh), [])
@@ -1520,9 +1528,7 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
             raise
 
     from monitors.portfolio_manager import PortfolioManager
-    from config.settings import Settings
-    _settings = Settings()
-    pm = PortfolioManager(_settings, bar_date=bt_start)
+    pm = PortfolioManager(_PM_SETTINGS, bar_date=bt_start)
 
     symbols = TRADER_SYMBOLS.get("ml_trader", _ALL_SYMBOLS)
     result = _backtest_trader("ml_trader", symbols, pm, bt_start, bt_end,
@@ -1540,8 +1546,6 @@ def main():
     args = parser.parse_args()
 
     from monitors.portfolio_manager import PortfolioManager
-    from config.settings import Settings
-    _settings = Settings()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs("logs", exist_ok=True)
@@ -1551,7 +1555,7 @@ def main():
 
     # ── Load ML models (if ML_ENABLED) ───────────────────────────────────────
     ml_models: dict = {}
-    if _settings.ML_ENABLED:
+    if _env_ml_enabled():
         logger.info("ML_ENABLED=True — loading models for backtest inference...")
         _ensure_mpl_config_dir()
 

@@ -2,8 +2,12 @@
 pandas>=2.1.0
 numpy>=1.26.0
 python-dotenv>=1.0.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
+# Pinned tightly — Kaggle base image ships an old pydantic-core that lacks
+# validate_core_schema, causing ImportError before backtest runs a single bar.
+# These three versions are co-released and must stay in sync.
+pydantic==2.7.4
+pydantic-core==2.18.4
+pydantic-settings==2.3.4
 
 # Async + HTTP
 aiohttp>=3.9.0
