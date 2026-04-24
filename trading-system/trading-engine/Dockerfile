@@ -1,17 +1,25 @@
 FROM python:3.11-slim
 
-# Build essentials for LightGBM, XGBoost, pandas, etc.
+# Build essentials for LightGBM, XGBoost, pandas, faiss-cpu, etc.
 RUN apt-get update && apt-get install -y \
     build-essential \
     libgomp1 \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 
-# Install PyTorch CPU-only wheel first (~700MB vs ~2.5GB for the default CUDA build)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# Install PyTorch CPU-only wheel.
+# On ARM64 (Oracle Cloud A1/Ampere) the pytorch.org/whl/cpu index has no arm64 wheels —
+# PyPI itself carries the correct aarch64 CPU wheel, so we omit --index-url on ARM.
+RUN arch=$(uname -m) && \
+    if [ "$arch" = "x86_64" ]; then \
+        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu; \
+    else \
+        pip install --no-cache-dir torch; \
+    fi
 
 # Install everything else
 RUN pip install --no-cache-dir --timeout=120 --retries=5 -r requirements.txt

@@ -70,3 +70,7 @@ trading-system/trading-engine/logs/*.log
 
 # Backtesting datasets
 trading-system/backtesting/datasets/
+
+# Production env — never commit real secrets
+trading-system/.env.production
+trading-system/.env
