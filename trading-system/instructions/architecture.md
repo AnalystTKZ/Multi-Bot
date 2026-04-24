@@ -1,6 +1,6 @@
 # System Architecture — ML-Native Trading System
 
-Updated 2026-04-19. For the full living reference see `docs/system_architecture.md` and `docs/TRAINING_AND_BACKTEST.md`.
+Updated 2026-04-24. For the full living reference see `docs/system_architecture.md` and `docs/TRAINING_AND_BACKTEST.md`.
 
 > **ML_ENABLED=true is the default.** The engine raises `ModelNotTrainedError` if any model weight is missing. Train all models before starting — see `docs/TRAINING_AND_BACKTEST.md`.
 
@@ -37,14 +37,14 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
         ▼
   run_backtest._precompute_ml_cache(symbol, df, htf)
         │
-        ├── RegimeClassifier (4H bias)   — 31 features → regime_4h + conf
-        ├── RegimeClassifier (1H struct) — 15 features → regime_1h + conf
+        ├── RegimeClassifier (4H bias)   — 34 features → regime_4h + conf
+        ├── RegimeClassifier (1H struct) — 18 features → regime_1h + conf
         ├── Build 74-feature sequence matrix (regime injected at each timestep)
         └── GRU-LSTM batch inference     — (N, 30, 74) → p_bull, p_bear, expected_variance
         │
         ▼
   Bar loop (dict lookups only):
-        ├── Gate 1: expected_variance > 0.80 → skip
+        ├── Gate 1: expected_variance > MAX_UNCERTAINTY (env default 2.0) → skip
         ├── Gate 2: max(p_bull, p_bear) < 0.58 → skip
         ├── Dead zone 12:00–13:00 UTC → skip
         ├── Cooldown 10 bars → skip
@@ -58,12 +58,12 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
 
 ---
 
-## Live Trading Architecture (currently broken)
+## Live Trading Architecture
 
-`main.py` and `signal_pipeline.py` still try to import and call deleted trader classes.
-They must be rewritten to use the unified ML signal path before live trading works.
+`main.py` and `signal_pipeline.py` are both functional. `signal_pipeline._compute_ml_signal`
+mirrors `run_backtest._compute_backtest_signal` exactly and is the live inference path.
 
-Target architecture (not yet implemented):
+Architecture:
 ```
 Capital.com REST API → DataFetcher → MARKET_DATA (Redis)
         │
@@ -71,7 +71,7 @@ Capital.com REST API → DataFetcher → MARKET_DATA (Redis)
   ProductionTradingEngine.on_market_data()
         │
         ▼
-  SignalPipeline.process_bar() [needs rewrite]
+  SignalPipeline.process_bar()
         ├── RegimeClassifier (4H + 1H)
         ├── GRU-LSTM
         ├── QualityScorer (post-signal)
@@ -93,10 +93,10 @@ All models are PyTorch on GPU except RL. **LightGBM and XGBoost removed.**
 
 | Model | Algorithm | Weight | Role |
 |---|---|---|---|
-| RegimeClassifier (4H) | PyTorch MLP 31→128→64→5, BatchNorm, GELU, residual | `weights/regime_4h.pkl` | 4H macro regime bias |
-| RegimeClassifier (1H) | PyTorch MLP 15→128→64→5, BatchNorm, GELU, residual | `weights/regime_1h.pkl` | 1H intraday structure |
-| GRU-LSTM | GRU(64,2L)→LSTM(128)→LayerNorm→3 heads | `weights/gru_lstm/model.pt` | p_bull, p_bear, magnitude, uncertainty |
-| QualityScorer | PyTorch MLP 17→64→32→1, Huber loss, identity output | `weights/quality_scorer.pkl` | EV in R-multiples |
+| RegimeClassifier (4H) | PyTorch MLP 34→128→64→3, BatchNorm, GELU, residual | `weights/regime_htf.pkl` | 4H macro bias: BIAS_UP/DOWN/NEUTRAL |
+| RegimeClassifier (1H) | PyTorch MLP 18→128→64→4, BatchNorm, GELU, residual | `weights/regime_ltf.pkl` | 1H behaviour: TRENDING/RANGING/CONSOLIDATING/VOLATILE |
+| GRU-LSTM | GRU(64,2L)→LSTM(128,2L)→shared FC→3 heads + temperature.pt | `weights/gru_lstm/model.pt` | p_bull, p_bear, magnitude, uncertainty |
+| QualityScorer | PyTorch MLP 17→64→32→1, class-weighted Huber loss, identity output | `weights/quality_scorer.pkl` | EV in R-multiples |
 | SentimentModel | FinBERT (HuggingFace) + VADER fallback | pre-trained | News/macro directional bias |
 | RLAgent | PPO via stable-baselines3, CPU, 43-dim state, 16 actions | `weights/rl_ppo/model.zip` | Selectivity tier |
 
@@ -120,8 +120,8 @@ GRU is excluded from per-round reinforcement loop (catastrophic forgetting risk)
 | List | Length | Used by |
 |------|--------|---------|
 | `SEQUENCE_FEATURES` | 74 | GRU training + inference |
-| `REGIME_4H_FEATURES` | 31 | RegimeClassifier (4H) |
-| `REGIME_1H_FEATURES` | 15 | RegimeClassifier (1H) |
+| `REGIME_4H_FEATURES` | 34 | RegimeClassifier (4H bias) |
+| `REGIME_1H_FEATURES` | 18 | RegimeClassifier (1H behaviour) |
 | `QUALITY_FEATURES` | 17 | QualityScorer |
 | `RL_STATE_DIM` | 43 | RLAgent |
 
@@ -183,7 +183,6 @@ GRU is excluded from per-round reinforcement loop (catastrophic forgetting risk)
 
 | Issue | File | Impact |
 |-------|------|--------|
-| Imports deleted trader classes | `trading-engine/main.py` | Live engine won't start |
-| Calls `trader.analyze_market()` | `services/signal_pipeline.py` | Live pipeline broken |
-| RL policy collapsed (action=1 always) | `models/rl_agent.py` | Needs ≥200 trades + entropy tuning |
-| Regime accuracy 4H ~49%, 1H ~41% | `models/regime_classifier.py` | Investigate GMM labeling |
+| RL policy needs action diversity | `models/rl_agent.py` | Needs ≥200 journal trades + entropy tuning |
+| HTF BIAS_NEUTRAL recall ~30-38% | `models/regime_classifier.py` | NEUTRAL bars under-predicted; being improved |
+| VectorStore broken | `models/vector_store.py` | numpy import bug + dim mismatch; being fixed |

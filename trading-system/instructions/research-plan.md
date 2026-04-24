@@ -1,9 +1,12 @@
 # Research & Implementation Plan
 
-Updated 2026-04-06. **SUPERSEDED 2026-04-19.**
+Updated 2026-04-06. **SUPERSEDED 2026-04-24.**
 
 > The 5 ICT rule-based traders described below have been removed. ICT concepts are now
 > encoded as numeric features in `SEQUENCE_FEATURES` (74 features) and learned by the GRU-LSTM.
+> Regime class names used below (TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, CONSOLIDATION)
+> are old and no longer exist. Current HTF classes: BIAS_UP/BIAS_DOWN/BIAS_NEUTRAL. Current LTF
+> classes: TRENDING/RANGING/CONSOLIDATING/VOLATILE.
 > This file is retained as background context. For current architecture see `docs/system_architecture.md`.
 
 ---
@@ -62,11 +65,14 @@ Updated 2026-04-06. **SUPERSEDED 2026-04-19.**
 
 | Model | Algorithm | Status |
 |---|---|---|
-| GRULSTMPredictor | GRU(20)→LSTM(128)→Dense(3,sigmoid) | Architecture complete; training in progress (CPU, 50 epochs, ~60-90 min) |
-| RegimeClassifier | LightGBM 4-class + 3-bar hysteresis | **TRAINED** — `trading-engine/weights/regime_classifier.pkl` |
-| QualityScorer | XGBoost binary (TP=1/SL=0) | **TRAINED** — `trading-engine/weights/quality_scorer.pkl` |
+| GRULSTMPredictor | PyTorch GRU(64,2L)→LSTM(128,2L)→3 heads, 74 features, temperature.pt | **TRAINED** — `weights/gru_lstm/model.pt` |
+| RegimeClassifier (HTF) | PyTorch MLP 34→128→64→3, BIAS_UP/DOWN/NEUTRAL | **TRAINED** — `weights/regime_htf.pkl` |
+| RegimeClassifier (LTF) | PyTorch MLP 18→128→64→4, TRENDING/RANGING/CONSOLIDATING/VOLATILE | **TRAINED** — `weights/regime_ltf.pkl` |
+| QualityScorer | PyTorch MLP 17→64→32→1, class-weighted Huber, EV regressor | **TRAINED** — `weights/quality_scorer.pkl` |
 | SentimentModel | FinBERT (ProsusAI/finbert) + VADER | Pre-trained — available immediately |
-| RLAgent | PPO via stable-baselines3, 42-dim state, **16 actions** | **TRAINED** — `trading-engine/weights/rl_ppo/` |
+| RLAgent | PPO via stable-baselines3, CPU, 43-dim state, **16 actions** | **TRAINED** — `weights/rl_ppo/model.zip` |
+
+> **Note:** LightGBM and XGBoost have been removed. All models are now PyTorch.
 
 ### Training Infrastructure (Pipeline)
 - All training runs through `pipeline/step7_train.py` → `trading-engine/scripts/retrain_incremental.py`
@@ -171,12 +177,13 @@ Updated 2026-04-06. **SUPERSEDED 2026-04-19.**
 | Data fallback | yfinance | Auto symbol mapping (XAUUSD→GC=F etc.) |
 | Execution | Capital.com REST | `CapitalComSession` + `BrokerConnector` |
 | Indicators | pandas, numpy | All vectorized in `market_structure.py` |
-| ML — time series | TensorFlow CPU `tensorflow-cpu 2.21.0` | GRU-LSTM; Bus error on full TF |
-| ML — tabular | LightGBM, XGBoost | Regime + Quality |
+| ML — time series | PyTorch GPU | GRU-LSTM (GRU(64,2L)→LSTM(128,2L)→3 heads) |
+| ML — regime | PyTorch GPU | Dual-cascade MLP (HTF 34→3, LTF 18→4) |
+| ML — EV | PyTorch GPU | QualityScorer MLP (17→64→32→1) |
 | ML — NLP | HuggingFace (FinBERT) | Sentiment |
-| ML — RL | stable-baselines3 PPO | RLAgent |
+| ML — RL | stable-baselines3 PPO (CPU) | RLAgent 43-dim state, 16 actions |
 | Infrastructure | Docker Compose (6 services) | `docker-compose.dev.yml` |
-| Persistence | PostgreSQL 15, Redis 7, RabbitMQ 3.12, MongoDB 6.0 | State, events, journals |
+| Persistence | PostgreSQL 15, Redis 7 | State, events, journals |
 | Frontend | React 18 + MUI + Redux Toolkit | Port 3001 |
 | Backend API | FastAPI + Python 3.11 | Port 3000 |
 | Logging | Python logging + structured JSON | `utils/observability.py` |

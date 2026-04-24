@@ -1,7 +1,7 @@
 # System Assessment — Multi-Bot Trading Engine
 
 **Date:** 2026-04-24
-**Scope:** Updated from 2026-04-19 assessment. Reflects regime redesign (hierarchical 3+4 class cascade), atr_pctile fix, temperature scaling, QualityScorer label fix, signal_pipeline functional status.
+**Scope:** Updated to reflect 2026-04-24 Kaggle training run results. Regime redesign (hierarchical 3+4-class cascade), atr_pctile fix, temperature scaling, QualityScorer label fix, signal_pipeline functional. Latest backtest results from val/test windows added.
 
 ---
 
@@ -74,12 +74,14 @@ Data coverage: 11 forex/gold symbols, Jan 2016 – Feb 2026 (OHLCV).
 - RL: warm-start from `model.zip` now works (load path fixed)
 - RL: runs on CPU (faster for MLP policy; eliminated SB3 GPU warning)
 
-### Backtest
-- Full ML_ENABLED=true backtest: 3 rounds, all 4 regime classes active
-- Round 1: 2,571 trades, WR 45.4%, PF 2.08, Sharpe 3.77, MaxDD 2.8%, Return 1,549%
-- Round 3: 2,586 trades, WR 45.3%, PF 2.05, Sharpe 3.71, MaxDD 2.8%, Return 1,491%
+### Backtest (2026-04-24)
+- Full ML_ENABLED=true backtest, 11 symbols, 2016–2025, 221,743 rows, 202 features
+- Val window (2021–2023): WR 53.8–54.3%, PF 2.97–3.14, Sharpe 5.11–5.29, MaxDD ≤2.5%
+- Blind test (2023–2025): WR 50.9–51.4%, PF 2.45–2.52, Sharpe 4.83–4.96, MaxDD ≤2.9%
+- Post-retrain 3yr: WR 54.6%, Return 3826% (R1), MaxDD 2.8%
+- Split: train 2016–2021, val 2021–2023, test 2023–2025 (strict time-based, no leakage)
 - Calibration: p_win correlates with actual win rate across all symbols
-- Trade frequency: 1.0–1.3 trades/day/symbol — within normal range
+- Trade frequency: within normal range across all 11 symbols
 
 ### Journal + EV Pipeline
 - Journal now writes `exit_reason` as raw backtest value (`tp2`, `tp1`, `be_or_trail`, `sl_full`, `time_exit`)
@@ -93,35 +95,25 @@ Data coverage: 11 forex/gold symbols, Jan 2016 – Feb 2026 (OHLCV).
 
 ---
 
-## 3. Known Issues (2026-04-19)
+## 3. Known Issues (2026-04-24)
 
-### P1 — Regime Accuracy Below Target
-4H: 47.7%, 1H: 39.5% — both below the 0.65 threshold.
+### P1 — HTF BIAS_NEUTRAL Recall Weak (~30-38%)
+The NEUTRAL class (low-ADX, indecisive drift periods) is the hardest to classify. Precision is acceptable but recall is low — the model tends to assign BIAS_UP or BIAS_DOWN in ambiguous conditions rather than NEUTRAL. This causes the NEUTRAL confidence gate to allow more trades than ideal.
 
-Root causes identified and partially addressed:
-- **RANGING is nearly unlearnable** (acc=0.16 at 4H, 0.10 at 1H) — majority class (~43% of bars) with no clear discriminating feature
-- **Short regime runs** (~9-10 bars average at 4H, needs >20) cause label noise — **fixed** with minimum persistence filter
-- **Train/val gap** (train≈0.61, val≈1.03 from epoch 1) — model memorises label transitions, not structure. Expected to improve after persistence filter takes effect
+Active improvement direction: additional feature engineering targeting indecisive regime signatures; longer persistence filter.
 
-Next run will validate: if avg persistence increases to >15 bars per regime and RANGING accuracy improves, the filter is working.
+### P2 — VectorStore Broken
+`models/vector_store.py` has a numpy import bug and a dimension mismatch between the FAISS index and the GRU embedding output. Being fixed. Does not affect signal generation — VectorStore is used only for historical pattern similarity lookup.
 
-### P2 — Quality/RL Journal Fields Were Null
-Previous run: all 7,767 journal entries had `ev=null`, `regime=null`, `realized_rr=null`. Models trained blind.
+### P3 — RL Policy Action Diversity
+With fewer than 200 journal trades, the PPO policy tends to collapse to a narrow subset of actions. Entropy coefficient (ent_coef=0.01) is set but needs more training data to take effect meaningfully. No-trade action is available as action 0. Monitor as journal grows.
 
-**Fixed** in `step6_backtest.py`:
-- `exit_reason` normalised to raw values (not collapsed to `tp/sl`)
-- `ml_model_scores` now includes `expected_variance`, `regime_duration`, `vol_slope`
-
-### P3 — Round 1→3 PF Regression (~0.03)
-Round 1: PF 2.08 → Round 3: PF 2.05. Small but consistent. Expected to improve as Quality and RL train on correctly populated journal. Monitor across future runs.
-
-### P4 — RL Policy Exploration
-Previous runs: action=1 for all trades (policy collapsed). Fixed with:
-- `ent_coef=0.01` in PPO config
-- `model.zip` save/load (warm-start now actually works)
-- CPU device (no GPU overhead fighting with GRU/Regime training)
-
-Next run will show whether action diversity improves.
+### Historical Issues (Resolved)
+- **Quality/RL journal fields null** — fixed in step6_backtest.py (exit_reason normalisation + signal_metadata fields)
+- **Round 1→3 PF regression** — resolved with correctly populated journal
+- **atr_pctile always zero** — fixed 2026-04-24; LTF RANGING accuracy expected to improve
+- **GRU catastrophic forgetting** — GRU excluded from per-round retrain loop
+- **RL model.zip directory bug** — explicit path fixed; warm-start working
 
 ---
 
@@ -130,25 +122,29 @@ Next run will show whether action diversity improves.
 | Check | Status |
 |---|---|
 | Engine builds and starts | ✓ |
-| All 5 traders initialized | ✓ |
-| All 8 guards enforced | ✓ |
+| signal_pipeline mirrors run_backtest exactly | ✓ |
+| All ML gates enforced (5 in bar loop) | ✓ |
 | All PyTorch models trained | ✓ |
 | Warm-start retraining working | ✓ |
 | Retrain scheduler deployed | ✓ |
 | Trade journals writing | ✓ |
-| Journal EV fields populated | ✓ (fixed — next run validates) |
-| RL warm-start working | ✓ (fixed model.zip path) |
-| Regime persistence filter | ✓ (new — next run validates) |
-| Full backtest run (ML enabled) | ✓ PF 2.05–2.08, Sharpe 3.71–3.77 |
-| Capital.com credentials | ✗ (needed for live data) |
+| Journal EV/regime fields populated | ✓ |
+| RL warm-start working (model.zip) | ✓ |
+| Temperature scaling calibrated | ✓ (temperature.pt sidecar) |
+| Backtest val WR > 50% + PF > 2.0 | ✓ WR 53.8–54.3%, PF 2.97–3.14 |
+| Blind test WR > 50% + PF > 2.0 | ✓ WR 50.9–51.4%, PF 2.45–2.52 |
+| Capital.com credentials | ✓ (in docker-compose.dev.yml) |
+| VectorStore operational | ✗ (numpy bug + dim mismatch) |
+| HTF NEUTRAL recall adequate | ✗ (~30-38%; being improved) |
+| RL action diversity | ✗ (needs ≥200 journal trades) |
 
 ### Recommended Next Steps
 
-1. **Run next Kaggle training** — validate journal EV population, regime persistence improvement, RL action diversity
-2. **Add Capital.com credentials** to `.env` for live data
-3. **Start paper trading** — accumulate journal trades to improve Quality and RL retrains
-4. **After ~500 paper trades:** RL will have enough data for meaningful policy differentiation
-5. **Monitor regime persistence** — target avg > 15 bars per regime at 4H, > 20 bars at 1H
+1. **Fix VectorStore** — resolve numpy import bug and FAISS dim mismatch in `models/vector_store.py`
+2. **Improve HTF NEUTRAL recall** — additional feature engineering for indecisive regime periods
+3. **Start paper trading** — accumulate ≥200 journal trades to improve RL policy diversity
+4. **EV calibration** — isotonic regression on validation set for QualityScorer output
+5. **Regime transition matrix** — add as additional GRU sequence features
 
 ---
 
@@ -167,10 +163,11 @@ Next run will show whether action diversity improves.
 - Causal integrity: all lookahead features identified and zeroed
 
 ### Areas for Improvement
-- Regime accuracy still low (RANGING hardest class); persistence filter may help
-- RL policy diversity needs validation after model.zip fix
+- HTF BIAS_NEUTRAL recall weak (~30-38%) — ambiguous periods leak into BIAS_UP/DOWN
+- VectorStore broken (numpy import bug + FAISS dim mismatch)
+- RL policy diversity insufficient until ≥200 journal trades accumulated
 - No unit tests
-- EURUSD historically underperforming other symbols
+- EV calibration (isotonic regression) not yet applied to QualityScorer output
 
 ---
 
@@ -221,3 +218,15 @@ Next run will show whether action diversity improves.
 | `frontend/positionsSlice.js` | Filter on wrong field | Filter by `meta.arg.id` |
 | `frontend/tradersSlice.js` | Performance keyed by undefined | Key by `action.payload.trader_id` |
 | `frontend/traderService.js` | 307 stripped Auth header | Trailing slash on collection endpoint |
+
+### Security / Operations (2026-04-24)
+| File | Bug | Fix |
+|---|---|---|
+| `backend/routes/system.py` | Path traversal in system routes | Sanitised with `Path(id).name` |
+| `backend/main.py` | CORS wildcard in production | Added warning; read `FRONTEND_URL` |
+| `docker-compose.dev.yml` | Capital.com credentials missing | Added `CAPITAL_*` env vars |
+| `services/signal_pipeline.py` | ml_trader not in `_KNOWN_TRADERS` | Added ml_trader to registry |
+| `backend/routes/system.py` | `/status` returned stub | Real health check implemented |
+| `trading-engine/models/*` | All old regime names in codebase | Removed TRENDING_UP/DOWN/CONSOLIDATION everywhere |
+| `docker-compose.dev.yml` | Git merge conflict markers | Resolved |
+| `frontend/Training page` | Double-unwrap + stale regime labels + broken WebSocket hook | All fixed |

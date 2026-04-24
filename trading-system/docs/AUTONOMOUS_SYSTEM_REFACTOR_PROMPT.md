@@ -1,5 +1,11 @@
 # 🔍 AUTONOMOUS MULTI-AGENT SYSTEM AUDIT & REFACTOR ENGINE
 
+> **Note (2026-04-24):** `forex_gold_trading_system.md` and `hybrid_ml_rl_trading_system.md`
+> referenced below are superseded historical documents. The current system source of truth is:
+> `docs/system_architecture.md`, `docs/models.md`, `docs/strategies.md`, and
+> `docs/TRAINING_AND_BACKTEST.md`. The 5 rule-based traders no longer exist; do NOT use the
+> old strategy docs as implementation targets.
+
 ---
 
 ## 🎯 OBJECTIVE

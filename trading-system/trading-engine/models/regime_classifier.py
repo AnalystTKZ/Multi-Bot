@@ -1073,7 +1073,7 @@ class RegimeClassifier(BaseModel):
             if self._mode == "ltf_behaviour":
                 class_w[1] *= 3.0   # RANGING
             elif self._mode == "htf_bias":
-                class_w[2] *= 1.5   # BIAS_NEUTRAL
+                class_w[2] *= 4.0   # BIAS_NEUTRAL: raised 1.5→4.0 to overcome low bar_w suppression
             class_w = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
 
             # ── GPU-resident tensors ──────────────────────────────────────────
@@ -1143,7 +1143,16 @@ class RegimeClassifier(BaseModel):
                 # gradient signal. 0.1 keeps ambiguous bars in training without
                 # overwhelming the loss.
                 bar_w_floored = torch.clamp(bar_weights, min=0.1)
-                weighted_ce = (soft_ce * cw_per_bar * bar_w_floored).mean()
+                # Detach class weight from bar confidence: use an additive blend instead
+                # of pure multiplication. Pure product cw × bar_w crushes NEUTRAL bars
+                # (low-confidence by definition) even after raising the class_w multiplier.
+                # Additive blend: 0.5*(cw_norm) + 0.5*(bar_w_floored) means a NEUTRAL bar
+                # with bar_w=0.1 still gets ~50% of its class weight contribution rather
+                # than 10%. cw_norm is normalised to have the same mean as bar_w_floored
+                # so the two components are on the same scale.
+                cw_norm = cw_per_bar / (cw_per_bar.mean() + 1e-9) * bar_w_floored.mean()
+                effective_w = 0.5 * cw_norm + 0.5 * bar_w_floored
+                weighted_ce = (soft_ce * effective_w).mean()
 
                 # Entropy regularisation: encourages uncertainty on ambiguous bars
                 probs   = torch.softmax(logits_f, dim=1)

@@ -2,7 +2,7 @@
 vector_store.py — FAISS-GPU vector similarity search for trading patterns.
 
 Three separate indices:
-  - trade_patterns    : 45-dim  (GRU SEQUENCE_FEATURES per-bar snapshot)
+  - trade_patterns    : 74-dim  (GRU SEQUENCE_FEATURES per-bar snapshot)
   - market_structures : 53-dim  (REGIME_FEATURES — SMC + MTF + macro)
   - regime_embeddings : 64-dim  (GRU shared-layer encoding, richer than raw features)
 
@@ -22,7 +22,7 @@ Usage:
     store = VectorStore()
 
     # Index a trade-pattern vector
-    store.add("trade_patterns", vec_45d, {"symbol": "EURUSD", "ts": "2024-01-01", "outcome": "tp"})
+    store.add("trade_patterns", vec_74d, {"symbol": "EURUSD", "ts": "2024-01-01", "outcome": "tp"})
 
     # Query nearest 5 similar patterns
     results = store.query("trade_patterns", query_vec_45d, k=5)
@@ -47,9 +47,12 @@ logger = logging.getLogger(__name__)
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # trading-engine/
 _STORE_DIR = os.path.join(_MODEL_ROOT, "weights", "vector_store")
 
-# Index dimensionalities — must match the feature engines exactly
+# Index dimensionalities — must match the feature engines exactly.
+# trade_patterns: SEQUENCE_FEATURES list in feature_engine.py (74 features as of current contract).
+# market_structures: REGIME_FEATURES (53-dim HTF feature matrix).
+# regime_embeddings: GRU hidden_size (64-dim shared-layer encoding).
 INDEX_DIMS = {
-    "trade_patterns":    45,   # SEQUENCE_FEATURES (per-bar snapshot, not full 30-bar seq)
+    "trade_patterns":    74,   # SEQUENCE_FEATURES (per-bar snapshot, 74 features)
     "market_structures": 53,   # REGIME_FEATURES
     "regime_embeddings": 64,   # GRU shared layer output
 }

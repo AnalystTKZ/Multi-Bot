@@ -108,7 +108,7 @@ TELEGRAM_CHAT_ID=
 
 # ML gates
 MIN_EV_THRESHOLD=0.10
-MAX_UNCERTAINTY=0.80
+MAX_UNCERTAINTY=2.0                   # GRU expected_variance gate; default 2.0
 
 # Retrainer schedule
 RETRAIN_QUALITY_DAY=sunday
@@ -142,14 +142,14 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
         │
         ▼
   _precompute_ml_cache(symbol) — GPU-batched, once per symbol
-        ├── RegimeClassifier (4H, 31 features) → regime_4h + conf
-        ├── RegimeClassifier (1H, 15 features) → regime_1h + conf
+        ├── RegimeClassifier (4H, 34 features) → regime_4h + conf
+        ├── RegimeClassifier (1H, 18 features) → regime_1h + conf
         ├── Build 74-feature sequence matrix (regime injected per timestep)
         └── GRU-LSTM (30×74, batched 1024) → p_bull, p_bear, expected_variance
         │
         ▼
   Bar loop (dict lookup + gate evaluation)
-        ├── expected_variance > 0.80 → skip
+        ├── expected_variance > MAX_UNCERTAINTY (env default 2.0) → skip
         ├── max(p_bull, p_bear) < 0.58 → skip
         ├── Dead zone 12:00–13:00 UTC / cooldown / daily cap / drawdown → skip
         ├── ATR-based entry / SL / TP levels
@@ -173,7 +173,7 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
 
 | Gate | Value | Where applied |
 |------|-------|--------------|
-| GRU uncertainty | `expected_variance ≤ 0.80` | Before ICT level computation |
+| GRU uncertainty | `expected_variance ≤ MAX_UNCERTAINTY` (default 2.0) | Before ICT level computation |
 | GRU direction | `max(p_bull, p_bear) ≥ 0.58` | Before ICT level computation |
 | EV threshold | `ev ≥ 0.10` | After PM enrichment (needs rr_ratio) |
 | Dead zone | 12:00–13:00 UTC | Bar loop |
@@ -223,7 +223,8 @@ ICT/SMC is encoded numerically in `SEQUENCE_FEATURES` — the GRU learns which p
 | Liquidity sweep | Wick depth / ATR, body recovery ratio |
 | EMA pullback | Band position, EMA21 slope, EMA stack |
 | Asian range | Range width / ATR, price vs high/low |
-| Regime (4H + 1H) | One-hot (5 classes each) + confidence — indices 26–37 |
+| HTF regime (4H) | BIAS_UP/DOWN/NEUTRAL one-hot (3 dims) + conf — indices 26–29 |
+| LTF regime (1H) | TRENDING/RANGING/CONSOLIDATING/VOLATILE one-hot (4 dims) + conf — indices 30–34 |
 
 ---
 
@@ -329,12 +330,25 @@ trading-system/
 
 ---
 
+## Latest Backtest Results (2026-04-24)
+
+| Window | WR | PF | Sharpe | MaxDD |
+|--------|----|----|--------|-------|
+| Val 2021–2023 | 53.8–54.3% | 2.97–3.14 | 5.11–5.29 | ≤2.5% |
+| Blind test 2023–2025 | 50.9–51.4% | 2.45–2.52 | 4.83–4.96 | ≤2.9% |
+| Post-retrain 3yr | 54.6% WR | — | — | 2.8% (3826% return R1) |
+
+Data: 221,743 rows · 202 features · 11 symbols · 2016–2025
+
+---
+
 ## Known Issues
 
 | Issue | File | Impact |
 |-------|------|--------|
+| HTF BIAS_NEUTRAL recall ~30-38% | `models/regime_classifier.py` | NEUTRAL bars under-predicted; being actively improved |
+| VectorStore broken | `models/vector_store.py` | numpy import bug + dim mismatch; being fixed |
 | RL policy needs more journal data | `models/rl_agent.py` | Needs ≥200 trades for meaningful action diversity |
-| Regime LTF RANGING accuracy | `models/regime_classifier.py` | atr_pctile bug fixed 2026-04-24; retrain expected to improve |
 
 ---
 

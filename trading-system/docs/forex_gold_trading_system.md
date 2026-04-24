@@ -1,7 +1,14 @@
 # 💱 Forex + Gold Automated Trading System
 > **Domain: EURUSD · GBPUSD · USDJPY · XAUUSD | Priority: Profitability + Automation**
 
-**Date:** 2026-04-02
+**Date:** 2026-04-02 — **SUPERSEDED 2026-04-24**
+
+> The 5 rule-based ICT strategies documented below have been removed from the live system.
+> ICT/SMC concepts (BOS, FVG, sweep, EMA pullback, Asian range) are now encoded as numeric
+> features and learned by the GRU-LSTM model. The `ml_trader` signal generator replaces all
+> 5 strategies across all 11 symbols. For current architecture see `docs/system_architecture.md`.
+> This file is retained as historical design context only.
+
 > 7-Agent Autonomous Loop · 5 Iterations · Session-Aware Architecture
 
 ---

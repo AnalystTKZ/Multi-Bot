@@ -3,7 +3,16 @@
 > **Stack: GRU-LSTM · LightGBM · XGBoost · PPO (Stable-Baselines3) · 5 Rule-Based Strategies**
 > **Sources: GitHub (FinRL, D3F4LT4ST/RL-trading, CodeLogist/RL-Forex-trader-LSTM, TomatoFT/Deep-RL-Forex), Research Papers 2021–2025, MQL5 Articles**
 
-**Date:** 2026-04-02
+**Date:** 2026-04-02 — **SUPERSEDED 2026-04-24**
+
+> **This document describes the original hybrid design. The current production system has diverged significantly:**
+> - LightGBM and XGBoost have been removed. All models are now PyTorch.
+> - The 5 rule-based strategies are gone. A single `ml_trader` runs on all 11 symbols.
+> - Regime classes are now: HTF (BIAS_UP/BIAS_DOWN/BIAS_NEUTRAL, 3-class) and LTF (TRENDING/RANGING/CONSOLIDATING/VOLATILE, 4-class). Old names (TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, CONSOLIDATION) no longer exist.
+> - The RL state is 43-dim (not 42). The action space is 16 (not 6).
+> - Brokers: Capital.com REST API (not MT5).
+> - For current architecture see `docs/system_architecture.md` and `docs/models.md`.
+> This file is retained as historical design research context only.
 ---
 
 ## 🗺 System Philosophy

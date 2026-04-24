@@ -65,12 +65,12 @@ python step8_push_to_github.py     # push weights + metrics to GitHub
 
 **Important:** `step7_train.py` and `step7b_train.py` do NOT use `capture_output=True` — this prevents pipe-buffer deadlock when training output exceeds 64 KB.
 
-**Latest training results (2026-04-18):**
-- GRU: 7,081,756 samples, 44 combos, early stop epoch 6 (train=0.5943, val=0.6184)
-- Regime 4H: 120,490 samples, accuracy 47.7%
-- Regime 1H: 468,252 samples, accuracy 39.5%
-- Quality: 5,264 journal entries, dir_acc=0.615, MAE=0.933
-- RL: 7,767 episodes, cold start (warm-start path fixed for next run)
+**Latest training results (2026-04-24):**
+- GRU: dir_acc ~0.58 (BCEWithLogitsLoss + temperature scaling), 74 features, 221,743 rows
+- Regime 4H (HTF bias): 34 features, 3-class (BIAS_UP/DOWN/NEUTRAL) — BIAS_NEUTRAL recall known weakness (~30-38%)
+- Regime 1H (LTF behaviour): 18 features, 4-class (TRENDING/RANGING/CONSOLIDATING/VOLATILE) — atr_pctile bug fixed
+- Quality: dir_acc ~0.58, class-weighted Huber loss; labels read from real signal_metadata fields
+- RL: warm-start from model.zip; needs ≥200 journal trades for action diversity
 
 ---
 
@@ -218,16 +218,16 @@ python scripts/run_backtest.py
 
 Results saved to `backtest_results/backtest_YYYYMMDD_HHMMSS.json`.
 
-**Latest results (2026-04-18, Jan 2021 – Aug 2024, $10k capital):**
+**Latest results (2026-04-24, train 2016-2021, val 2021-2023, test 2023-2025, $10k capital):**
 
-| Round | Trades | WR | PF | Sharpe | MaxDD | Return |
-|---|---|---|---|---|---|---|
-| 1 | 2,571 | 45.4% | 2.08 | 3.77 | 2.8% | 1,549% |
-| 2 | 2,610 | 44.8% | 2.04 | 3.70 | 3.6% | 1,458% |
-| 3 | 2,586 | 45.3% | 2.05 | 3.71 | 2.8% | 1,491% |
+| Window | WR | PF | Sharpe | MaxDD | Notes |
+|---|---|---|---|---|---|
+| Val (2021–2023) | 53.8–54.3% | 2.97–3.14 | 5.11–5.29 | ≤2.5% | Across 3 rounds |
+| Blind test (2023–2025) | 50.9–51.4% | 2.45–2.52 | 4.83–4.96 | ≤2.9% | True OOS |
+| Post-retrain 3yr | 54.6% WR | — | — | 2.8% | 3826% return R1 |
 
-EV distribution in diagnostics: min=0.35, mean=1,444, zero EV count=0 ✓  
-Note: regime distribution uses current class names: HTF (BIAS_UP/DOWN/NEUTRAL), LTF (TRENDING/RANGING/CONSOLIDATING/VOLATILE)
+Data: 221,743 rows, 202 features, 11 symbols (AUDUSD/EURGBP/EURJPY/EURUSD/GBPJPY/GBPUSD/NZDUSD/USDCAD/USDCHF/USDJPY/XAUUSD)
+Regime distribution uses current class names: HTF (BIAS_UP/DOWN/NEUTRAL), LTF (TRENDING/RANGING/CONSOLIDATING/VOLATILE)
 
 ---
 

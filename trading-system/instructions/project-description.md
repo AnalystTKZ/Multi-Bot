@@ -1,6 +1,6 @@
 # Project Description — ML-Native Forex/Gold Trading System
 
-Updated 2026-04-19.
+Updated 2026-04-24.
 
 ---
 
@@ -29,7 +29,7 @@ One unified path — `ml_trader` across all 11 symbols.
 ```
 For each 15M bar:
   1. GRU-LSTM predicts p_bull, p_bear, expected_variance
-  2. Uncertainty gate: expected_variance > 0.80 → skip
+  2. Uncertainty gate: expected_variance > MAX_UNCERTAINTY (env default 2.0) → skip
   3. Direction gate: max(p_bull, p_bear) < 0.58 → skip
   4. ATR-based entry/SL/TP levels
   5. PortfolioManager: size, TP1/TP2, correlation cap
@@ -38,7 +38,7 @@ For each 15M bar:
   8. Trade
 ```
 
-Regime is encoded as features at indices 26–37 of the GRU input — not a hard gate.
+Regime is encoded as one-hot features at indices 26–37 of the GRU input AND applied as a hard directional gate after the GRU direction step (BIAS_UP blocks sell; BIAS_DOWN blocks buy).
 
 ---
 
@@ -52,7 +52,8 @@ Regime is encoded as features at indices 26–37 of the GRU input — not a hard
 | EMA pullback | band position, EMA21 slope, EMA stack |
 | Asian range | range width / ATR, price vs high/low |
 | Market structure | proximity to 20-bar highs/lows |
-| Regime | 4H + 1H one-hot (5 classes each) + confidence |
+| HTF regime (4H) | BIAS_UP/DOWN/NEUTRAL one-hot (3 dims) + conf — indices 26–29 |
+| LTF regime (1H) | TRENDING/RANGING/CONSOLIDATING/VOLATILE one-hot (4 dims) + conf — indices 30–34 |
 
 ---
 
@@ -69,10 +70,10 @@ Regime is encoded as features at indices 26–37 of the GRU input — not a hard
 5. Weekly/monthly retraining from journal
 ```
 
-## Operating Flow (Live Trading — Currently Broken)
+## Operating Flow (Live Trading)
 
-`main.py` imports deleted trader classes. Needs rewrite to use unified ML path.
-Fix required before live trading is possible.
+`main.py` and `signal_pipeline.py` are both functional. `signal_pipeline._compute_ml_signal`
+mirrors `run_backtest._compute_backtest_signal` exactly.
 
 ---
 
@@ -92,8 +93,8 @@ Fix required before live trading is possible.
 
 | Model | Framework | Role |
 |---|---|---|
-| RegimeClassifier (4H) | PyTorch GPU | Macro bias: TRENDING_UP/DOWN/RANGING/VOLATILE/CONSOLIDATION |
-| RegimeClassifier (1H) | PyTorch GPU | Intraday structure refinement |
+| RegimeClassifier (4H) | PyTorch GPU | Macro bias: BIAS_UP/BIAS_DOWN/BIAS_NEUTRAL (3-class, weights: regime_htf.pkl) |
+| RegimeClassifier (1H) | PyTorch GPU | Intraday behaviour: TRENDING/RANGING/CONSOLIDATING/VOLATILE (4-class, weights: regime_ltf.pkl) |
 | GRU-LSTM | PyTorch GPU | Direction + magnitude + uncertainty from 30-bar sequences |
 | QualityScorer | PyTorch GPU | Expected value in R-multiples (post-signal) |
 | SentimentModel | FinBERT + VADER | News/macro directional bias |
@@ -148,7 +149,6 @@ All 11: `EURUSD GBPUSD USDJPY AUDUSD NZDUSD USDCAD USDCHF EURGBP EURJPY GBPJPY X
 
 | Issue | Impact |
 |-------|--------|
-| `main.py` broken — imports deleted traders | Live engine won't start |
-| `signal_pipeline.py` broken — calls trader methods | Live pipeline broken |
-| RL policy collapsed (action=1 always) | Selectivity tier non-functional |
-| Regime accuracy 4H ~49%, 1H ~41% | Regime context less useful until improved |
+| RL policy needs action diversity | Needs ≥200 journal trades + entropy tuning |
+| HTF BIAS_NEUTRAL recall ~30-38% | NEUTRAL regime under-predicted; being improved |
+| VectorStore broken | numpy import bug + dim mismatch; being fixed |
