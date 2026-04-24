@@ -89,10 +89,13 @@ const TraderCard = ({ trader }) => {
   }, [dispatch, trader.trader_id])
 
   const sendAction = async (action) => {
+    // Map UI actions to backend-accepted control verbs
+    const actionMap = { pause: 'stop', resume: 'start', stop: 'stop' }
+    const backendAction = actionMap[action] || action
     setActionLoading(action)
     setError(null)
     try {
-      await traderService.updateTraderStatus(trader.trader_id, action)
+      await traderService.updateTraderStatus(trader.trader_id, backendAction)
       dispatch(fetchAllTraders())
     } catch {
       setError(`${action} failed`)

@@ -1,6 +1,6 @@
 # Training & Backtest Runbook
 
-**Multi-Bot ICT/Smart Money Trading System — 2026-04-19**
+**Multi-Bot ICT/Smart Money Trading System — 2026-04-24**
 
 `ML_ENABLED=true` is the default. This document is the single authoritative guide for training all models and running a backtest.
 
@@ -23,7 +23,7 @@ Confirm weights directory exists:
 
 ```bash
 ls weights/
-# Expected: gru_lstm/model.pt  regime_4h.pkl  regime_1h.pkl  quality_scorer.pkl  rl_ppo/model.zip  backups/
+# Expected: gru_lstm/model.pt  gru_lstm/temperature.pt  regime_htf.pkl  regime_ltf.pkl  quality_scorer.pkl  rl_ppo/model.zip  backups/
 ```
 
 ---
@@ -118,22 +118,26 @@ ulimit -v 4000000
 ### 2a. Regime Classifier
 
 - Input: OHLCV only — no journal needed
-- Architecture: PyTorch MLP 59→128→64→4, BatchNorm, GELU, residual skip
-- Labels: per-group GMMs (dollar/cross/gold) on 4H features with minimum persistence filter (short runs zero-weighted)
-- Output: `weights/regime_4h.pkl`, `weights/regime_1h.pkl`
+- HTF (4H): 34-feature MLP → 3-class (BIAS_UP/DOWN/NEUTRAL), mode="htf_bias"
+- LTF (1H): 18-feature MLP → 4-class (TRENDING/RANGING/CONSOLIDATING/VOLATILE), mode="ltf_behaviour"
+- Architecture: N → 128 → 64 → N_CLASSES with BatchNorm, GELU, residual skip, Dropout 0.5
+- Labels: global GMM (`fit_global_gmm`) then rule-based labels with per-bar confidence weights
+- Minimum persistence filter: short-run bars zeroed to reduce label noise
+- Output: `weights/regime_htf.pkl`, `weights/regime_ltf.pkl`
 
 ```bash
 python scripts/retrain_incremental.py --model regime
 ```
 
-Expected: 40–55% val accuracy (4-class balanced; random = 25%).
+Expected: ≥65% HTF val accuracy (random = 33%), ≥55% LTF val accuracy (random = 25%).
 
 ### 2b. GRU-LSTM Predictor
 
 - Input: OHLCV sequences (5M/15M/1H/4H) with regime context at each timestep
-- Architecture: GRU(256, 2L) + LayerNorm → direction + magnitude + variance heads
-- Labels: 12-bar forward log return, dead-zone ATR masking, label smoothing 0.05
-- Output: `weights/gru_lstm/model.pt`
+- Architecture: GRU(64, 2L) → LSTM(128, 2L) → shared FC(128→64) → 3 heads
+- Loss: BCE(dir) + 0.5×SmoothL1(mag) + 0.3×NLL(var), dead-zone masking, label smoothing 0.05
+- Temperature calibration: `fit_temperature()` saves `temperature.pt` after training
+- Output: `weights/gru_lstm/model.pt` + `weights/gru_lstm/temperature.pt`
 - **Not warm-started from journal** — retrains from full OHLCV history only (monthly)
 
 ```bash
@@ -187,8 +191,9 @@ python3 -c "
 import os
 weights = {
     'GRU-LSTM':      'weights/gru_lstm/model.pt',
-    'Regime 4H':     'weights/regime_4h.pkl',
-    'Regime 1H':     'weights/regime_1h.pkl',
+    'GRU-Temp':      'weights/gru_lstm/temperature.pt',
+    'Regime HTF':    'weights/regime_htf.pkl',
+    'Regime LTF':    'weights/regime_ltf.pkl',
     'QualityScorer': 'weights/quality_scorer.pkl',
     'RLAgent':       'weights/rl_ppo/model.zip',
 }
@@ -222,7 +227,7 @@ Results saved to `backtest_results/backtest_YYYYMMDD_HHMMSS.json`.
 | 3 | 2,586 | 45.3% | 2.05 | 3.71 | 2.8% | 1,491% |
 
 EV distribution in diagnostics: min=0.35, mean=1,444, zero EV count=0 ✓  
-Regime distribution: VOLATILE 32%, TRENDING_UP 28%, TRENDING_DOWN 21%, RANGING 19% ✓
+Note: regime distribution uses current class names: HTF (BIAS_UP/DOWN/NEUTRAL), LTF (TRENDING/RANGING/CONSOLIDATING/VOLATILE)
 
 ---
 

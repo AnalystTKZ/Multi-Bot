@@ -99,7 +99,7 @@ const TrainingPage = () => {
     let active = true
     const loadEvents = async () => {
       try {
-        const { data } = await systemService.getTrainingStatus()
+        const data = await systemService.getTrainingStatus()
         if (active) setTrainingEvents(Array.isArray(data?.events) ? data.events : [])
       } catch {
         if (active) setTrainingEvents([])
@@ -457,8 +457,8 @@ const TrainingPage = () => {
             </Typography>
             <Divider sx={{ mb: 2.5, borderColor: 'rgba(148,163,184,0.1)' }} />
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-              Example symbol scope: `RETRAIN_SYMBOLS_GRU="{SYMBOLS_EXAMPLE}"` and
-              `RETRAIN_SYMBOLS_REGIME="{SYMBOLS_EXAMPLE}"`
+              Example symbol scope: {`RETRAIN_SYMBOLS_GRU="${SYMBOLS_EXAMPLE}"`} and
+              {`RETRAIN_SYMBOLS_REGIME="${SYMBOLS_EXAMPLE}"`}
             </Typography>
 
             {trainingEvents.length === 0 ? (

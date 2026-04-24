@@ -170,7 +170,7 @@ async def test_dashboard_snapshot(monkeypatch):
                         "take_profit": 1.12,
                         "signal_metadata": {
                             "strategy": "trader_1",
-                            "regime": "TRENDING_UP",
+                            "regime": "BIAS_UP",
                             "quality_score": 0.74,
                             "p_bull": 0.8,
                             "p_bear": 0.2,
@@ -189,7 +189,7 @@ async def test_dashboard_snapshot(monkeypatch):
                         "strategy_id": "trader_1",
                         "symbol": "EURUSD",
                         "side": "buy",
-                        "signal_metadata": {"regime": "TRENDING_UP"},
+                        "signal_metadata": {"regime": "BIAS_UP"},
                     },
                 }
             ]
@@ -201,7 +201,7 @@ async def test_dashboard_snapshot(monkeypatch):
         return []
 
     async def fake_contexts():
-        return [{"symbol": "EURUSD", "regime": "TRENDING_UP", "bias": "bullish", "confidence": 0.8}]
+        return [{"symbol": "EURUSD", "regime": "BIAS_UP", "bias": "bullish", "confidence": 0.8}]
 
     monkeypatch.setattr(state_reader, "get_positions", fake_positions)
     monkeypatch.setattr(state_reader, "get_portfolio_state", fake_portfolio)
@@ -212,5 +212,5 @@ async def test_dashboard_snapshot(monkeypatch):
 
     assert payload["portfolio_overview"]["open_positions"] == 1
     assert payload["symbol"] == "EURUSD"
-    assert payload["regime_history"][0]["regime"] == "TRENDING_UP"
+    assert payload["regime_history"][0]["regime"] == "BIAS_UP"
     assert payload["prediction_history"]

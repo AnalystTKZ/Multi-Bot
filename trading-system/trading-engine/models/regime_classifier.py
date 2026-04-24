@@ -301,8 +301,8 @@ class RegimeClassifier(BaseModel):
           regimes stretch along the drift axis) and gives soft probabilities.
 
         Step 3 — map clusters → regime labels by their feature profile:
-          high efficiency + positive drift → TRENDING_UP (0)
-          high efficiency + negative drift → TRENDING_DOWN (1)
+          high efficiency + positive drift → TRENDING (0)
+          high efficiency + negative drift → TRENDING (1)
           low efficiency + low vol         → RANGING (2)
           high vol + low efficiency        → VOLATILE (3)
 
@@ -376,7 +376,7 @@ class RegimeClassifier(BaseModel):
         cluster_labels[td] = 1
         remaining.remove(td)
 
-        # CONSOLIDATION (4): lowest atr_pctile + lowest autocorr (pre-breakout compression)
+        # CONSOLIDATING (4): lowest atr_pctile + lowest autocorr (pre-breakout compression)
         consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
         cluster_labels[consol] = 4
         remaining.remove(consol)

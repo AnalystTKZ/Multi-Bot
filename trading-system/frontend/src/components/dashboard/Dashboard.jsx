@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -50,11 +51,14 @@ const CHART_TOOLTIP_STYLE = {
   },
 }
 
+// Maps numeric regime_score back to a display label.
+// Scores are assigned by the backend REGIME_SCORE_MAP:
+//   BIAS_DOWN=-1, BIAS_NEUTRAL/RANGING/CONSOLIDATING=0, BIAS_UP=1, TRENDING/VOLATILE=2
 const REGIME_LABELS = {
-  '-1': 'Trend Down',
-  0: 'Range',
-  1: 'Trend Up',
-  2: 'Volatile',
+  '-1': 'Bias Down',
+  0: 'Ranging',
+  1: 'Bias Up',
+  2: 'Trending',
 }
 
 const SectionHeader = ({ title, subtitle, action, onAction, controls = null }) => (
@@ -211,6 +215,7 @@ const Dashboard = () => {
   const [dashboard, setDashboard] = useState(null)
   const [selectedSymbol, setSelectedSymbol] = useState('XAUUSD')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -224,13 +229,15 @@ const Dashboard = () => {
         ])
         if (!cancelled) {
           setDashboard(overview)
+          setLoadError(null)
           if (overview.symbol && overview.symbol !== selectedSymbol) {
             setSelectedSymbol(overview.symbol)
           }
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
           setDashboard(null)
+          setLoadError(err?.message || err?.detail || 'Failed to load dashboard data')
         }
       } finally {
         if (!cancelled) {
@@ -281,6 +288,11 @@ const Dashboard = () => {
         subtitle="Portfolio pulse, live model state, and backend-routed market intelligence."
         controls={control}
       />
+      {loadError && (
+        <Alert severity="warning" onClose={() => setLoadError(null)}>
+          {loadError}
+        </Alert>
+      )}
 
       <KeyMetrics />
 

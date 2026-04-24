@@ -98,6 +98,10 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       - PAPER_TRADING=${PAPER_TRADING:-true}
       - LOG_LEVEL=INFO
+      - CAPITAL_API_KEY=${CAPITAL_API_KEY}
+      - CAPITAL_IDENTIFIER=${CAPITAL_IDENTIFIER}
+      - CAPITAL_PASSWORD=${CAPITAL_PASSWORD}
+      - CAPITAL_ENV=${CAPITAL_ENV:-demo}
       - BROKER_API_KEY=${BROKER_API_KEY}
       - BROKER_SECRET=${BROKER_SECRET}
       - SMTP_SERVER=${SMTP_SERVER}
@@ -143,13 +147,10 @@ services:
       - trading_network
 
   # ==================== CONTINUOUS LEARNING ====================
-<<<<<<< HEAD
   # Retrain schedule:
   #   Quality + RL  — every Sunday 02:00 UTC  (weekly,  warm-start fine-tune)
   #   Regime + GRU  — 1st Sunday of month 03:00 UTC (monthly, warm-start fine-tune)
   # Full cold-start retraining is done manually on Kaggle (step7a) when new data arrives.
-=======
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
   model-retrainer:
     build:
       context: ./trading-engine
@@ -159,7 +160,6 @@ services:
     command: ["python", "/app/scripts/retrain_scheduler.py"]
     environment:
       - LOG_LEVEL=INFO
-<<<<<<< HEAD
       # Weekly window: Quality + RL
       - RETRAIN_QUALITY_DAY=${RETRAIN_QUALITY_DAY:-sunday}
       - RETRAIN_QUALITY_HOUR=${RETRAIN_QUALITY_HOUR:-2}
@@ -170,22 +170,14 @@ services:
       - MIN_JOURNAL_RL=${MIN_JOURNAL_RL:-500}
       # Check interval (seconds) — 15 min default
       - CHECK_INTERVAL=${CHECK_INTERVAL:-900}
-=======
-      - RETRAIN_DAY=${RETRAIN_DAY:-sunday}
-      - RETRAIN_HOUR=${RETRAIN_HOUR:-2}
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     volumes:
       - ./trading-engine/weights:/app/weights
       - ./trading-engine/logs:/app/logs
-<<<<<<< HEAD
       # Regime + GRU monthly retrain needs processed OHLCV parquet files
       - ./processed_data:/app/../processed_data:ro
-=======
-      - ./trading-engine/training_data:/app/training_data:ro
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
     networks:
       - trading_network
     depends_on:

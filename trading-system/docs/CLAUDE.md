@@ -1,6 +1,6 @@
 # Multi-Bot Trading System — Claude Reference
 
-Last updated: 2026-04-19. Reflects ML-native architecture (5 rule-based traders removed).
+Last updated: 2026-04-24. Reflects ML-native architecture (5 rule-based traders removed).
 
 For full ML pipeline details see `docs/system_architecture.md`.
 For training and backtest runbook see `docs/TRAINING_AND_BACKTEST.md`.
@@ -13,6 +13,9 @@ For training and backtest runbook see `docs/TRAINING_AND_BACKTEST.md`.
 Signal generation uses a single unified ML path: `_compute_backtest_signal` in `run_backtest.py`
 (offline/backtest) and `_compute_ml_signal` in `signal_pipeline.py` (live/paper) — both are
 kept in exact sync. `run_backtest._compute_backtest_signal` is the source of truth.
+
+`main.py` (trading engine entry point) and `signal_pipeline.py` are both functional — they
+no longer import deleted trader classes.
 
 ---
 
@@ -42,6 +45,7 @@ trading-system/
 │   └── step8_validate.py
 ├── run_pipeline.py                   ← orchestrates pipeline; skips completed steps
 ├── kaggle_train.py                   ← Kaggle entry point (step7a → step6 → step7b)
+│                                       Reinforced loop: backtest → retrain regime/quality/RL × 3 rounds
 ├── processed_data/
 │   ├── histdata/                     ← {SYMBOL}_{5M|15M|1H|4H|1D}.parquet (step 0)
 │   └── ...
@@ -63,14 +67,14 @@ trading-system/
 │           ├── monitors.py
 │           └── system.py
 └── trading-engine/
-    ├── main.py                       ← BROKEN — imports deleted trader classes
+    ├── main.py                       ← ProductionTradingEngine (functional)
     ├── config/settings.py            ← Pydantic BaseSettings
     ├── indicators/market_structure.py ← all vectorized; no .at[i] indexing
     ├── services/
     │   ├── feature_engine.py         ← all feature vectors (SEQUENCE_FEATURES=74,
-    │   │                               REGIME_4H_FEATURES=31, REGIME_1H_FEATURES=15,
+    │   │                               REGIME_4H_FEATURES=34, REGIME_1H_FEATURES=18,
     │   │                               QUALITY_FEATURES=17, RL_STATE_DIM=43)
-    │   ├── signal_pipeline.py        ← BROKEN — calls deleted trader.analyze_market()
+    │   ├── signal_pipeline.py        ← live ML signal path (mirrors run_backtest exactly)
     │   ├── data_fetcher.py
     │   ├── broker_connector.py
     │   ├── order_executor.py
@@ -78,17 +82,22 @@ trading-system/
     │   └── trade_journal.py
     ├── models/
     │   ├── base_model.py
-    │   ├── regime_classifier.py      ← dual-cascade: 4H bias (31 feat) + 1H structure (15 feat)
-    │   ├── gru_lstm_predictor.py     ← GRU(64)→LSTM(128)→3 heads; 74 SEQUENCE_FEATURES
-    │   ├── quality_scorer.py         ← EV regressor; Huber loss; 17 QUALITY_FEATURES
+    │   ├── regime_classifier.py      ← dual-cascade: HTF 4H bias (34 feat, 3-class)
+    │   │                               + LTF 1H behaviour (18 feat, 4-class)
+    │   ├── gru_lstm_predictor.py     ← GRU(64,2L)→LSTM(128,2L)→3 heads; 74 SEQUENCE_FEATURES
+    │   │                               temperature.pt sidecar for post-hoc calibration
+    │   ├── quality_scorer.py         ← EV regressor; class-weighted Huber; 17 QUALITY_FEATURES
     │   ├── sentiment_model.py        ← FinBERT primary; VADER fallback
-    │   ├── rl_agent.py               ← PPO via SB3; 43-dim state; 16 actions
+    │   ├── rl_agent.py               ← PPO via SB3; CPU; 43-dim state; 16 actions
+    │   ├── vector_store.py           ← FAISS index of 64-dim GRU embeddings
     │   └── weights/
-    │       ├── gru_lstm/model.pt
-    │       ├── regime_htf.pkl        ← HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)
-    │       ├── regime_ltf.pkl        ← LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)
+    │       ├── gru_lstm/
+    │       │   ├── model.pt
+    │       │   └── temperature.pt    ← scalar T for sigmoid(logit/T) calibration
+    │       ├── regime_htf.pkl        ← HTF bias (3-class: BIAS_UP/DOWN/NEUTRAL)
+    │       ├── regime_ltf.pkl        ← LTF behaviour (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)
     │       ├── quality_scorer.pkl
-    │       └── rl_ppo/
+    │       └── rl_ppo/model.zip
     ├── traders/
     │   └── __init__.py               ← empty; all trader files deleted
     ├── monitors/
@@ -107,18 +116,19 @@ trading-system/
 |-------|------|--------|---------|
 | RegimeClassifier HTF | Directional bias — "what is macro direction?" from 4H+1D | 3-class (BIAS_UP/DOWN/NEUTRAL) + conf | `weights/regime_htf.pkl` |
 | RegimeClassifier LTF | Behaviour — "how is price acting?" from 1H+4H | 4-class (TRENDING/RANGING/CONSOLIDATING/VOLATILE) + conf | `weights/regime_ltf.pkl` |
-| GRU-LSTM | Direction + magnitude + uncertainty | `p_bull`, `p_bear`, `expected_move`, `expected_variance` | `weights/gru_lstm/model.pt` |
+| GRU-LSTM | Direction + magnitude + uncertainty | `p_bull`, `p_bear`, `expected_move`, `expected_variance` | `weights/gru_lstm/model.pt` + `temperature.pt` |
 | QualityScorer | EV in R-multiples (runs post-signal with real rr_ratio) | `ev`, `quality_score` | `weights/quality_scorer.pkl` |
 | SentimentModel | News headline scoring | `sentiment_score`, `sentiment_label` | pre-trained |
-| RLAgent | Selectivity tier selection | action 0–15 | `weights/rl_ppo/` |
+| RLAgent | Selectivity tier selection (CPU) | action 0–15 | `weights/rl_ppo/model.zip` |
+| VectorStore | FAISS similarity index of GRU embeddings | nearest trade patterns | `weights/gru_lstm/vector_store/` |
 
 **Feature counts — fixed contract. Changing order or length breaks saved weights.**
 
 | List | Length | Model |
 |------|--------|-------|
 | `SEQUENCE_FEATURES` | 74 | GRU-LSTM |
-| `REGIME_4H_FEATURES` | 31 | RegimeClassifier (4H) |
-| `REGIME_1H_FEATURES` | 15 | RegimeClassifier (1H) |
+| `REGIME_4H_FEATURES` | 34 | RegimeClassifier (4H) |
+| `REGIME_1H_FEATURES` | 18 | RegimeClassifier (1H) |
 | `QUALITY_FEATURES` | 17 | QualityScorer |
 | `RL_STATE_DIM` | 43 | RLAgent |
 
@@ -126,20 +136,27 @@ trading-system/
 
 ## Signal Generation (Working Path)
 
-`scripts/run_backtest.py` — `_compute_backtest_signal()` with `trader_id="ml_trader"`:
+`scripts/run_backtest.py` — `_compute_backtest_signal()` with `trader_id="ml_trader"`.
+Mirrored exactly in `services/signal_pipeline.py` — `_compute_ml_signal()`.
 
+Gate order (same in both backtest and live):
 ```
-Per 15M bar:
-  1. GRU uncertainty pre-gate: expected_variance > 0.80 → reject
-  2. GRU direction gate: max(p_bull, p_bear) ≥ 0.58 → side = buy if p_bull, else sell
-  3. ATR-based entry/SL/TP levels computed
-  4. PM enrichment (size, TP1/TP2, correlation cap)
-  5. QualityScorer: run with actual trader_id + side + rr_ratio → ev
-  6. EV gate: ev < 0.10 → reject
-  7. Trade simulated
+1. GRU uncertainty: expected_variance > MAX_UNCERTAINTY → reject
+2. GRU direction:   max(p_bull, p_bear) < 0.58 → reject; side = buy/sell
+3. HTF bias:        BIAS_UP + sell → reject; BIAS_DOWN + buy → reject
+                    BIAS_NEUTRAL: require conf ≥ NEUTRAL_BIAS_THRESHOLD (0.58)
+4. LTF behaviour:
+     CONSOLIDATING → reject (if BLOCK_LTF_CONSOLIDATING=1)
+     VOLATILE      → require conf ≥ VOLATILE_ENTRY_THRESHOLD
+     RANGING       → optional range boundary check (RANGING_REQUIRE_RANGE)
+     TRENDING      → optional pullback filter (REQUIRE_TRENDING_PULLBACK)
+5. ATR-based entry/SL/TP levels
+6. PM enrichment (size, TP1/TP2, correlation cap)
+7. QualityScorer: ev with actual rr_ratio → reject if ev < MIN_EV_THRESHOLD (0.10)
+8. Dead zone 12:00–13:00 UTC / cooldown / daily cap / drawdown halt
 ```
 
-Regime is **encoded as features** in the GRU input (indices 26–37 of SEQUENCE_FEATURES), not applied as a hard gate.
+Signal pipeline additionally gates on `confidence ≥ 0.55` before publishing.
 
 ---
 
@@ -147,12 +164,15 @@ Regime is **encoded as features** in the GRU input (indices 26–37 of SEQUENCE_
 
 | Gate | Default | Env override |
 |------|---------|--------------|
-| GRU uncertainty `expected_variance` | `≤ 0.80` | `MAX_UNCERTAINTY` |
-| GRU direction | `≥ 0.58` | — |
+| GRU uncertainty `expected_variance` | `≤ 2.0` | `MAX_UNCERTAINTY` |
+| GRU direction | `≥ 0.58` | `ML_DIRECTION_THRESHOLD` |
+| HTF neutral confidence | `≥ 0.58` | `NEUTRAL_BIAS_THRESHOLD` |
+| VOLATILE entry | `≥ ML_DIRECTION_THRESHOLD` | `VOLATILE_ENTRY_THRESHOLD` |
 | EV threshold | `≥ 0.10` | `MIN_EV_THRESHOLD` |
 | Daily loss cap | `2%` | — |
 | Max drawdown halt | `8%` | — |
 | Cooldown | `10 bars` | — |
+| Signal pipeline confidence | `≥ 0.55` | — |
 
 ---
 
@@ -162,13 +182,9 @@ Regime is **encoded as features** in the GRU input (indices 26–37 of SEQUENCE_
 |-----------|------|---------|
 | trading_backend | 3000 | FastAPI |
 | trading_frontend | 3001 | Vite SPA (nginx) |
-| trading_postgres | 5432 | |
+| trading_postgres | 5432 | trade journal, state |
 | trading_redis | 6379 | pub/sub + state |
-| trading_mongodb | 27017 | |
-| trading_influxdb | 8086 | |
-| trading_grafana | 3002 | dashboards |
-| trading_prometheus | 9090 | |
-| trading_engine_main | 8000 (expose only) | trading engine (BROKEN for live) |
+| trading_engine_main | 8000 (internal) | trading engine |
 | trading_model_retrainer | — | retrain_scheduler.py |
 
 ---
@@ -182,13 +198,18 @@ Regime is **encoded as features** in the GRU input (indices 26–37 of SEQUENCE_
 
 ### Broker
 - `BROKER_TYPE=capital` — Capital.com REST API
-- `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_PASSWORD`, `CAPITAL_ENV=demo`
+- Live trading: Capital.com live API (`CAPITAL_ENV=live`)
+- Paper trading: Capital.com demo API (`CAPITAL_ENV=demo`, default)
+- `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_PASSWORD`
 
 ### Trading
 - `PAPER_TRADING=true` (default)
 - `ML_ENABLED=true` — all 4 models must be trained before first run
 - `ACCOUNT_BALANCE=10000.0`; `CAPITAL_PER_TRADER=0.20`; `RISK_PER_TRADE=0.01`
-- `MIN_EV_THRESHOLD=0.10`; `MAX_UNCERTAINTY=0.80`
+- `MIN_EV_THRESHOLD=0.10`; `MAX_UNCERTAINTY=2.0`
+
+### Pydantic (Kaggle compatibility)
+- `pydantic==2.7.4`, `pydantic-core==2.18.4`, `pydantic-settings==2.3.4` — pinned in `requirements.txt`
 
 ### Active Symbols
 All 11: `EURUSD GBPUSD USDJPY AUDUSD NZDUSD USDCAD USDCHF EURGBP EURJPY GBPJPY XAUUSD`
@@ -228,8 +249,8 @@ tail -f trading-engine/logs/trade_journal_detailed.jsonl | python -m json.tool
 
 | Issue | Severity | File |
 |-------|----------|------|
-| RL always action=1 — policy collapsed | P1 | `models/rl_agent.py` |
-| Regime accuracy low (4H ~49%, 1H ~41%) | P2 | `models/regime_classifier.py` |
+| RL policy needs more data for action diversity | P2 | `models/rl_agent.py` — needs ≥200 journal trades |
+| Regime accuracy improving | P2 | `models/regime_classifier.py` — atr_pctile bug fixed; retrain expected to improve LTF RANGING |
 
 **Pending work:**
 - RL entropy tuning after journal reaches ≥ 200 trades

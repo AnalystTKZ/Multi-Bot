@@ -74,14 +74,10 @@ async def get_market_contexts() -> List[Dict[str, Any]]:
     return sorted(contexts, key=lambda item: item.get("symbol") or "")
 
 
-_KNOWN_TRADERS = {"trader_1", "trader_2", "trader_3", "trader_4", "trader_5"}
+_KNOWN_TRADERS = {"trader_1", "trader_2", "trader_3", "trader_4", "trader_5", "ml_trader"}
 
 _DEFAULT_ALLOCATIONS = [
-    {"strategy_id": "trader_1", "is_active": True, "allocated_capital": None, "used_capital": None, "current_risk": None},
-    {"strategy_id": "trader_2", "is_active": True, "allocated_capital": None, "used_capital": None, "current_risk": None},
-    {"strategy_id": "trader_3", "is_active": True, "allocated_capital": None, "used_capital": None, "current_risk": None},
-    {"strategy_id": "trader_4", "is_active": True, "allocated_capital": None, "used_capital": None, "current_risk": None},
-    {"strategy_id": "trader_5", "is_active": True, "allocated_capital": None, "used_capital": None, "current_risk": None},
+    {"strategy_id": "ml_trader", "is_active": True, "allocated_capital": None, "used_capital": None, "current_risk": None},
 ]
 
 

@@ -1,6 +1,6 @@
 # ML-Native Forex/Gold Trading System
 
-Updated 2026-04-19.
+Updated 2026-04-24.
 
 A production-grade, fully containerised automated trading system for Forex and Gold.
 Signal generation is driven entirely by ML — ICT/SMC concepts are encoded as numeric
@@ -33,9 +33,9 @@ features fed to a GRU-LSTM model. There are no rule-based traders.
 | Broker | Capital.com REST API (demo + live) |
 | Message bus | Redis pub/sub |
 | Persistence | PostgreSQL 15, Redis 7 |
-| ML — sequences | PyTorch GPU (GRU(64)→LSTM(128)→3 heads, 74 features) |
-| ML — regime | PyTorch GPU (dual MLP cascade: 4H bias + 1H structure) |
-| ML — EV | PyTorch GPU (MLP 17→64→32→1, Huber loss) |
+| ML — sequences | PyTorch GPU (GRU(64,2L)→LSTM(128,2L)→3 heads, 74 features, temperature scaling) |
+| ML — regime | PyTorch GPU (dual MLP cascade: HTF 4H 3-class + LTF 1H 4-class) |
+| ML — EV | PyTorch GPU (MLP 17→64→32→1, class-weighted Huber loss) |
 | ML — RL | stable-baselines3 PPO (CPU) |
 | Training hardware | Kaggle T4 × 2 GPUs (DataParallel) |
 | Infrastructure | Docker Compose |
@@ -188,14 +188,15 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
 
 | Model | Architecture | Features | Weights |
 |---|---|---|---|
-| RegimeClassifier (4H) | MLP 31→128→64→5 | `REGIME_4H_FEATURES` (31) | `weights/regime_4h.pkl` |
-| RegimeClassifier (1H) | MLP 15→128→64→5 | `REGIME_1H_FEATURES` (15) | `weights/regime_1h.pkl` |
-| GRU-LSTM | GRU(64,2L)→LSTM(128)→3 heads | `SEQUENCE_FEATURES` (74) | `weights/gru_lstm/model.pt` |
+| RegimeClassifier (4H) | MLP 34→128→64→3 (BIAS_UP/DOWN/NEUTRAL) | `REGIME_4H_FEATURES` (34) | `weights/regime_htf.pkl` |
+| RegimeClassifier (1H) | MLP 18→128→64→4 (TRENDING/RANGING/CONSOLIDATING/VOLATILE) | `REGIME_1H_FEATURES` (18) | `weights/regime_ltf.pkl` |
+| GRU-LSTM | GRU(64,2L)→LSTM(128,2L)→3 heads + temperature.pt | `SEQUENCE_FEATURES` (74) | `weights/gru_lstm/model.pt` |
 | QualityScorer | MLP 17→64→32→1, Huber | `QUALITY_FEATURES` (17) | `weights/quality_scorer.pkl` |
 | SentimentModel | FinBERT + VADER fallback | news headlines | pre-trained |
 | RLAgent | PPO (SB3), CPU, 16 actions | 43-dim state | `weights/rl_ppo/model.zip` |
 
-**5 regime classes:** TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, CONSOLIDATION
+**HTF regime classes (3):** BIAS_UP, BIAS_DOWN, BIAS_NEUTRAL
+**LTF regime classes (4):** TRENDING, RANGING, CONSOLIDATING, VOLATILE
 
 **EV label tiers (QualityScorer):**
 
@@ -205,7 +206,7 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
 | `tp1` | `+rr × 0.75` |
 | `be_or_trail` | `+rr × 0.4` |
 | `sl_*` | `-1.0` |
-| `time_exit` | skipped |
+| `time_exit` | `+rr×0.2` (win), `-0.5` (loss), `0.0` (flat) |
 
 All retrains warm-start from existing weights at 5× lower LR. GRU is excluded from per-round reinforcement loop (catastrophic forgetting risk).
 
@@ -303,13 +304,14 @@ trading-system/
 ├── pipeline/                         ← 9-step data + training pipeline
 ├── backend/                          ← FastAPI (port 3000)
 └── trading-engine/
-    ├── main.py                       ← BROKEN — imports deleted trader classes
+    ├── main.py                       ← ProductionTradingEngine (functional)
     ├── models/
-    │   ├── regime_classifier.py      ← Dual-cascade MLP (4H + 1H)
-    │   ├── gru_lstm_predictor.py     ← GRU(64)→LSTM(128)→3 heads
-    │   ├── quality_scorer.py         ← EV regressor, Huber loss
+    │   ├── regime_classifier.py      ← Dual-cascade MLP (HTF 4H 3-class + LTF 1H 4-class)
+    │   ├── gru_lstm_predictor.py     ← GRU(64,2L)→LSTM(128,2L)→3 heads + temperature.pt
+    │   ├── quality_scorer.py         ← EV regressor, class-weighted Huber
     │   ├── sentiment_model.py        ← FinBERT + VADER
-    │   └── rl_agent.py               ← PPO, CPU, model.zip
+    │   ├── rl_agent.py               ← PPO, CPU, model.zip
+    │   └── vector_store.py           ← FAISS index of 64-dim GRU embeddings
     ├── scripts/
     │   ├── run_backtest.py           ← Single ml_trader, GPU-batched
     │   ├── retrain_incremental.py    ← Manual / scheduled retraining
@@ -331,8 +333,8 @@ trading-system/
 
 | Issue | File | Impact |
 |-------|------|--------|
-| RL policy collapsed (action=1 always) | `models/rl_agent.py` | Needs ≥200 trades + entropy tuning |
-| Regime accuracy 4H ~49%, 1H ~41% | `models/regime_classifier.py` | Investigate GMM label quality |
+| RL policy needs more journal data | `models/rl_agent.py` | Needs ≥200 trades for meaningful action diversity |
+| Regime LTF RANGING accuracy | `models/regime_classifier.py` | atr_pctile bug fixed 2026-04-24; retrain expected to improve |
 
 ---
 

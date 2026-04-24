@@ -1,31 +1,29 @@
 # System Assessment — Multi-Bot Trading Engine
 
-**Date:** 2026-04-19
-**Scope:** Post-GPU migration, warm-start retraining, EV pipeline fixes, regime persistence filter, RL save/load fix
+**Date:** 2026-04-24
+**Scope:** Updated from 2026-04-19 assessment. Reflects regime redesign (hierarchical 3+4 class cascade), atr_pctile fix, temperature scaling, QualityScorer label fix, signal_pipeline functional status.
 
 ---
 
 ## 1. What Has Been Built
 
-### 1.1 Five-Strategy Session-Aware Trading Engine
+### 1.1 Unified ML Signal Generator
 
-| Trader | Strategy | Session | Key Regime Requirement |
-|---|---|---|---|
-| T1 | NY EMA Trend Pullback | 13:00–17:00 UTC | TRENDING_UP or DOWN required |
-| T2 | Structure Break + FVG | London 07–12 + NY 13–18 | Any |
-| T3 | London Breakout + Volume | 07:00–10:00 UTC | TRENDING only |
-| T4 | News Structural Breakout | Any | Any (sentiment ≥ 0.65 hard gate) |
-| T5 | Asian Range Mean Reversion | 02:00–06:45 UTC | RANGING required |
+The 5 ICT rule-based traders have been replaced by a single `ml_trader` that runs on all 11 symbols.
+Signal generation: `run_backtest._compute_backtest_signal` (backtest) and
+`signal_pipeline._compute_ml_signal` (live) — kept in exact sync.
 
 ### 1.2 ML Stack (all PyTorch, GPU except RL)
 
 | Model | Algorithm | Role | Status |
 |---|---|---|---|
-| RegimeClassifier | PyTorch MLP 59→128→64→4 + residual | Market regime (4 classes) | ✅ Trained (4H: 47.7%, 1H: 39.5%) |
-| GRU-LSTM | PyTorch GRU(256, 2L) + 3 heads | p_bull, p_bear, magnitude, uncertainty | ✅ Trained (7.08M samples, 44 combos) |
-| QualityScorer | PyTorch MLP 17→64→32→1, Huber loss | EV in R-multiples, tiered labels | ✅ Trained (5,264 journal trades) |
+| RegimeClassifier HTF | PyTorch MLP 34→128→64→3 + residual | 4H macro bias (BIAS_UP/DOWN/NEUTRAL) | ✅ Active |
+| RegimeClassifier LTF | PyTorch MLP 18→128→64→4 + residual | 1H behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE) | ✅ Active (atr_pctile bug fixed 2026-04-24) |
+| GRU-LSTM | PyTorch GRU(64,2L)→LSTM(128,2L)→3 heads | p_bull, p_bear, magnitude, uncertainty | ✅ Trained (7.08M samples, 44 combos) |
+| QualityScorer | PyTorch MLP 17→64→32→1, class-weighted Huber | EV in R-multiples, tiered labels | ✅ Active (labels now read real signal_metadata) |
 | SentimentModel | FinBERT + VADER | Macro/news bias | ✅ Pre-trained |
-| RLAgent | PPO (stable-baselines3), CPU, 42-dim, 16 actions | Strategy selector | ✅ Trained (7,767 episodes) |
+| RLAgent | PPO (stable-baselines3), CPU, 43-dim, 16 actions | Selectivity tier | ✅ Active (needs ≥200 trades for policy diversity) |
+| VectorStore | FAISS flat index on 64-dim GRU embeddings | Historical trade similarity | ✅ Built after GRU retrain |
 
 ### 1.3 Incremental Warm-Start Retraining
 

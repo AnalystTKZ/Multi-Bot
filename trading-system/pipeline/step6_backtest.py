@@ -256,11 +256,8 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             # HTF bias encoding: BIAS_UP=0, BIAS_DOWN=1, BIAS_NEUTRAL=2 → /2.0
             regime_map = {
                 "BIAS_UP": 0.0, "BIAS_DOWN": 1.0, "BIAS_NEUTRAL": 2.0,
-                # Legacy compat
-                "TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0,
-                "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATION": 2.0,
                 # LTF classes also map (approximate)
-                "TRENDING": 0.0, "CONSOLIDATING": 2.0,
+                "TRENDING": 0.0, "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATING": 2.0,
             }
             _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
             trader_idx = int(trader.split("_")[1]) - 1 if "_" in trader else 0  # 0-4

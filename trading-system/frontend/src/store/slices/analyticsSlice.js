@@ -1,18 +1,7 @@
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import analyticsService from '@services/analyticsService'
+import { createSlice } from '@reduxjs/toolkit'
 
-export const fetchPerformance = createAsyncThunk(
-  'analytics/fetchPerformance',
-  async (_, { rejectWithValue }) => {
-    try {
-      const response = await analyticsService.getPerformance()
-      return response
-    } catch (error) {
-      return rejectWithValue(error.message || error)
-    }
-  }
-)
-
+// Performance data is fetched directly by components via analyticsService.
+// This slice exists to hold any analytics state that needs to be shared globally.
 const analyticsSlice = createSlice({
   name: 'analytics',
   initialState: {
@@ -21,20 +10,6 @@ const analyticsSlice = createSlice({
     error: null,
   },
   reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchPerformance.pending, (state) => {
-        state.loading = true
-      })
-      .addCase(fetchPerformance.fulfilled, (state, action) => {
-        state.performance = action.payload
-        state.loading = false
-      })
-      .addCase(fetchPerformance.rejected, (state, action) => {
-        state.error = action.payload
-        state.loading = false
-      })
-  },
 })
 
 export default analyticsSlice.reducer

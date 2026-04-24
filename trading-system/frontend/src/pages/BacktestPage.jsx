@@ -302,7 +302,7 @@ const BacktestPage = () => {
                 Configure and run a backtest to see results
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
-                Most recent result: T2 (SMC) +43% aggregate, USDJPY +251%
+                Results will appear here after the backtest completes.
               </Typography>
             </Paper>
           ) : (

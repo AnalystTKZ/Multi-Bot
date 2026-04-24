@@ -1,44 +1,56 @@
 # Signal Generation Reference
 
-Last updated: 2026-04-19.
+Last updated: 2026-04-24.
 
 The 5 ICT rule-based traders have been removed. `traders/__init__.py` is empty.
 Signal generation is unified in `scripts/run_backtest._compute_backtest_signal()`
 with `trader_id="ml_trader"` running on all 11 symbols.
+The live path mirrors this exactly in `services/signal_pipeline._compute_ml_signal()`.
 
 ---
 
 ## How Signals Are Generated
 
 ICT/SMC logic is **encoded as numeric features** in `SEQUENCE_FEATURES`. The GRU
-learns from those features; it decides direction and confidence. There are no rule
-branches, no regime hard-gates, no per-symbol exclusions.
+learns from those features; it decides direction and confidence. Regime is applied as
+hard gates AFTER the GRU direction step.
 
 ```
 Per 15M bar:
   ① _precompute_ml_cache (done once per symbol, GPU-batched):
-      RegimeClassifier(4H) → regime_4h + conf
-      RegimeClassifier(1H) → regime_1h + conf
-      → injected into each timestep of 30-bar sequence
+      RegimeClassifier(4H) → BIAS_UP/DOWN/NEUTRAL + conf
+      RegimeClassifier(1H) → TRENDING/RANGING/CONSOLIDATING/VOLATILE + conf
+      → injected as one-hot into each timestep of 30-bar sequence
       GRU-LSTM(30 bars × 74 features) → p_bull, p_bear, expected_move, expected_variance
 
-  ② Bar loop:
-      expected_variance > 0.80               → reject
-      max(p_bull, p_bear) < 0.58             → reject
-      side = "buy" if p_bull > p_bear else "sell"
+  ② Bar loop gate order:
+      expected_variance > MAX_UNCERTAINTY (default 2.0)  → reject
+      max(p_bull, p_bear) < 0.58                         → reject
+      side = "buy" if p_bull ≥ p_bear else "sell"
+
+      HTF bias alignment:
+        BIAS_UP   + sell → reject
+        BIAS_DOWN + buy  → reject
+        BIAS_NEUTRAL: require conf ≥ NEUTRAL_BIAS_THRESHOLD (0.58)
+
+      LTF behaviour filter:
+        CONSOLIDATING → reject (if BLOCK_LTF_CONSOLIDATING=1)
+        VOLATILE      → require conf ≥ VOLATILE_ENTRY_THRESHOLD
+        TRENDING      → optional pullback filter (REQUIRE_TRENDING_PULLBACK=0 by default)
+        RANGING       → optional range boundary check (RANGING_REQUIRE_RANGE=0 by default)
 
   ③ Level computation (ATR-based):
-      SL  = entry ± (atr × SL_ATR_MULT)
-      TP1 = entry ± (sl_distance × TP1_MULT)
-      TP2 = entry ± (sl_distance × TP2_MULT)
+      SL = entry ± (atr × SL_ATR_MULT)
+      TP = entry ± (sl_distance × RR_DEFAULT)
+      RANGING entries: TP targets the far wall of the range when range_valid
 
   ④ PM enrichment:
       Size = risk_amount / sl_distance
-      TP1 partial close (50%) → SL to break-even
+      TP1 partial close → SL to break-even
       Correlation cap: max 2 concurrent positions per directional group
 
   ⑤ QualityScorer (post-PM — uses actual rr_ratio):
-      ev < 0.10                              → reject
+      ev < MIN_EV_THRESHOLD (0.10)           → reject
 ```
 
 ---
@@ -68,17 +80,20 @@ These are the numeric encodings of ICT concepts that used to be hard rules.
 
 ## Regime Context
 
-Regime is not a hard gate. It is injected as one-hot + confidence into every GRU timestep:
+Regime is injected as one-hot + confidence into every GRU timestep AND applied as a
+directional gate in the bar loop.
 
 | Features | Indices | Source |
 |----------|---------|--------|
-| `regime_4h_0..4` + `regime_4h_conf` | 26–31 | RegimeClassifier (4H bias) |
-| `regime_1h_0..4` + `regime_1h_conf` | 32–37 | RegimeClassifier (1H structure) |
+| `htf_bias_up/down/neutral` (3 dims) + `htf_bias_conf` | 26–29 | RegimeClassifier (4H, htf_bias mode) |
+| `ltf_trending/ranging/consolidating/volatile` (4 dims) + `ltf_conf` | 30–34 | RegimeClassifier (1H, ltf_behaviour mode) |
+| `htf_ltf_align`, `htf_regime_dur`, `ltf_regime_dur` | 35–37 | alignment + duration |
 
-**5 classes per level:** TRENDING_UP=0, TRENDING_DOWN=1, RANGING=2, VOLATILE=3, CONSOLIDATION=4
+**HTF classes (3):** BIAS_UP=0, BIAS_DOWN=1, BIAS_NEUTRAL=2
+**LTF classes (4):** TRENDING=0, RANGING=1, CONSOLIDATING=2, VOLATILE=3
 
-The GRU learns `P(direction | sequence, regime_4h, regime_1h)` — regime context
-gives it the ability to weight the same price structure differently in trending vs ranging markets.
+The GRU learns `P(direction | sequence, htf_bias, ltf_behaviour)`. Regime is also used
+as a post-GRU hard gate: BIAS_UP blocks sell signals; BIAS_DOWN blocks buy signals.
 
 ---
 
@@ -120,13 +135,19 @@ ATR-scaled stop loss. TP1 at 2× risk, TP2 at 4× risk (PM-adjusted by confidenc
 
 ## Gate Summary
 
-| Gate | Value | Applied in |
-|------|-------|-----------|
-| GRU uncertainty | `expected_variance ≤ 0.80` | `_compute_backtest_signal` |
-| GRU direction | `max(p_bull, p_bear) ≥ 0.58` | `_compute_backtest_signal` |
-| EV threshold | `ev ≥ 0.10` | `_backtest_trader` (post-PM) |
-| Dead zone | 12:00–13:00 UTC | `_backtest_trader` |
-| Cooldown | 10 bars | `_backtest_trader` |
-| Daily loss cap | 2% | `_backtest_trader` |
-| Portfolio drawdown | 8% | `_backtest_trader` |
-| Correlation cap | max 2 per group | `PortfolioManager` |
+| Gate | Default value | Env override | Applied in |
+|------|--------------|--------------|-----------|
+| GRU uncertainty | `expected_variance ≤ 2.0` | `MAX_UNCERTAINTY` | `_compute_backtest_signal` |
+| GRU direction | `max(p_bull, p_bear) ≥ 0.58` | `ML_DIRECTION_THRESHOLD` | `_compute_backtest_signal` |
+| HTF bias alignment | BIAS_UP blocks sell; BIAS_DOWN blocks buy | — | `_compute_backtest_signal` |
+| HTF neutral confidence | `≥ 0.58` | `NEUTRAL_BIAS_THRESHOLD` | `_compute_backtest_signal` |
+| LTF VOLATILE entry | `≥ ML_DIRECTION_THRESHOLD` | `VOLATILE_ENTRY_THRESHOLD` | `_compute_backtest_signal` |
+| LTF CONSOLIDATING | blocked if env set | `BLOCK_LTF_CONSOLIDATING` | `_compute_backtest_signal` |
+| LTF RANGING boundary | optional | `RANGING_REQUIRE_RANGE` | `_compute_backtest_signal` |
+| EV threshold | `ev ≥ 0.10` | `MIN_EV_THRESHOLD` | `_backtest_trader` (post-PM) |
+| Dead zone | 12:00–13:00 UTC | — | `_backtest_trader` |
+| Cooldown | 10 bars | — | `_backtest_trader` |
+| Daily loss cap | 2% | — | `_backtest_trader` |
+| Portfolio drawdown | 8% | — | `_backtest_trader` |
+| Correlation cap | max 2 per group | — | `PortfolioManager` |
+| Signal pipeline confidence | `≥ 0.55` | — | `signal_pipeline.process_bar` |

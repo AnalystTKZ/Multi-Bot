@@ -41,6 +41,12 @@ ALLOWED_ORIGINS = _csv_env_list(
 )
 TRUSTED_HOSTS = _csv_env_list("TRUSTED_HOSTS", "*")
 
+if "*" in ALLOWED_ORIGINS and os.getenv("ENV", "development") == "production":
+    logger.warning(
+        "SECURITY: FRONTEND_ALLOWED_ORIGINS contains '*' in production — "
+        "set FRONTEND_ALLOWED_ORIGINS to the actual frontend origin"
+    )
+
 
 def _origin_allowed(origin: str | None, request_host: str | None = None) -> bool:
     if not origin:
@@ -152,15 +158,31 @@ async def api_health_check():
 
 @app.get("/status")
 async def system_status():
-    """Get system status"""
-    # This would check database, services, etc.
+    """Get system status — delegates to /api/system/status for real state."""
+    from services.redis_client import get_redis_client
+    import os
+    redis_ok = False
+    try:
+        redis_client = get_redis_client()
+        await redis_client.ping()
+        redis_ok = True
+    except Exception:
+        redis_ok = False
+
+    client = get_trading_engine_client()
+    engine_ok = False
+    try:
+        await client.get_system_status()
+        engine_ok = True
+    except Exception:
+        engine_ok = False
+
     return {
-        "status": "operational",
+        "status": "operational" if (redis_ok and engine_ok) else "degraded",
         "services": {
-            "database": "connected",
-            "redis": "connected",
-            "trading_engine": "running"
-        }
+            "redis": "connected" if redis_ok else "unavailable",
+            "trading_engine": "running" if engine_ok else "unavailable",
+        },
     }
 
 @app.get("/metrics")

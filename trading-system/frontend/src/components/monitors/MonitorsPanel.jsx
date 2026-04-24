@@ -30,7 +30,11 @@ const MonitorsPanel = () => {
                 Last check: {monitor.last_check}
               </Typography>
             </Box>
-            <Chip label={monitor.status} size="small" color="success" />
+            <Chip
+              label={monitor.status}
+              size="small"
+              color={monitor.status === 'running' || monitor.status === 'ok' ? 'success' : monitor.status === 'warn' || monitor.status === 'degraded' ? 'warning' : 'error'}
+            />
           </Box>
         ))}
       </Stack>

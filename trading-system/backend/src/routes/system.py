@@ -135,7 +135,11 @@ async def list_backtest_results():
 
 @router.get("/backtest/results/{result_id}")
 async def get_backtest_result(result_id: str):
-    path = _BACKTEST_DIR / f"{result_id}.json"
+    # Sanitise result_id to prevent path traversal
+    safe_id = Path(result_id).name  # strips any directory components
+    if not safe_id or safe_id != result_id:
+        raise HTTPException(status_code=400, detail="Invalid result ID")
+    path = _BACKTEST_DIR / f"{safe_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Result not found")
     return json.loads(path.read_text())
@@ -180,7 +184,7 @@ async def start_training(config: Dict[str, Any]):
 
 @router.post("/training/upload")
 async def upload_training_data():
-    return {"message": "Upload endpoint not yet implemented", "status": "not_implemented"}
+    raise HTTPException(status_code=501, detail="Training data upload not yet implemented")
 
 
 # ─────────────────────────── ML ───────────────────────────────
@@ -218,26 +222,30 @@ async def get_ml_models():
 
 @router.get("/ml/models/{model_id}")
 async def get_ml_model(model_id: str):
+    # Sanitise model_id to prevent path traversal
+    safe_id = Path(model_id).name
+    if not safe_id or safe_id != model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
     redis_client = get_redis_client()
     ml_enabled = os.getenv("ML_ENABLED", "false").lower() == "true"
     # Try Redis first
-    info = await _read_redis_object(redis_client, f"ml:model:{model_id}")
+    info = await _read_redis_object(redis_client, f"ml:model:{safe_id}")
     if info:
         return {
-            "id": model_id,
-            "name": info.get("name", model_id.replace("_", " ").title()),
+            "id": safe_id,
+            "name": info.get("name", safe_id.replace("_", " ").title()),
             "status": info.get("status"),
             "accuracy": info.get("accuracy"),
             "last_trained": info.get("last_trained"),
             "enabled": ml_enabled,
         }
     # Fall back to filesystem
-    path = _ML_WEIGHTS_DIR / f"{model_id}.pkl"
+    path = _ML_WEIGHTS_DIR / f"{safe_id}.pkl"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Model not found")
     return {
-        "id": model_id,
-        "name": model_id.replace("_", " ").title(),
+        "id": safe_id,
+        "name": safe_id.replace("_", " ").title(),
         "size_kb": round(path.stat().st_size / 1024, 1),
         "enabled": ml_enabled,
     }

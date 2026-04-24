@@ -1175,10 +1175,8 @@ class FeatureEngine:
         feats[4] = float(np.clip(ml_base.get("p_bear_gru", 0.5), 0, 1))
 
         regime_map = {
-            # New LTF behaviour classes
+            # LTF behaviour classes
             "TRENDING": 0, "RANGING": 1, "CONSOLIDATING": 2, "VOLATILE": 3,
-            # Legacy compat (map to closest new class)
-            "TRENDING_UP": 0, "TRENDING_DOWN": 0, "CONSOLIDATION": 2,
             # HTF bias classes (map to neutral/default)
             "BIAS_UP": 0, "BIAS_DOWN": 0, "BIAS_NEUTRAL": 1,
         }
@@ -1254,8 +1252,6 @@ class FeatureEngine:
         # LTF behaviour encoding at state[42]: TRENDING=0, RANGING=1, CONSOLIDATING=2, VOLATILE=3 → /3.0
         htf_regime_map = {
             "BIAS_UP": 0.0, "BIAS_DOWN": 1.0, "BIAS_NEUTRAL": 2.0,
-            # Legacy compat
-            "TRENDING_UP": 0.0, "TRENDING_DOWN": 1.0, "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATION": 2.0,
         }
         state[3] = htf_regime_map.get(ml_preds.get("regime", "BIAS_NEUTRAL"), 2.0) / 2.0
         state[4] = _safe(ml_preds, "sentiment_score", 0.0)

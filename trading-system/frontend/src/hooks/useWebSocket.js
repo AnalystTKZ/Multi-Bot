@@ -1,20 +1,11 @@
-import { useEffect, useCallback } from 'react'
-import { useSelector } from 'react-redux'
-import { initWebSocket, closeWebSocket, on, off } from '@services/websocket'
+import { useCallback } from 'react'
+import { on, off } from '@services/websocket'
 
+// The global WebSocket lifecycle (connect/disconnect) is managed by
+// websocketMiddleware in response to auth events. This hook only exposes
+// a stable subscribe/unsubscribe API for components that need to react
+// to specific WS event types.
 export const useWebSocket = () => {
-  const user = useSelector((state) => state.auth.user)
-
-  useEffect(() => {
-    if (user) {
-      initWebSocket()
-    }
-
-    return () => {
-      closeWebSocket()
-    }
-  }, [user])
-
   const subscribe = useCallback((event, callback) => {
     on(event, callback)
     return () => off(event, callback)
