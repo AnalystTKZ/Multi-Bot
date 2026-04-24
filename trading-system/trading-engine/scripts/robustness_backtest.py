@@ -39,6 +39,12 @@ _ENGINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, _ENGINE_DIR)
 os.chdir(_ENGINE_DIR)  # models use relative "weights/..." paths
 
+# Allow model classes to load on CPU when no GPU is available.
+# This must be set before any model module is imported (they call _get_device() at
+# module level). INFERENCE_ONLY bypasses the Kaggle training guard — training still
+# requires GPU via retrain_incremental.py which sets CUDA_VISIBLE_DEVICES explicitly.
+os.environ.setdefault("INFERENCE_ONLY", "1")
+
 import numpy as np
 import pandas as pd
 

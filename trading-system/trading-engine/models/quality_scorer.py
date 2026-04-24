@@ -44,7 +44,7 @@ def _get_device():
     if torch.cuda.is_available():
         logger.info("QualityScorer: CUDA available — using GPU")
         return torch.device("cuda")
-    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE"):
+    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
         raise RuntimeError(
             "QualityScorer: CUDA not available on Kaggle — "
             "enable GPU accelerator in notebook settings."

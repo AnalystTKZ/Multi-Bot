@@ -77,7 +77,7 @@ def _get_device():
                         torch.cuda.get_device_name(i),
                         torch.cuda.get_device_properties(i).total_memory / 1e9)
         return torch.device("cuda")
-    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE"):
+    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
         raise RuntimeError(
             "RegimeClassifier: CUDA not available on Kaggle — "
             "enable GPU accelerator in notebook settings."
