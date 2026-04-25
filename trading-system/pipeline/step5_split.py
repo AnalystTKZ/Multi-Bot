@@ -26,9 +26,14 @@ from dateutil.relativedelta import relativedelta
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("step5_split")
 
-BASE = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = BASE / "processed_data"
-ML_DIR = BASE / "ml_training" / "datasets"
+# Use env_config so outputs go to the correct root on Kaggle (remote clone when present).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from env_config import get_env
+_ENV = get_env()
+
+BASE       = _ENV["base"]
+OUTPUT_DIR = _ENV["processed"]
+ML_DIR     = _ENV["ml_training"] / "datasets"
 ML_DIR.mkdir(parents=True, exist_ok=True)
 
 TEST_YEARS = 2

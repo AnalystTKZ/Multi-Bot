@@ -21,15 +21,20 @@ import numpy as np
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("step7_train")
 
-BASE = Path(__file__).resolve().parent.parent
-ENGINE_DIR = BASE / "trading-engine"
-ML_DIR = BASE / "ml_training"
+# Use env_config so outputs go to the remote clone on Kaggle when present.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from env_config import get_env
+_ENV = get_env()
+
+BASE       = _ENV["base"]
+ENGINE_DIR = _ENV["engine"]
+ML_DIR     = _ENV["ml_training"]
 ML_METRICS = ML_DIR / "metrics"
-ML_LOGS = ML_DIR / "logs"
+ML_LOGS    = ML_DIR / "logs"
 for d in [ML_METRICS, ML_LOGS]:
     d.mkdir(parents=True, exist_ok=True)
 
-JOURNAL_PATH = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
+JOURNAL_PATH     = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
 JOURNAL_CSV_PATH = ENGINE_DIR / "logs" / "trade_journal.csv"
 
 

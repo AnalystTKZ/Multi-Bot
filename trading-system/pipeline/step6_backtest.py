@@ -40,9 +40,14 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("step6_backtest")
 
-BASE         = Path(__file__).resolve().parent.parent
-ENGINE_DIR   = BASE / "trading-engine"
-HIST_DIR     = BASE / "processed_data" / "histdata"
+# Use env_config so paths resolve to the remote clone on Kaggle when present.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from env_config import get_env
+_ENV = get_env()
+
+BASE         = _ENV["base"]
+ENGINE_DIR   = _ENV["engine"]
+HIST_DIR     = _ENV["processed"] / "histdata"
 BT_DIR       = BASE / "backtesting"
 BT_RESULTS   = BT_DIR / "results"
 BT_LOGS      = BT_DIR / "logs"
@@ -67,7 +72,7 @@ def _build_env() -> dict:
 
 
 def _load_split_summary() -> dict:
-    split_path = BASE / "ml_training" / "datasets" / "split_summary.json"
+    split_path = _ENV["ml_training"] / "datasets" / "split_summary.json"
     if not split_path.exists():
         logger.error(
             "split_summary.json not found at %s — run step5_split.py first", split_path
