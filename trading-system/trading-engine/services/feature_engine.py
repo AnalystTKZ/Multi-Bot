@@ -291,11 +291,16 @@ QUALITY_FEATURES = [
     "spread_at_signal",     # 10
     "session_at_signal",    # 11
     "news_in_30min",        # 12
-    "strategy_win_rate_20", # 13
+    "strategy_win_rate_20", # 13  rolling 20-trade win rate (medium-term)
     "gru_uncertainty",      # 14  expected_variance from GRU variance head
     "regime_duration",      # 15  normalised bars since last regime change [0,1]
     "vol_slope_at_signal",  # 16  Δ(ATR/close)*1000 — expanding vs contracting vol
-]  # 17 features
+    # ── New discriminative features (added to reduce quality_block=0 failure) ──
+    "strategy_win_rate_5",  # 17  rolling 5-trade win rate — short-term hot/cold streak
+    "strategy_win_rate_50", # 18  rolling 50-trade win rate — long-term baseline
+    "gru_signal_agreement", # 19  1.0 if GRU direction agrees with signal side, 0.0 if not
+                            #     Key discriminator: GRU disagrees → negative EV setup
+]  # 20 features
 
 # RL state dimension layout (total = 42):
 # [0-5]   ML predictions  (p_bull, p_bear, entry_depth, regime_id, sentiment, quality)
@@ -1195,16 +1200,41 @@ class FeatureEngine:
         feats[11] = float(session_map.get(ml_base.get("session", "INACTIVE"), 0))
         feats[12] = 1.0 if ml_base.get("news_in_30min", False) else 0.0
 
-        win_rate = 0.5
+        win_rate_20 = 0.5
+        win_rate_5  = 0.5
+        win_rate_50 = 0.5
         if self._journal is not None:
-            stats = self._journal.get_rolling_stats(signal.get("trader_id", ""), n=20)
-            win_rate = stats.get("win_rate", 0.5)
-        feats[13] = float(np.clip(win_rate, 0, 1))
+            tid = signal.get("trader_id", "")
+            stats_20 = self._journal.get_rolling_stats(tid, n=20)
+            stats_5  = self._journal.get_rolling_stats(tid, n=5)
+            stats_50 = self._journal.get_rolling_stats(tid, n=50)
+            win_rate_20 = stats_20.get("win_rate", 0.5)
+            win_rate_5  = stats_5.get("win_rate",  0.5)
+            win_rate_50 = stats_50.get("win_rate", 0.5)
+        feats[13] = float(np.clip(win_rate_20, 0, 1))
 
-        # New features (indices 14–16)
+        # Features 14–16 (existing)
         feats[14] = float(np.clip(ml_base.get("expected_variance", 0.1), 0.0, 5.0))
         feats[15] = float(np.clip(ml_base.get("regime_duration", 0.5), 0.0, 1.0))
         feats[16] = float(np.clip(ml_base.get("vol_slope", 0.0), -5.0, 5.0))
+
+        # Features 17–19 (new discriminative features)
+        feats[17] = float(np.clip(win_rate_5,  0, 1))
+        feats[18] = float(np.clip(win_rate_50, 0, 1))
+
+        # GRU/signal agreement: 1.0 if GRU bull direction agrees with buy signal (or bear with sell)
+        # This is the single strongest discriminator for quality_block=0: when GRU disagrees with
+        # the signal direction, EV is almost always negative regardless of other features.
+        _side = signal.get("side", "")
+        _p_bull = float(np.clip(ml_base.get("p_bull_gru", 0.5), 0, 1))
+        _gru_bull = _p_bull > 0.5
+        if _side == "buy":
+            _agree = 1.0 if _gru_bull else 0.0
+        elif _side == "sell":
+            _agree = 1.0 if not _gru_bull else 0.0
+        else:
+            _agree = 0.5  # unknown side → neutral
+        feats[19] = float(_agree)
 
         feats = np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
         return feats.astype(np.float32)

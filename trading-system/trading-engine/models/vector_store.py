@@ -3,8 +3,17 @@ vector_store.py — FAISS-GPU vector similarity search for trading patterns.
 
 Three separate indices:
   - trade_patterns    : 74-dim  (GRU SEQUENCE_FEATURES per-bar snapshot)
-  - market_structures : 53-dim  (REGIME_FEATURES — SMC + MTF + macro)
+  - market_structures : 34-dim  (REGIME_4H_FEATURES — HTF bias features, clean for similarity search)
   - regime_embeddings : 64-dim  (GRU shared-layer encoding, richer than raw features)
+
+market_structures uses REGIME_4H_FEATURES (34-dim) rather than the full REGIME_FEATURES (67-dim)
+because:
+  1. REGIME_FEATURES includes 5M/15M noise features and prev_regime one-hots that add
+     irrelevant dimensions to cross-symbol structural similarity search.
+  2. REGIME_4H_FEATURES (15 HTF structural + 17 macro index returns + 2 macro scalars = 34)
+     is the clean "structural fingerprint" for finding similar market regimes in history.
+  3. The old value of 53 was stale — it predated the addition of INDEX_FEATURES (+17) and
+     two macro scalars, which pushed REGIME_FEATURES to 67. Using 34 is intentional.
 
 Each index stores:
   - The raw float32 vector
@@ -24,8 +33,8 @@ Usage:
     # Index a trade-pattern vector
     store.add("trade_patterns", vec_74d, {"symbol": "EURUSD", "ts": "2024-01-01", "outcome": "tp"})
 
-    # Query nearest 5 similar patterns
-    results = store.query("trade_patterns", query_vec_45d, k=5)
+    # Query nearest 5 similar market structures (pass a REGIME_4H_FEATURES vector, dim=34)
+    results = store.query("market_structures", query_vec_34d, k=5)
     # returns list of {"score": float, "meta": dict}
 
     # Save/load
@@ -48,12 +57,16 @@ _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # tra
 _STORE_DIR = os.path.join(_MODEL_ROOT, "weights", "vector_store")
 
 # Index dimensionalities — must match the feature engines exactly.
-# trade_patterns: SEQUENCE_FEATURES list in feature_engine.py (74 features as of current contract).
-# market_structures: REGIME_FEATURES (53-dim HTF feature matrix).
+# trade_patterns:    SEQUENCE_FEATURES list in feature_engine.py (74 features as of current contract).
+# market_structures: REGIME_4H_FEATURES in feature_engine.py (34 features).
+#                    Intentionally uses the 4H-only feature set, NOT the full REGIME_FEATURES (67-dim).
+#                    REGIME_FEATURES is bloated for similarity search: it includes 5M/15M per-bar noise,
+#                    prev_regime one-hots, and S/R zeroed-out stubs. REGIME_4H_FEATURES gives a clean
+#                    34-dim structural fingerprint (15 HTF structural + 17 macro index returns + 2 macro).
 # regime_embeddings: GRU hidden_size (64-dim shared-layer encoding).
 INDEX_DIMS = {
     "trade_patterns":    74,   # SEQUENCE_FEATURES (per-bar snapshot, 74 features)
-    "market_structures": 53,   # REGIME_FEATURES
+    "market_structures": 34,   # REGIME_4H_FEATURES (HTF structural fingerprint, 34 features)
     "regime_embeddings": 64,   # GRU shared layer output
 }
 
@@ -281,8 +294,17 @@ class VectorStore:
         logger.info("VectorStore: saved %d total vectors to %s", total, self._dir)
 
     def load(self) -> None:
-        """Load persisted indices from disk, then push to GPU if available."""
+        """Load persisted indices from disk, then push to GPU if available.
+
+        Dim-mismatch guard: if a saved index has a different dimensionality than
+        INDEX_DIMS (e.g. stale market_structures.faiss built at dim=53 before the
+        fix to 34), the file is deleted and the index is rebuilt fresh so the next
+        training run repopulates it correctly instead of crashing or silently using
+        wrong vectors.
+        """
         faiss = _get_faiss()
+        import torch
+
         for name in INDEX_DIMS:
             faiss_path = os.path.join(self._dir, f"{name}.faiss")
             meta_path  = os.path.join(self._dir, f"{name}_meta.pkl")
@@ -292,9 +314,24 @@ class VectorStore:
 
             try:
                 cpu_idx = faiss.read_index(faiss_path)
+
+                # Dim-mismatch guard: stale index → delete and rebuild empty.
+                expected_dim = INDEX_DIMS[name]
+                if cpu_idx.d != expected_dim:
+                    logger.warning(
+                        "VectorStore: '%s' on disk has dim=%d but INDEX_DIMS says %d — "
+                        "deleting stale index so it rebuilds at the correct dimension.",
+                        name, cpu_idx.d, expected_dim,
+                    )
+                    os.remove(faiss_path)
+                    if os.path.exists(meta_path):
+                        os.remove(meta_path)
+                    self._indices[name] = _build_index(expected_dim)
+                    self._meta[name] = []
+                    continue
+
                 # Try to push to GPU
                 try:
-                    import torch
                     if torch.cuda.is_available():
                         res = faiss.StandardGpuResources()
                         self._indices[name] = faiss.index_cpu_to_gpu(res, 0, cpu_idx)
@@ -309,7 +346,6 @@ class VectorStore:
                     with open(meta_path, "rb") as f:
                         self._meta[name] = pickle.load(f)
                 else:
-                    # Rebuild empty meta list if pkl missing
                     self._meta[name] = [{} for _ in range(cpu_idx.ntotal)]
 
             except Exception as exc:

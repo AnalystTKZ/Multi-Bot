@@ -960,8 +960,8 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
     Build VectorStore indices from trained weights after GRU + Regime training.
 
     Three indices populated:
-      trade_patterns    (45-dim) — per-bar SEQUENCE_FEATURES snapshot, all training bars
-      market_structures (53-dim) — REGIME_FEATURES per bar, all training bars
+      trade_patterns    (74-dim) — per-bar SEQUENCE_FEATURES snapshot, all training bars
+      market_structures (34-dim) — REGIME_4H_FEATURES subset, all training bars
       regime_embeddings (64-dim) — GRU shared-layer encoding, sampled every 4 bars
 
     Runs after training so it never slows down the training loop itself.
@@ -975,7 +975,7 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
         import gc
         from models.vector_store import VectorStore
         from models.gru_lstm_predictor import GRULSTMPredictor
-        from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_FEATURES
+        from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_FEATURES, REGIME_4H_FEATURES
 
         logger.info("=== VectorStore: building similarity indices ===")
         store = VectorStore()
@@ -1010,23 +1010,35 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
             except Exception as exc:
                 logger.warning("VectorStore trade_patterns failed for %s: %s", sym, exc)
 
-            # --- market_structures: 53-dim REGIME_FEATURES ---
+            # --- market_structures: 34-dim REGIME_4H_FEATURES subset ---
+            # Use REGIME_4H_FEATURES (34-dim), NOT the full REGIME_FEATURES (67-dim).
+            # REGIME_4H_FEATURES is the clean structural fingerprint for similarity search:
+            #   15 HTF structural features + 17 macro index returns + 2 macro scalars = 34.
+            # REGIME_FEATURES (67-dim) is bloated with 5M/15M noise, prev_regime one-hots,
+            # and zeroed-out S/R stubs that corrupt cosine similarity.
+            # The old hardcoded dim=53 was stale — it predated INDEX_FEATURES (+17) being
+            # appended to REGIME_FEATURES, which pushed it to 67. This is the correct fix.
             try:
                 from models.regime_classifier import RegimeClassifier
+                from services.feature_engine import REGIME_FEATURES, REGIME_4H_FEATURES
                 all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("5M", "15M", "1H", "4H", "1D")}
-                # Vectorised: build full feature matrix in one pass, then sample rows
+                # Build full 67-dim matrix, then slice to the 34 REGIME_4H_FEATURES columns.
                 X_all = RegimeClassifier._build_feature_matrix(df, all_htf, sym)
+                col_idx = [REGIME_FEATURES.index(f) for f in REGIME_4H_FEATURES if f in REGIME_FEATURES]
+                X_htf = X_all[:, col_idx]  # (N, 34)
                 step = max(1, len(df) // MAX_BARS_PER_SYMBOL)
                 idx = np.arange(50, len(df), step)
-                regime_vecs = X_all[idx]
+                idx = idx[idx < len(X_htf)]  # guard: X_htf may be shorter than df
+                regime_vecs = X_htf[idx]
                 regime_metas = [
                     {"symbol": sym, "timeframe": "15M", "ts": str(df.index[i])}
                     for i in idx
                 ]
                 if len(regime_vecs) > 0:
                     store.add_batch("market_structures", regime_vecs.astype("float32"), regime_metas)
-                    logger.info("VectorStore market_structures: +%d vectors for %s", len(regime_vecs), sym)
-                del all_htf, X_all, regime_vecs, regime_metas
+                    logger.info("VectorStore market_structures: +%d vectors (34-dim 4H) for %s",
+                                len(regime_vecs), sym)
+                del all_htf, X_all, X_htf, regime_vecs, regime_metas
                 gc.collect()
             except Exception as exc:
                 logger.warning("VectorStore market_structures failed for %s: %s", sym, exc)

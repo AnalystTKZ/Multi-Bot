@@ -751,11 +751,48 @@ class GRULSTMPredictor(BaseModel):
                 train_idx = np.arange(n_train, dtype=np.int64)
                 steps_per_epoch = max(1, (n_train + batch_size - 1) // batch_size)
 
-                optimiser = torch.optim.AdamW(self._model.parameters(), lr=3e-4, weight_decay=1e-3)
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimiser, max_lr=3e-4, epochs=epochs,
-                    steps_per_epoch=steps_per_epoch, pct_start=0.2,
-                )
+                # Detect warm-start vs cold-start — determines LR and scheduler strategy.
+                # Warm-start (loaded from prior weights): OneCycleLR with max_lr=3e-4 is too
+                # aggressive — it ramps the LR during its warmup phase, overshooting the local
+                # minimum immediately and causing val_loss to worsen from epoch 1 onward. The
+                # model early-stops at epoch 5-6 before the LR ever decays enough to recover.
+                # Fix: use CosineAnnealingLR with a low initial LR (3e-5) for fine-tuning.
+                # Cold-start: keep OneCycleLR with max_lr=3e-4 — it's designed for training
+                # from random init where aggressive LR warmup is beneficial.
+                _warm_start = self._loaded  # BaseModel sets _loaded=True after load()
+                if _warm_start:
+                    # Fine-tuning: conservative LR, cosine decay, generous patience.
+                    # 3e-5 is 10× lower than the cold-start peak — stays near the local minimum
+                    # while allowing gradual adaptation to new data distribution.
+                    _train_lr = 3e-5
+                    _patience = 12  # longer patience: cosine decay needs more epochs to converge
+                    optimiser = torch.optim.AdamW(
+                        self._model.parameters(), lr=_train_lr, weight_decay=1e-3
+                    )
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        optimiser, T_max=epochs, eta_min=1e-6,
+                    )
+                    logger.info(
+                        "train_multi TF=%s: warm-start detected — "
+                        "using CosineAnnealingLR (lr=%.0e, patience=%d)",
+                        tf, _train_lr, _patience,
+                    )
+                else:
+                    # Cold-start: OneCycleLR with standard LR — good for random init.
+                    _train_lr = 3e-4
+                    _patience = 5
+                    optimiser = torch.optim.AdamW(
+                        self._model.parameters(), lr=_train_lr, weight_decay=1e-3
+                    )
+                    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                        optimiser, max_lr=_train_lr, epochs=epochs,
+                        steps_per_epoch=steps_per_epoch, pct_start=0.2,
+                    )
+                    logger.info(
+                        "train_multi TF=%s: cold-start — "
+                        "using OneCycleLR (max_lr=%.0e, patience=%d)",
+                        tf, _train_lr, _patience,
+                    )
 
                 # pos_weight from training direction labels
                 valid_dir = Y_train_t[:, 0].numpy()
@@ -791,7 +828,7 @@ class GRULSTMPredictor(BaseModel):
                     return loss_dir + 0.5 * loss_mag + 0.3 * loss_vol
 
                 best_val = float("inf")
-                patience, no_improve = 5, 0
+                patience, no_improve = _patience, 0
 
                 # Move val set to GPU once — it's small enough (~600K × 30 × F ≈ 600MB)
                 X_val_gpu = X_val_t.to(DEVICE, non_blocking=True)
@@ -821,9 +858,15 @@ class GRULSTMPredictor(BaseModel):
                             scaler.step(optimiser)
                             scaler.update()
                             optimiser.zero_grad()
-                            scheduler.step()
+                            # OneCycleLR must step every optimizer step (not per-epoch).
+                            # CosineAnnealingLR steps per epoch — handled after the inner loop.
+                            if not _warm_start:
+                                scheduler.step()
                         train_loss += loss.item() * grad_accum_steps * (b_end - b_start)
                     train_loss /= max(1, n_train)
+                    # CosineAnnealingLR: step once per epoch (after all batches done)
+                    if _warm_start:
+                        scheduler.step()
 
                     self._model.eval()
                     val_loss = 0.0
@@ -960,7 +1003,7 @@ class GRULSTMPredictor(BaseModel):
                     regime_1h_features=list(REGIME_1H_FEATURES),
                     quality_features=list(QUALITY_FEATURES),
                     gru_hidden=64,
-                    gru_layers=1,
+                    gru_layers=2,
                 )
                 logger.info("GRULSTMPredictor saved to %s", WEIGHT_FILE)
             except Exception as exc:

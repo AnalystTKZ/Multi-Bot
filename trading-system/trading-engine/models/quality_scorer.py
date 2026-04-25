@@ -30,7 +30,7 @@ from models.base_model import BaseModel
 
 logger = logging.getLogger(__name__)
 
-N_FEATURES = 14
+N_FEATURES = 20  # matches len(QUALITY_FEATURES) in feature_engine.py
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHT_PATH = os.path.join(_MODEL_ROOT, "weights", "quality_scorer.pkl")
 
@@ -60,7 +60,7 @@ DEVICE = _get_device()
 # ── Architecture ──────────────────────────────────────────────────────────────
 
 def _build_mlp(n_features: int = N_FEATURES):
-    """N → 64 → 32 → 1  with BatchNorm + GELU + Dropout. Identity output (EV regressor)."""
+    """N → 128 → 64 → 32 → 1  with BatchNorm + GELU + Dropout. Identity output (EV regressor)."""
     import torch.nn as nn
 
     class _QualityMLP(nn.Module):
@@ -68,10 +68,14 @@ def _build_mlp(n_features: int = N_FEATURES):
             super().__init__()
             self.net = nn.Sequential(
                 nn.BatchNorm1d(n_features),
-                nn.Linear(n_features, 64),
-                nn.BatchNorm1d(64),
+                nn.Linear(n_features, 128),
+                nn.BatchNorm1d(128),
                 nn.GELU(),
                 nn.Dropout(0.3),
+                nn.Linear(128, 64),
+                nn.BatchNorm1d(64),
+                nn.GELU(),
+                nn.Dropout(0.25),
                 nn.Linear(64, 32),
                 nn.BatchNorm1d(32),
                 nn.GELU(),
@@ -214,6 +218,12 @@ class QualityScorer(BaseModel):
             logger.warning("QualityScorer: journal not found at %s", journal_path)
             return pd.DataFrame()
 
+        # Per-strategy rolling outcome history for win-rate features (no lookahead).
+        # Populated as we iterate records in chronological order — each row gets
+        # the win rates from *prior* trades only, then we append the current outcome.
+        from collections import defaultdict
+        _outcomes: dict = defaultdict(list)  # trader_id → list of bool (win=True)
+
         rows = []
         for r in records:
             ev_label = self._compute_ev_label(r)
@@ -223,11 +233,37 @@ class QualityScorer(BaseModel):
             rr = float(r.get("rr_ratio", 1.5))
             ml_scores = r.get("ml_model_scores", {}) or {}
             sig_meta  = r.get("signal_metadata",  {}) or {}
+            trader_id = str(r.get("trader", ""))
+
+            # Rolling win rates from prior trades only (no lookahead)
+            _hist = _outcomes[trader_id]
+
+            def _roll_wr(n: int) -> float:
+                if not _hist:
+                    return 0.5
+                recent = _hist[-n:]
+                return float(np.mean(recent))
+
+            wr_5  = _roll_wr(5)
+            wr_20 = _roll_wr(20)
+            wr_50 = _roll_wr(50)
+
+            # GRU/signal agreement: 1.0 if GRU bull direction agrees with signal side
+            p_bull = float(ml_scores.get("p_bull", 0.5))
+            side   = str(r.get("side", "")).lower()
+            gru_bull = p_bull > 0.5
+            if side == "buy":
+                _agree = 1.0 if gru_bull else 0.0
+            elif side == "sell":
+                _agree = 1.0 if not gru_bull else 0.0
+            else:
+                _agree = 0.5
+
             rows.append({
-                "strategy_id":          r.get("trader", ""),
-                "signal_direction":     1 if r.get("side") == "buy" else 0,
+                "strategy_id":          trader_id,
+                "signal_direction":     1 if side == "buy" else 0,
                 "rr_ratio":             rr,
-                "p_bull_gru":           float(ml_scores.get("p_bull", 0.5)),
+                "p_bull_gru":           p_bull,
                 "p_bear_gru":           float(ml_scores.get("p_bear", 0.5)),
                 "regime_class":         ml_scores.get("regime", "RANGING"),
                 "sentiment_score":      float(ml_scores.get("sentiment_score", 0.0)),
@@ -253,14 +289,19 @@ class QualityScorer(BaseModel):
                 "news_in_30min":        int(
                     sig_meta.get("news_in_30min",
                     ml_scores.get("news_in_30min", 0))),
-                "strategy_win_rate_20": float(
-                    sig_meta.get("strategy_win_rate_20",
-                    ml_scores.get("strategy_win_rate_20", 0.5))),
+                "strategy_win_rate_20": wr_20,
                 "gru_uncertainty":      float(ml_scores.get("expected_variance", 0.1)),
                 "regime_duration":      float(ml_scores.get("regime_duration", 0.5)),
                 "vol_slope_at_signal":  float(ml_scores.get("vol_slope", 0.0)),
+                # New features (indices 17–19) — see feature_engine.QUALITY_FEATURES
+                "strategy_win_rate_5":  wr_5,
+                "strategy_win_rate_50": wr_50,
+                "gru_signal_agreement": _agree,
                 "label":                ev_label,
             })
+
+            # Append outcome *after* recording the row (strict no-lookahead)
+            _outcomes[trader_id].append(ev_label > 0)
 
         return pd.DataFrame(rows)
 
@@ -334,12 +375,16 @@ class QualityScorer(BaseModel):
                                   num_workers=_workers, pin_memory=_pin,
                                   persistent_workers=(_workers > 0))
 
-            # Class-weighted Huber: amplify gradient on winning trades to counteract
-            # the ~18%/82% positive/negative imbalance in the journal.
+            # Class-weighted Huber: balance gradients between winning and losing trades.
+            # pos_weight = n_neg / n_pos — amplifies winner gradient when losses dominate,
+            # attenuates it when winners dominate (WR > 50%). Do NOT clamp to 1.0 minimum:
+            # when WR > 50% (n_pos > n_neg), pos_weight < 1.0 is correct — it down-weights
+            # winner predictions so the model allocates more capacity to separating marginal
+            # losers from strong winners, rather than predicting every trade as positive EV.
             _n_pos = float(np.sum(y_tr > 0))
             _n_neg = float(np.sum(y_tr <= 0))
-            _pos_weight = (_n_neg / max(_n_pos, 1.0))  # e.g. ~4.6× for 18/82 split
-            _pos_weight = float(np.clip(_pos_weight, 1.0, 8.0))  # cap at 8× to avoid instability
+            _pos_weight = (_n_neg / max(_n_pos, 1.0))
+            _pos_weight = float(np.clip(_pos_weight, 0.25, 8.0))  # allow < 1 when WR > 50%
             logger.info("QualityScorer: pos_weight=%.2f (n_pos=%d n_neg=%d)", _pos_weight, int(_n_pos), int(_n_neg))
 
             import torch as _torch_qs
@@ -461,6 +506,19 @@ class QualityScorer(BaseModel):
 
             n_feat     = payload["n_features"]
             state_dict = payload["state_dict"]
+
+            # Architecture mismatch guard: if the saved weights have a different
+            # n_features than the current N_FEATURES (e.g. old 17-dim vs new 20-dim),
+            # the pkl is stale and cannot be loaded into the current model. Delete it
+            # so the next training run starts cold with the correct architecture.
+            if n_feat != N_FEATURES:
+                logger.warning(
+                    "QualityScorer: stale weights at %s have n_features=%d but "
+                    "current model expects %d — deleting and starting cold.",
+                    path, n_feat, N_FEATURES,
+                )
+                os.remove(path)
+                return
 
             m = _build_mlp(n_feat)
             m.load_state_dict(state_dict)

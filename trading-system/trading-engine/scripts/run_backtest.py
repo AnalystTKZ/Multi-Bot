@@ -1330,14 +1330,16 @@ def _backtest_trader(
             _ev = float(_qs_result["ev"])
             ml_preds["ev"]            = _ev
             ml_preds["quality_score"] = float(_qs_result["quality_score"])
-            # Default -1.0 R: cold/OOD quality heads often sit slightly negative; 0.10
-            # starved the journal. Set MIN_EV_THRESHOLD=0.10 in .env for production.
-            if _ev < float(os.getenv("MIN_EV_THRESHOLD", "-1.0")):
+            # Block trades where predicted EV < threshold. 0.0 = only take trades the
+            # model believes are positive EV. Set MIN_EV_THRESHOLD env var to override.
+            # Previously defaulted to -1.0 (never blocks) — raised to 0.0 so the quality
+            # gate actually filters predicted-negative-EV setups.
+            if _ev < float(os.getenv("MIN_EV_THRESHOLD", "0.0")):
                 _dbg["quality_block"] += 1
                 continue
         elif ml_preds and ml_preds.get("ev") is not None:
             # Cache had ev (e.g. from _run_bar_ml fallback path)
-            if float(ml_preds["ev"]) < float(os.getenv("MIN_EV_THRESHOLD", "-1.0")):
+            if float(ml_preds["ev"]) < float(os.getenv("MIN_EV_THRESHOLD", "0.0")):
                 _dbg["quality_block"] += 1
                 continue
 
