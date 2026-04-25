@@ -334,7 +334,49 @@ def _build_ml_cache(
         fe = FeatureEngine()
         n  = len(df)
 
-        def _batch_regime(rc_model, df_src, htf_src):
+        regime_preds       = {}
+        _regime_htf_series = _regime_htf_conf = _regime_ltf_series = _regime_ltf_conf = None
+
+        # Phase 1: build feature matrices in parallel (pure numpy/pandas — CPU only).
+        # Phase 2: GPU predict_batch calls serially — CUDA is not thread-safe across
+        # two concurrent forward passes from different threads.
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        from models.regime_classifier import RegimeClassifier as _RC
+
+        _do_4h = bool(regime_4h and getattr(regime_4h, "is_trained", False)
+                      and regime_4h._model is not None)
+        _do_1h = bool(regime_1h and getattr(regime_1h, "is_trained", False)
+                      and regime_1h._model is not None)
+
+        _df_src_4h = htf.get("4H") if (_do_4h and htf.get("4H") is not None
+                                        and len(htf.get("4H")) >= 50) else df
+        _df_src_1h = htf.get("1H") if (_do_1h and htf.get("1H") is not None
+                                        and len(htf.get("1H")) >= 50) else df
+
+        def _build_X_4h():
+            return _RC._build_feature_matrix(_df_src_4h, htf, symbol)
+
+        def _build_X_1h():
+            return _RC._build_feature_matrix(_df_src_1h, htf, symbol)
+
+        _X_4h = _X_1h = None
+        _workers = (2 if (_do_4h and _do_1h) else 1)
+        with _TPE(max_workers=_workers) as _pool:
+            _f4 = _pool.submit(_build_X_4h) if _do_4h else None
+            _f1 = _pool.submit(_build_X_1h) if _do_1h else None
+            if _f4 is not None:
+                try:
+                    _X_4h = _f4.result()
+                except Exception as _exc:
+                    logger.error("regime 4H feature build failed %s: %s", symbol, _exc)
+            if _f1 is not None:
+                try:
+                    _X_1h = _f1.result()
+                except Exception as _exc:
+                    logger.error("regime 1H feature build failed %s: %s", symbol, _exc)
+
+        # Phase 2: GPU inference (serial — one model at a time on CUDA).
+        def _infer_regime(rc_model, X_feat, df_src):
             _mode = getattr(rc_model, "_mode", "ltf_behaviour")
             if _mode == "htf_bias":
                 _classes, _default = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], 2
@@ -343,14 +385,12 @@ def _build_ml_cache(
             _n    = len(df_src)
             _step = max(1, _n // 20_000)
             try:
-                from models.regime_classifier import RegimeClassifier as _RC
-                X_all   = _RC._build_feature_matrix(df_src, htf_src, symbol)
                 row_idx = list(range(50, _n, _step))
-                X       = X_all[row_idx]; del X_all
+                X = X_feat[row_idx]
                 if len(X) == 0:
                     return None, None, {}
                 ids, conf = rc_model.predict_batch(X); del X
-                arr    = np.full(_n, -1, dtype=np.int8)
+                arr = np.full(_n, -1, dtype=np.int8)
                 arr[row_idx] = ids.astype(np.int8)
                 filled = (pd.Series(arr.astype(float))
                           .replace(-1, np.nan).ffill().fillna(_default).astype(int).values)
@@ -360,43 +400,14 @@ def _build_ml_cache(
                 preds = dict(enumerate(np.array(_classes)[filled]))
                 return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, preds
             except Exception as exc:
-                logger.error("regime batch failed %s: %s", symbol, exc)
+                logger.error("regime infer failed %s: %s", symbol, exc)
                 return None, None, {}
 
-        regime_preds       = {}
-        _regime_htf_series = _regime_htf_conf = _regime_ltf_series = _regime_ltf_conf = None
-
-        # Run 4H and 1H regime feature-matrix builds in parallel (CPU-only numpy)
-        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
-
-        def _run_regime_4h():
-            if not (regime_4h and getattr(regime_4h, "is_trained", False)
-                    and regime_4h._model is not None):
-                return None
-            df_4h = htf.get("4H")
-            if df_4h is not None and len(df_4h) >= 50:
-                return "htf_df", _batch_regime(regime_4h, df_4h, htf)
-            return "htf_full", _batch_regime(regime_4h, df, htf)
-
-        def _run_regime_1h():
-            if not (regime_1h and getattr(regime_1h, "is_trained", False)
-                    and regime_1h._model is not None):
-                return None
-            df_1h = htf.get("1H")
-            if df_1h is not None and len(df_1h) >= 50:
-                return "ltf_df", _batch_regime(regime_1h, df_1h, htf)
-            return "ltf_full", _batch_regime(regime_1h, df, htf)
-
-        with _TPE(max_workers=2) as _pool:
-            _f4h = _pool.submit(_run_regime_4h)
-            _f1h = _pool.submit(_run_regime_1h)
-            _res4h = _f4h.result()
-            _res1h = _f1h.result()
-
-        if _res4h is not None:
-            _kind4h, (_r4h, _c4h, _p4h) = _res4h
+        if _do_4h and _X_4h is not None:
+            _r4h, _c4h, _p4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
+            del _X_4h
             if _r4h is not None:
-                if _kind4h == "htf_df":
+                if _df_src_4h is not df:
                     _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
                     _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
                 else:
@@ -406,10 +417,11 @@ def _build_ml_cache(
                     _htf_cls[np.clip(_regime_htf_series.values, 0, 2)])}
             gc.collect()
 
-        if _res1h is not None:
-            _kind1h, (_r1h, _c1h, _) = _res1h
+        if _do_1h and _X_1h is not None:
+            _r1h, _c1h, _ = _infer_regime(regime_1h, _X_1h, _df_src_1h)
+            del _X_1h
             if _r1h is not None:
-                if _kind1h == "ltf_df":
+                if _df_src_1h is not df:
                     _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
                     _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
                 else:

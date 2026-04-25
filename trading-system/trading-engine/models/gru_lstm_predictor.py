@@ -600,37 +600,55 @@ class GRULSTMPredictor(BaseModel):
             for tf, group in tf_items:
                 logger.info("train_multi: building combined dataset for TF=%s (%d segments)", tf, len(group))
 
-                # Build per-segment (feat_arr, tgt_arr) — never concatenate across symbols
+                # Build per-segment (feat_arr, tgt_arr) in parallel.
+                # _build_sequence_df is pure pandas/numpy — CPU only, GIL-releasing,
+                # safe to run across threads. GPU training that follows is serial.
+                from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
+                import os as _os
+                _n_workers = min(int(_os.getenv("GRU_FEAT_WORKERS", "4")), len(group))
+
+                def _build_seg(seg):
+                    feat_df = fe._build_sequence_df(
+                        seg["df"], seg.get("df_htf"),
+                        symbol=seg.get("symbol"),
+                        regime_series=seg.get("regime_series"),
+                    )
+                    feat_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
+                    feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)
+                    del feat_df
+                    lbl   = seg["labels"]
+                    n_seq = len(feat_arr) - SEQUENCE_LENGTH
+                    if n_seq <= 0:
+                        return None
+                    y_dir = lbl.get("direction_up",      pd.Series(0.5, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                    y_mag = lbl.get("move_magnitude",    pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                    y_vol = lbl.get("volatility_target", pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                    tgt   = np.column_stack([y_dir, y_mag, y_vol]).astype(np.float32)
+                    n_seq = min(n_seq, len(tgt))
+                    return feat_arr[:n_seq + SEQUENCE_LENGTH].copy(), tgt[:n_seq].copy()
+
                 seg_feats: list = []
                 seg_tgts: list  = []
 
-                for seg in group:
-                    try:
-                        feat_df = fe._build_sequence_df(
-                            seg["df"], seg.get("df_htf"),
-                            symbol=seg.get("symbol"),
-                            regime_series=seg.get("regime_series"),
-                        )
-                        feat_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
-                        feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)
-                        del feat_df
+                # Submit all segments; preserve order via index mapping.
+                with _TPE(max_workers=_n_workers) as _pool:
+                    _futs = {_pool.submit(_build_seg, seg): i for i, seg in enumerate(group)}
+                    _results: dict = {}
+                    for fut in _asc(_futs):
+                        idx = _futs[fut]
+                        try:
+                            _results[idx] = fut.result()
+                        except Exception as exc:
+                            logger.warning("train_multi: segment %s/%s failed: %s",
+                                           group[idx].get("symbol"), tf, exc)
+                            _results[idx] = None
 
-                        lbl = seg["labels"]
-                        n_seq = len(feat_arr) - SEQUENCE_LENGTH
-                        if n_seq <= 0:
-                            continue
-                        y_dir = lbl.get("direction_up", pd.Series(0.5, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
-                        y_mag = lbl.get("move_magnitude", pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
-                        y_vol = lbl.get("volatility_target", pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
-                        tgt = np.column_stack([y_dir, y_mag, y_vol]).astype(np.float32)
-                        n_seq = min(n_seq, len(tgt))
-
-                        seg_feats.append(feat_arr[:n_seq + SEQUENCE_LENGTH].copy())
-                        seg_tgts.append(tgt[:n_seq].copy())
-                        del feat_arr, tgt
-                    except Exception as exc:
-                        logger.warning("train_multi: segment %s/%s failed: %s", seg.get("symbol"), tf, exc)
+                for idx in range(len(group)):
+                    r = _results.get(idx)
+                    if r is None:
                         continue
+                    seg_feats.append(r[0])
+                    seg_tgts.append(r[1])
 
                 if not seg_feats:
                     logger.warning("train_multi: no valid segments for TF=%s", tf)

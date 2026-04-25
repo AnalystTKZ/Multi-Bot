@@ -728,83 +728,104 @@ def _precompute_ml_cache(
         n = len(df)
         SEQUENCE_LENGTH = 30
 
-        # ── Helper: batch regime inference using predict_batch ────────────────
-        def _batch_regime(rc_model, df_src, htf_src, step=None):
-            """Run predict_batch on df_src, return (filled_ids, filled_conf, regime_preds_dict)."""
-            # Use mode-aware class list from the model instance
-            _mode = getattr(rc_model, "_mode", "ltf_behaviour")
-            if _mode == "htf_bias":
-                _classes = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]
-                _default_id = 2  # BIAS_NEUTRAL
-            else:
-                _classes = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]
-                _default_id = 1  # RANGING
-            _n = len(df_src)
-            _step = step or max(1, _n // 20_000)
-            try:
-                from models.regime_classifier import RegimeClassifier as _RC
-                X_all = _RC._build_feature_matrix(df_src, htf_src, symbol)
-                row_idx = list(range(50, _n, _step))
-                X = X_all[row_idx]
-                del X_all
-                if len(X) == 0:
-                    return None, None, {}
-                ids, conf = rc_model.predict_batch(X)
-                del X
-                arr = np.full(_n, -1, dtype=np.int8)
-                arr[row_idx] = ids.astype(np.int8)
-                filled = pd.Series(arr.astype(float)).replace(-1, np.nan).ffill().fillna(_default_id).astype(int).values
-                c_arr = np.full(_n, np.nan, dtype=np.float32)
-                c_arr[row_idx] = conf
-                filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
-                preds = dict(enumerate(np.array(_classes)[filled]))
-                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, preds
-            except Exception as _e:
-                logger.error("ML cache: regime batch failed: %s", _e)
-                return None, None, {}
+        # ── Regime inference — two-phase to maximise CPU/GPU utilisation ────────
+        # Phase 1: _build_feature_matrix (pure numpy/pandas) runs on both 4H and
+        #          1H dataframes in parallel using 2 CPU threads.
+        # Phase 2: predict_batch (GPU / DataParallel) runs serially — CUDA is not
+        #          thread-safe across concurrent forward passes from separate threads.
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        from models.regime_classifier import RegimeClassifier as _RC
 
-        # ── HTF regime (bias) — build feature matrix on 4H df if available ────
-        # For HTF bias: use the 4H df from htf dict for clean structural resolution.
-        # Falls back to 15M df with ffill if 4H not separately loaded.
         regime_preds: dict[int, str] = {}
         _regime_htf_series = None
         _regime_htf_conf   = None
         _regime_ltf_series = None
         _regime_ltf_conf   = None
 
-        if regime_4h and regime_4h.is_trained and regime_4h._model is not None:
-            df_4h_src = htf.get("4H") if htf.get("4H") is not None else htf.get("H4")
-            if df_4h_src is not None and len(df_4h_src) >= 50:
-                _r4h, _c4h, _p4h = _batch_regime(regime_4h, df_4h_src, htf)
-                if _r4h is not None:
-                    # Forward-fill HTF labels to 15M resolution
+        _do_4h = bool(regime_4h and regime_4h.is_trained and regime_4h._model is not None)
+        _do_1h = bool(regime_1h and regime_1h.is_trained and regime_1h._model is not None)
+
+        _df_src_4h = (htf.get("4H") or htf.get("H4")) if _do_4h else None
+        if _df_src_4h is None or len(_df_src_4h) < 50:
+            _df_src_4h = df if _do_4h else None
+        _df_src_1h = (htf.get("1H") or htf.get("H1")) if _do_1h else None
+        if _df_src_1h is None or len(_df_src_1h) < 50:
+            _df_src_1h = df if _do_1h else None
+
+        _X_4h = _X_1h = None
+        _n_feat_workers = int(_do_4h) + int(_do_1h)
+        if _n_feat_workers > 0:
+            with _TPE(max_workers=_n_feat_workers) as _pool:
+                _f4 = _pool.submit(_RC._build_feature_matrix, _df_src_4h, htf, symbol) if _do_4h else None
+                _f1 = _pool.submit(_RC._build_feature_matrix, _df_src_1h, htf, symbol) if _do_1h else None
+                if _f4 is not None:
+                    try:
+                        _X_4h = _f4.result()
+                    except Exception as _exc:
+                        logger.error("ML cache: regime 4H feature build failed %s: %s", symbol, _exc)
+                if _f1 is not None:
+                    try:
+                        _X_1h = _f1.result()
+                    except Exception as _exc:
+                        logger.error("ML cache: regime 1H feature build failed %s: %s", symbol, _exc)
+
+        def _infer_regime(rc_model, X_feat, df_src):
+            _mode = getattr(rc_model, "_mode", "ltf_behaviour")
+            if _mode == "htf_bias":
+                _classes, _default_id = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], 2
+            else:
+                _classes, _default_id = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], 1
+            _n    = len(df_src)
+            _step = max(1, _n // 20_000)
+            try:
+                row_idx = list(range(50, _n, _step))
+                X = X_feat[row_idx]
+                if len(X) == 0:
+                    return None, None, {}
+                ids, conf = rc_model.predict_batch(X)
+                del X
+                arr = np.full(_n, -1, dtype=np.int8)
+                arr[row_idx] = ids.astype(np.int8)
+                filled = (pd.Series(arr.astype(float))
+                          .replace(-1, np.nan).ffill().fillna(_default_id).astype(int).values)
+                c_arr = np.full(_n, np.nan, dtype=np.float32)
+                c_arr[row_idx] = conf
+                filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
+                preds = dict(enumerate(np.array(_classes)[filled]))
+                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, preds
+            except Exception as _e:
+                logger.error("ML cache: regime infer failed %s: %s", symbol, _e)
+                return None, None, {}
+
+        if _do_4h and _X_4h is not None:
+            _r4h, _c4h, _p4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
+            del _X_4h
+            if _r4h is not None:
+                if _df_src_4h is not df:
                     _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
                     _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
-                    # Map bar indices to regime names (use 15M-aligned, HTF 3-class)
-                    _htf_cls_arr = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
-                    regime_preds = {i: str(v) for i, v in enumerate(
-                        _htf_cls_arr[np.clip(_regime_htf_series.values, 0, len(_htf_cls_arr) - 1)]
-                    )}
-                    logger.info("ML cache: HTF regime batch done for %s (%d 4H bars → %d 15M bars)",
-                                symbol, len(df_4h_src), n)
-            else:
-                # Fallback: run on 15M df (less clean but usable)
-                _regime_htf_series, _regime_htf_conf, regime_preds = _batch_regime(
-                    regime_4h, df, htf)
-                logger.info("ML cache: HTF regime on 15M fallback for %s", symbol)
+                    logger.info("ML cache: HTF regime done %s (%d 4H bars → %d 15M bars)",
+                                symbol, len(_df_src_4h), n)
+                else:
+                    _regime_htf_series, _regime_htf_conf = _r4h, _c4h
+                    logger.info("ML cache: HTF regime on 15M fallback for %s", symbol)
+                _htf_cls_arr = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
+                regime_preds = {i: str(v) for i, v in enumerate(
+                    _htf_cls_arr[np.clip(_regime_htf_series.values, 0, len(_htf_cls_arr) - 1)]
+                )}
             gc.collect()
 
-        if regime_1h and regime_1h.is_trained and regime_1h._model is not None:
-            df_1h_src = htf.get("1H") if htf.get("1H") is not None else htf.get("H1")
-            if df_1h_src is not None and len(df_1h_src) >= 50:
-                _r1h, _c1h, _ = _batch_regime(regime_1h, df_1h_src, htf)
-                if _r1h is not None:
+        if _do_1h and _X_1h is not None:
+            _r1h, _c1h, _ = _infer_regime(regime_1h, _X_1h, _df_src_1h)
+            del _X_1h
+            if _r1h is not None:
+                if _df_src_1h is not df:
                     _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
                     _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
-                    logger.info("ML cache: LTF regime batch done for %s (%d 1H bars → %d 15M bars)",
-                                symbol, len(df_1h_src), n)
-            else:
-                _regime_ltf_series, _regime_ltf_conf, _ = _batch_regime(regime_1h, df, htf)
+                    logger.info("ML cache: LTF regime done %s (%d 1H bars → %d 15M bars)",
+                                symbol, len(_df_src_1h), n)
+                else:
+                    _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
             gc.collect()
 
         # Regime distribution diagnostic
