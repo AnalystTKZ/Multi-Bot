@@ -507,44 +507,56 @@ def _build_ml_cache(
 
 # ─── Signal generation (exact copy of _compute_backtest_signal) ───────────────
 
-def _compute_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dict | None:
+# Signal config — resolved once at module level (env vars don't change mid-run).
+_SCFG = {
+    "max_uncertainty": float(os.getenv("MAX_UNCERTAINTY",          "2.0")),
+    "dir_thresh":      float(os.getenv("ML_DIRECTION_THRESHOLD",   "0.58")),
+    "neutral_thresh":  float(os.getenv("NEUTRAL_BIAS_THRESHOLD",   "0.58")),
+    "vol_thr":         float(os.getenv("VOLATILE_ENTRY_THRESHOLD",
+                                       os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))),
+    "block_consol":    os.getenv("BLOCK_LTF_CONSOLIDATING", "0").lower() in ("1","true","yes"),
+    "sl_mult":         float(os.getenv("SL_ATR_MULT", "1.5")),
+    "rr":              float(os.getenv("RR_DEFAULT",  "2.0")),
+}
+
+
+def _compute_signal(symbol: str, ml_preds: dict, bar: dict) -> dict | None:
     close = float(bar["close"])
     atr   = float(bar.get("atr_14", close * 0.001))
     if atr < 1e-9 or not ml_preds:
         return None
 
-    if float(ml_preds.get("expected_variance", 0.0)) > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
+    if float(ml_preds.get("expected_variance", 0.0)) > _SCFG["max_uncertainty"]:
         return None
 
     p_bull      = float(ml_preds.get("p_bull", 0.5))
     p_bear      = float(ml_preds.get("p_bear", 0.5))
-    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
+    _dir_thresh = _SCFG["dir_thresh"]
 
     if   p_bull >= p_bear and p_bull >= _dir_thresh: side, conf = "buy",  p_bull
     elif p_bear >  p_bull and p_bear >= _dir_thresh: side, conf = "sell", p_bear
     else: return None
 
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-    _neutral  = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.58"))
+    _neutral  = _SCFG["neutral_thresh"]
     if _htf_bias == "BIAS_UP"      and side == "sell":    return None
     if _htf_bias == "BIAS_DOWN"    and side == "buy":     return None
     if _htf_bias == "BIAS_NEUTRAL" and conf < _neutral:   return None
 
-    _ltf      = str(ml_preds.get("regime_ltf", "TRENDING"))
-    _vol_thr  = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", str(_dir_thresh)))
-    _rv       = bool(bar.get("range_valid",    False))
-    _rs       = str(bar.get("range_side",     ""))
-    _pv       = bool(bar.get("pullback_valid", False))
-    _ps       = str(bar.get("pullback_side",  ""))
+    _ltf     = str(ml_preds.get("regime_ltf", "TRENDING"))
+    _vol_thr = _SCFG["vol_thr"]
+    _rv      = bool(bar.get("range_valid",    False))
+    _rs      = str(bar.get("range_side",     ""))
+    _pv      = bool(bar.get("pullback_valid", False))
+    _ps      = str(bar.get("pullback_side",  ""))
 
-    if _ltf == "CONSOLIDATING" and os.getenv("BLOCK_LTF_CONSOLIDATING","0").lower() in ("1","true","yes"):
-        return None
-    if _ltf == "VOLATILE"  and conf < _vol_thr:               return None
-    if _ltf == "TRENDING"  and _pv and _ps and _ps != side:   return None
-    if _ltf == "RANGING"   and _rv and _rs and _rs != side:   return None
+    if _ltf == "CONSOLIDATING" and _SCFG["block_consol"]:  return None
+    if _ltf == "VOLATILE"  and conf < _vol_thr:             return None
+    if _ltf == "TRENDING"  and _pv and _ps and _ps != side: return None
+    if _ltf == "RANGING"   and _rv and _rs and _rs != side: return None
 
-    _sl_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
-    _rr      = float(os.getenv("RR_DEFAULT",  "2.0"))
+    _sl_mult = _SCFG["sl_mult"]
+    _rr      = _SCFG["rr"]
     sl_dist  = atr * _sl_mult
 
     if _ltf == "RANGING" and _rv:
@@ -579,47 +591,78 @@ def _simulate_trade(
     entry: float, sl: float, tp1: float, tp2: float,
     size: float, atr: float,
 ) -> dict:
-    direction   = 1 if side == "buy" else -1
-    phase1_done = False
-    be_stop     = sl
-    phase1_pnl  = phase2_pnl = 0.0
-    exit_price  = entry
+    """Vectorised TP1/TP2 two-phase simulation — no per-bar Python loop."""
+    is_buy    = (side == "buy")
+    direction = 1 if is_buy else -1
+    end_i     = min(entry_i + MAX_HOLD_BARS, len(df))
+    highs  = df["high"].values[entry_i + 1 : end_i].astype(np.float64)
+    lows   = df["low"].values[entry_i + 1 : end_i].astype(np.float64)
+    closes = df["close"].values[entry_i + 1 : end_i].astype(np.float64)
+    n      = len(highs)
 
-    for j in range(entry_i + 1, min(entry_i + MAX_HOLD_BARS + 1, len(df))):
-        hi = float(df["high"].iloc[j])
-        lo = float(df["low"].iloc[j])
-        bars_held = j - entry_i
+    if n == 0:
+        return {"pnl": 0.0, "exit_reason": "timeout", "bars_held": 0,
+                "exit_price": entry, "phase1_pnl": 0.0, "phase2_pnl": 0.0}
 
-        if not phase1_done:
-            if (side == "buy" and hi >= tp1) or (side == "sell" and lo <= tp1):
-                phase1_pnl  = direction * (tp1 - entry) * size * 0.5
-                phase1_done = True
-                be_stop     = entry + direction * atr * 0.1
-                exit_price  = tp1
-            if (side == "buy" and lo <= sl) or (side == "sell" and hi >= sl):
-                pnl = direction * (sl - entry) * size - COMMISSION_PCT * abs(entry) * size
-                return {"pnl": pnl, "exit_reason": "sl", "bars_held": bars_held,
-                        "exit_price": sl, "phase1_pnl": pnl, "phase2_pnl": 0.0}
-        else:
-            if (side == "buy" and lo <= be_stop) or (side == "sell" and hi >= be_stop):
-                phase2_pnl = direction * (be_stop - entry) * size * 0.5
-                pnl = phase1_pnl + phase2_pnl - COMMISSION_PCT * abs(entry) * size
-                return {"pnl": pnl, "exit_reason": "be_or_trail", "bars_held": bars_held,
-                        "exit_price": be_stop, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
-            if (side == "buy" and hi >= tp2) or (side == "sell" and lo <= tp2):
-                phase2_pnl = direction * (tp2 - entry) * size * 0.5
-                pnl = phase1_pnl + phase2_pnl - COMMISSION_PCT * abs(entry) * size
-                return {"pnl": pnl, "exit_reason": "tp2", "bars_held": bars_held,
-                        "exit_price": tp2, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
+    # Phase 1: find first SL or TP1 hit
+    sl_hits  = np.where(lows <= sl)[0]  if is_buy else np.where(highs >= sl)[0]
+    tp1_hits = np.where(highs >= tp1)[0] if is_buy else np.where(lows <= tp1)[0]
+    first_sl  = int(sl_hits[0])  if len(sl_hits)  else n
+    first_tp1 = int(tp1_hits[0]) if len(tp1_hits) else n
 
-    last_close = float(df["close"].iloc[min(entry_i + MAX_HOLD_BARS, len(df) - 1)])
-    if not phase1_done:
+    if first_sl <= first_tp1:
+        pnl = direction * (sl - entry) * size - COMMISSION_PCT * abs(entry) * size
+        return {"pnl": pnl, "exit_reason": "sl", "bars_held": first_sl + 1,
+                "exit_price": sl, "phase1_pnl": pnl, "phase2_pnl": 0.0}
+
+    if first_tp1 >= n:
+        # Neither hit — time exit
+        last_close = float(closes[-1])
         pnl = direction * (last_close - entry) * size - COMMISSION_PCT * abs(entry) * size
-        return {"pnl": pnl, "exit_reason": "timeout", "bars_held": MAX_HOLD_BARS,
+        return {"pnl": pnl, "exit_reason": "timeout", "bars_held": n,
                 "exit_price": last_close, "phase1_pnl": pnl, "phase2_pnl": 0.0}
+
+    # TP1 hit — Phase 2
+    phase1_pnl = direction * (tp1 - entry) * size * 0.5
+    be_stop    = entry + direction * atr * 0.1
+
+    p2_start = first_tp1 + 1
+    p2_highs = highs[p2_start:]
+    p2_lows  = lows[p2_start:]
+    p2_closes = closes[p2_start:]
+    n2 = len(p2_highs)
+
+    if n2 == 0:
+        exit_price = float(closes[first_tp1])
+        phase2_pnl = direction * (exit_price - entry) * size * 0.5
+        pnl = phase1_pnl + phase2_pnl - COMMISSION_PCT * abs(entry) * size
+        return {"pnl": pnl, "exit_reason": "timeout", "bars_held": first_tp1 + 1,
+                "exit_price": exit_price, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
+
+    be_hits  = np.where(p2_lows <= be_stop)[0]  if is_buy else np.where(p2_highs >= be_stop)[0]
+    tp2_hits = np.where(p2_highs >= tp2)[0]     if is_buy else np.where(p2_lows <= tp2)[0]
+    first_be  = int(be_hits[0])  if len(be_hits)  else n2
+    first_tp2 = int(tp2_hits[0]) if len(tp2_hits) else n2
+
+    if first_be < first_tp2 and first_be < n2:
+        phase2_pnl = direction * (be_stop - entry) * size * 0.5
+        pnl = phase1_pnl + phase2_pnl - COMMISSION_PCT * abs(entry) * size
+        return {"pnl": pnl, "exit_reason": "be_or_trail",
+                "bars_held": first_tp1 + 1 + first_be + 1,
+                "exit_price": be_stop, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
+
+    if first_tp2 < n2:
+        phase2_pnl = direction * (tp2 - entry) * size * 0.5
+        pnl = phase1_pnl + phase2_pnl - COMMISSION_PCT * abs(entry) * size
+        return {"pnl": pnl, "exit_reason": "tp2",
+                "bars_held": first_tp1 + 1 + first_tp2 + 1,
+                "exit_price": tp2, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
+
+    last_close = float(p2_closes[-1])
     phase2_pnl = direction * (last_close - entry) * size * 0.5
     pnl = phase1_pnl + phase2_pnl - COMMISSION_PCT * abs(entry) * size
-    return {"pnl": pnl, "exit_reason": "timeout", "bars_held": MAX_HOLD_BARS,
+    return {"pnl": pnl, "exit_reason": "timeout",
+            "bars_held": first_tp1 + 1 + n2,
             "exit_price": last_close, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
 
 
@@ -651,6 +694,42 @@ def _run_symbol_epoch(
         except Exception as exc:
             logger.error("ML cache failed %s epoch %d: %s", symbol, epoch_num, exc)
 
+    # Pre-extract bar arrays as numpy — eliminates df.iloc[i] per bar (~10-20 µs each).
+    _rb_cols = ["close", "high", "low", "atr_14", "range_valid", "range_side",
+                "range_support", "range_resist", "range_width_atr",
+                "pullback_valid", "pullback_side", "pullback_level"]
+    _rb_arrs: dict[str, np.ndarray | None] = {
+        c: (df[c].to_numpy() if c in df.columns else None) for c in _rb_cols
+    }
+    _rb_ts = df.index.view(np.int64)  # nanoseconds
+
+    def _rb_bar(idx: int) -> dict:
+        _a = _rb_arrs
+        def _s(col, default):
+            arr = _a[col]
+            if arr is None:
+                return default
+            v = arr[idx]
+            if col in ("range_side", "pullback_side"):
+                return str(v) if v == v else ""
+            if col in ("range_valid", "pullback_valid"):
+                return bool(v == 1)
+            return float(v) if v == v else default
+        return {
+            "close":          _s("close",          0.0),
+            "high":           _s("high",           0.0),
+            "low":            _s("low",            0.0),
+            "atr_14":         _s("atr_14",         0.001),
+            "range_valid":    _s("range_valid",    False),
+            "range_side":     _s("range_side",     ""),
+            "range_support":  _s("range_support",  0.0),
+            "range_resist":   _s("range_resist",   0.0),
+            "range_width_atr": _s("range_width_atr", 0.0),
+            "pullback_valid": _s("pullback_valid", False),
+            "pullback_side":  _s("pullback_side",  ""),
+            "pullback_level": _s("pullback_level", float("nan")),
+        }
+
     trades:      list[dict] = []
     equity       = INITIAL_CAPITAL
     peak_equity  = INITIAL_CAPITAL
@@ -668,8 +747,7 @@ def _run_symbol_epoch(
     for i in range(200, len(df)):
         if halted:
             break
-        dt  = df.index[i]
-        bar = df.iloc[i]
+        dt  = pd.Timestamp(_rb_ts[i], tz="UTC")
 
         dd = (peak_equity - equity) / (peak_equity + 1e-9)
         if dd >= MAX_DRAWDOWN_PCT:
@@ -695,6 +773,7 @@ def _run_symbol_epoch(
             continue
 
         ml_preds   = ml_cache.get(i, {})
+        bar        = _rb_bar(i)
         raw_signal = _compute_signal(symbol, ml_preds, bar)
         if raw_signal is None:
             continue

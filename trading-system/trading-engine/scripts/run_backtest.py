@@ -1216,13 +1216,36 @@ def _backtest_trader(
             except Exception as exc:
                 logger.warning("ML cache build failed for %s: %s", sym, exc)
 
-    # ── Build a merged bar iterator sorted by timestamp ───────────────────────
-    # Each entry: (timestamp, symbol, bar_index_in_that_df)
-    bar_queue: list[tuple] = []
-    for symbol, df in symbol_dfs.items():
+    # ── Pre-extract bar arrays as numpy (eliminates df.iloc[i] per bar) ─────────
+    # ~10-20 µs per df.iloc[] call × 473k bars = 5-10 min saved in pure Python.
+    import heapq
+    _bar_cols = ["open", "high", "low", "close", "atr_14", "adx_14", "rsi_14",
+                 "ema_stack", "bb_width", "bos_bull", "bos_bear", "fvg_bull", "fvg_bear",
+                 "range_valid", "range_side", "range_support", "range_resist",
+                 "range_width_atr", "pullback_valid", "pullback_side", "pullback_level",
+                 "last_swing_high", "last_swing_low", "regime_duration", "vol_slope_seq",
+                 "volume_ratio", "ema_21"]
+    _sym_arrays: dict[str, dict] = {}
+    _sym_timestamps: dict[str, np.ndarray] = {}
+    for _sym, _df in symbol_dfs.items():
+        _arrs: dict[str, np.ndarray] = {}
+        for _col in _bar_cols:
+            if _col in _df.columns:
+                _arrs[_col] = _df[_col].to_numpy()
+            else:
+                _arrs[_col] = None
+        _sym_arrays[_sym] = _arrs
+        _sym_timestamps[_sym] = _df.index.view(np.int64)  # nanoseconds
+
+    # ── Build merged bar iterator via heapq.merge — no flat list, no sort ─────
+    # Each per-symbol generator yields (timestamp_ns, symbol, bar_index) in order.
+    # heapq.merge merges N already-sorted generators in O(N log K) time, K=11.
+    def _sym_iter(sym: str, df: pd.DataFrame):
+        ts_arr = _sym_timestamps[sym]
         for idx in range(200, len(df)):
-            bar_queue.append((df.index[idx], symbol, idx))
-    bar_queue.sort(key=lambda x: x[0])
+            yield ts_arr[idx], sym, idx
+
+    bar_iter = heapq.merge(*[_sym_iter(s, d) for s, d in symbol_dfs.items()])
 
     # ── State ─────────────────────────────────────────────────────────────────
     trades: list[dict] = []
@@ -1251,18 +1274,33 @@ def _backtest_trader(
         from services.feature_engine import FeatureEngine, QUALITY_FEATURES
         _qs_fe = FeatureEngine()
 
+    # Hoist env-var reads outside the 473k-bar loop — os.getenv does a dict lookup
+    # + string compare on every call; at 473k bars this adds measurable overhead.
+    _cfg_density_lambda   = float(os.getenv("DENSITY_LAMBDA",             "0.12"))
+    _cfg_dir_thresh       = float(os.getenv("ML_DIRECTION_THRESHOLD",     "0.58"))
+    _cfg_min_conf         = float(os.getenv("MIN_CONFIDENCE",             "0.0"))
+    _cfg_min_ev           = float(os.getenv("MIN_EV_THRESHOLD",           "0.0"))
+    _cfg_max_uncertainty  = float(os.getenv("MAX_UNCERTAINTY",            "2.0"))
+    _cfg_neutral_thresh   = float(os.getenv("NEUTRAL_BIAS_THRESHOLD",     "0.58"))
+    _cfg_volatile_thresh  = float(os.getenv("VOLATILE_ENTRY_THRESHOLD",   _cfg_dir_thresh.__str__()))
+    _cfg_block_consol     = os.getenv("BLOCK_LTF_CONSOLIDATING",          "0").lower() in ("1","true","yes")
+    _cfg_strict_trend_pb  = os.getenv("REQUIRE_TRENDING_PULLBACK",        "0").lower() in ("1","true","yes")
+    _cfg_strict_rng       = os.getenv("RANGING_REQUIRE_RANGE",            "0").lower() in ("1","true","yes")
+    _cfg_sl_mult          = float(os.getenv("SL_ATR_MULT",               "1.5"))
+    _cfg_rr_default       = float(os.getenv("RR_DEFAULT",                "2.0"))
+
     # ── Main loop ─────────────────────────────────────────────────────────────
     halted = False  # portfolio drawdown halt
     _dbg = {"total": 0, "dd_halt": 0, "daily": 0, "session": 0,
             "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0}
 
-    for dt, symbol, i in bar_queue:
+    for ts_ns, symbol, i in bar_iter:
         if halted:
             break
 
         _dbg["total"] += 1
         df  = symbol_dfs[symbol]
-        bar = df.iloc[i]
+        dt  = pd.Timestamp(ts_ns, tz="UTC")
 
         # ── Circuit breaker 1: portfolio drawdown ─────────────────────────────
         dd = (peak_equity - equity) / (peak_equity + 1e-9)
@@ -1319,27 +1357,53 @@ def _backtest_trader(
                                    htf=symbol_htf.get(symbol)) if ml_models else {}
 
         # ── Signal generation ─────────────────────────────────────────────────
+        # Build bar dict lazily — only for bars that pass session + cooldown gates.
+        # Avoids 473k df.iloc[] allocations; ~95% of bars exit before this point.
+        _sarr = _sym_arrays[symbol]
+        bar = {
+            "close":          float(_sarr["close"][i]) if _sarr["close"] is not None else 0.0,
+            "atr_14":         float(_sarr["atr_14"][i]) if _sarr["atr_14"] is not None else 0.001,
+            "range_valid":    bool(_sarr["range_valid"][i] == 1) if _sarr["range_valid"] is not None else False,
+            "range_side":     (str(_sarr["range_side"][i]) if (
+                                  _sarr["range_side"] is not None and
+                                  _sarr["range_side"][i] == _sarr["range_side"][i])
+                              else ""),
+            "range_support":  float(_sarr["range_support"][i]) if _sarr["range_support"] is not None else 0.0,
+            "range_resist":   float(_sarr["range_resist"][i]) if _sarr["range_resist"] is not None else 0.0,
+            "range_width_atr": float(_sarr["range_width_atr"][i]) if _sarr["range_width_atr"] is not None else 0.0,
+            "pullback_valid": bool(_sarr["pullback_valid"][i] == 1) if _sarr["pullback_valid"] is not None else False,
+            "pullback_side":  (str(_sarr["pullback_side"][i]) if (
+                                  _sarr["pullback_side"] is not None and
+                                  _sarr["pullback_side"][i] == _sarr["pullback_side"][i])
+                              else ""),
+            "pullback_level": float(_sarr["pullback_level"][i]) if _sarr["pullback_level"] is not None else float("nan"),
+            "adx_14":         float(_sarr["adx_14"][i]) if _sarr["adx_14"] is not None else 20.0,
+            "rsi_14":         float(_sarr["rsi_14"][i]) if _sarr["rsi_14"] is not None else 50.0,
+            "ema_stack":      int(_sarr["ema_stack"][i]) if _sarr["ema_stack"] is not None else 0,
+            "bb_width":       float(_sarr["bb_width"][i]) if _sarr["bb_width"] is not None else 0.0,
+            "bos_bull":       bool(_sarr["bos_bull"][i] == 1) if _sarr["bos_bull"] is not None else False,
+            "bos_bear":       bool(_sarr["bos_bear"][i] == 1) if _sarr["bos_bear"] is not None else False,
+            "fvg_bull":       bool(_sarr["fvg_bull"][i] == 1) if _sarr["fvg_bull"] is not None else False,
+            "fvg_bear":       bool(_sarr["fvg_bear"][i] == 1) if _sarr["fvg_bear"] is not None else False,
+            "last_swing_high": float(_sarr["last_swing_high"][i]) if _sarr["last_swing_high"] is not None else float("nan"),
+            "last_swing_low":  float(_sarr["last_swing_low"][i]) if _sarr["last_swing_low"] is not None else float("nan"),
+            "regime_duration": float(_sarr["regime_duration"][i]) if _sarr["regime_duration"] is not None else 0.5,
+            "vol_slope_seq":   float(_sarr["vol_slope_seq"][i]) if _sarr["vol_slope_seq"] is not None else 0.0,
+            "volume_ratio":    float(_sarr["volume_ratio"][i]) if _sarr["volume_ratio"] is not None else 1.0,
+        }
         raw_signal = _compute_backtest_signal(symbol, ml_preds, bar)
         if raw_signal is None:
             _dbg["no_signal"] += 1
             continue
 
         # ── Soft density penalty: exp decay on confidence ─────────────────────
-        # density=0 → multiplier=1.0; density=3 → ~0.74; density=6 → ~0.55.
-        # High-conviction signals (conf ≥ 0.80) still pass through even at density=3;
-        # marginal signals (conf ≈ 0.55) get suppressed. Replaces hard cap.
-        _density_lambda = float(os.getenv("DENSITY_LAMBDA", "0.12"))
-        _density_mult   = math.exp(-_density_lambda * _density_count)
+        _density_mult = math.exp(-_cfg_density_lambda * _density_count)
         raw_signal["confidence"] = float(raw_signal["confidence"]) * _density_mult
 
-        # If after density penalty confidence falls below direction threshold, skip.
-        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
-        # High-conviction mode: MIN_CONFIDENCE env var (e.g. 0.90) filters to 67% WR tier.
-        _min_conf = float(os.getenv("MIN_CONFIDENCE", "0.0"))
-        if _min_conf > 0 and raw_signal["confidence"] < _min_conf:
+        if _cfg_min_conf > 0 and raw_signal["confidence"] < _cfg_min_conf:
             _dbg["density"] += 1
             continue
-        if raw_signal["confidence"] < _dir_thresh:
+        if raw_signal["confidence"] < _cfg_dir_thresh:
             _dbg["density"] += 1
             continue
 
@@ -1391,12 +1455,12 @@ def _backtest_trader(
             # model believes are positive EV. Set MIN_EV_THRESHOLD env var to override.
             # Previously defaulted to -1.0 (never blocks) — raised to 0.0 so the quality
             # gate actually filters predicted-negative-EV setups.
-            if _ev < float(os.getenv("MIN_EV_THRESHOLD", "0.0")):
+            if _ev < _cfg_min_ev:
                 _dbg["quality_block"] += 1
                 continue
         elif ml_preds and ml_preds.get("ev") is not None:
             # Cache had ev (e.g. from _run_bar_ml fallback path)
-            if float(ml_preds["ev"]) < float(os.getenv("MIN_EV_THRESHOLD", "0.0")):
+            if float(ml_preds["ev"]) < _cfg_min_ev:
                 _dbg["quality_block"] += 1
                 continue
 
@@ -1597,13 +1661,79 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
     return "ml_trader", result, trade_log
 
 
+def _load_split_window(split: str) -> tuple[str, str]:
+    """
+    Read split_summary.json produced by pipeline/step5_split.py and return
+    (start, end) date strings for the requested split name.
+
+    Falls back to a 2-year rolling window ending today if the file is missing.
+    """
+    # Resolve the JSON relative to this script's location so it works both
+    # locally and on Kaggle (where env_config may redirect paths).
+    _candidates = [
+        # Kaggle: remote clone or working copy
+        Path(_ENGINE_DIR) / ".." / "ml_training" / "datasets" / "split_summary.json",
+        # env_config path
+        Path(_DATA_DIR_RESOLVED).parent.parent / "ml_training" / "datasets" / "split_summary.json",
+    ]
+    if "_ENV" in globals() and _ENV is not None:
+        _candidates.insert(0, _ENV.get("ml_training", Path()) / "datasets" / "split_summary.json")
+
+    for _p in _candidates:
+        try:
+            _p = Path(_p).resolve()
+            if _p.exists():
+                with open(_p) as _f:
+                    _summary = json.load(_f)
+                _dr = _summary["date_ranges"][split]
+                return _dr["start"][:10], _dr["end"][:10]
+        except Exception:
+            continue
+
+    # Fallback: rolling 2-year window ending today
+    _today = datetime.now(timezone.utc)
+    return (
+        _today.replace(year=_today.year - 2).strftime("%Y-%m-%d"),
+        _today.strftime("%Y-%m-%d"),
+    )
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Backtest with ML-native execution")
-    parser.add_argument("--start", default="2016-01-01")
-    parser.add_argument("--end",   default="2099-12-31")
+    parser = argparse.ArgumentParser(
+        description="Backtest with ML-native execution",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Date windows are read from split_summary.json (pipeline/step5_split.py):\n"
+            "  default (--split val) → validation window  (Round 1 backtest, SAFE)\n"
+            "  --split test          → test/blind window   (Round 2 only — do not overfit)\n"
+            "  --split train         → training window     (sanity check only)\n"
+            "  --start/--end         → manual override\n"
+        ),
+    )
+    parser.add_argument(
+        "--split",
+        choices=["validation", "val", "test", "train"],
+        default="validation",
+        help="Which split window to backtest (default: validation = Round 1)",
+    )
+    parser.add_argument("--start", default=None,
+                        help="Override split start date (YYYY-MM-DD)")
+    parser.add_argument("--end",   default=None,
+                        help="Override split end date (YYYY-MM-DD)")
     parser.add_argument("--calibrate", action="store_true",
                         help="Run confidence calibration report after backtest")
     args = parser.parse_args()
+
+    # Resolve the date window: manual override > split file > rolling 2-yr fallback
+    _split_key = "validation" if args.split == "val" else args.split
+    _split_start, _split_end = _load_split_window(_split_key)
+    bt_start = args.start or _split_start
+    bt_end   = args.end   or _split_end
+    logger.info(
+        "Backtest window: %s → %s  (split=%s%s)",
+        bt_start, bt_end, _split_key,
+        " [BLIND — test set]" if _split_key == "test" else "",
+    )
 
     from monitors.portfolio_manager import PortfolioManager
 
@@ -1689,9 +1819,9 @@ def main():
     # ── Run single ML trader ─────────────────────────────────────────────────
     symbols = TRADER_SYMBOLS["ml_trader"]
     logger.info("Running ml_trader on %d symbols: %s", len(symbols), symbols)
-    pm = PortfolioManager(_PM_SETTINGS, bar_date=args.start)
+    pm = PortfolioManager(_PM_SETTINGS, bar_date=bt_start)
     shared_ml_cache: dict = {} if ml_models else None
-    result = _backtest_trader("ml_trader", symbols, pm, args.start, args.end,
+    result = _backtest_trader("ml_trader", symbols, pm, bt_start, bt_end,
                               ml_models=ml_models,
                               shared_ml_cache=shared_ml_cache)
     trade_log = result.pop("trade_log", [])
@@ -1751,8 +1881,9 @@ def main():
 
     output = {
         "run_at": run_at.isoformat(),
-        "start": args.start,
-        "end": args.end,
+        "start": bt_start,
+        "end":   bt_end,
+        "split": _split_key,
         "config": {
             "trader": "ml_trader",
             "initial_capital": INITIAL_CAPITAL,
