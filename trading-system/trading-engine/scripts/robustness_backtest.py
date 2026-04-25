@@ -43,7 +43,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 _ENGINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+_TS_DIR     = os.path.join(_ENGINE_DIR, "..")
 sys.path.insert(0, _ENGINE_DIR)
+sys.path.insert(0, _TS_DIR)
 os.chdir(_ENGINE_DIR)  # models use relative "weights/..." paths
 
 # Must be set before any model module is imported — they call _get_device() at
@@ -52,6 +54,19 @@ os.environ.setdefault("INFERENCE_ONLY", "1")
 
 import numpy as np
 import pandas as pd
+
+# GPU / CPU performance flags (safe to apply before torch models load)
+try:
+    import torch as _torch
+    if _torch.cuda.is_available():
+        _torch.backends.cudnn.benchmark        = True
+        _torch.backends.cuda.matmul.allow_tf32 = True
+        _torch.backends.cudnn.allow_tf32       = True
+    _n_cpu = int(os.getenv("ROBUSTNESS_CPU_WORKERS", "4"))
+    _torch.set_num_threads(_n_cpu)
+    _torch.set_num_interop_threads(max(1, _n_cpu // 2))
+except Exception:
+    pass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,23 +93,38 @@ _PM_SETTINGS = SimpleNamespace(
     MAX_DAILY_LOSS_PCT=MAX_DAILY_LOSS_PCT,
 )
 
-# Kaggle-aware path resolution
-_ON_KAGGLE = os.path.exists("/kaggle/input")
-if _ON_KAGGLE:
-    # processed_data lives in the read-only dataset mount
-    _KAGGLE_INPUT = Path("/kaggle/input")
-    _dataset_candidates = [
-        p.parent for p in _KAGGLE_INPUT.rglob("processed_data") if p.is_dir()
-    ]
-    _DATASET_ROOT = _dataset_candidates[0] if _dataset_candidates else Path("/kaggle/working/Multi-Bot/trading-system")
-    DATA_DIR   = str(_DATASET_ROOT / "processed_data" / "histdata")
-    OUTPUT_DIR = os.path.join(_ENGINE_DIR, "backtest_results")
-    # Fresh clone of repo for git push — set up by notebook cell 0
-    _REPO_ROOT = Path("/kaggle/working/remote/Multi-Bot")
+# Path resolution via env_config (same layer used by all pipeline scripts)
+try:
+    from env_config import get_env as _get_env
+    _ENV = _get_env()
+except Exception:
+    _ENV = None
+
+if _ENV is not None:
+    DATA_DIR = str(_ENV["processed"] / "histdata")
+    # OUTPUT_DIR writes into the remote git clone when present — push is then a
+    # simple git-add with no intermediate copy step.
+    _engine_out = _ENV["engine"]  # → remote clone or working copy
+    OUTPUT_DIR  = str(_engine_out / "backtest_results")
+    _REPO_ROOT  = (Path("/kaggle/working/remote/Multi-Bot")
+                   if _ENV.get("on_kaggle") else Path(_ENGINE_DIR).parent.parent)
 else:
-    DATA_DIR   = os.path.join(_ENGINE_DIR, "..", "processed_data", "histdata")
+    # Fallback if env_config import fails
+    _ON_KAGGLE = os.path.exists("/kaggle/input")
+    if _ON_KAGGLE:
+        _KAGGLE_INPUT = Path("/kaggle/input")
+        _dataset_candidates = [
+            p.parent for p in _KAGGLE_INPUT.rglob("processed_data") if p.is_dir()
+        ]
+        _DATASET_ROOT = (_dataset_candidates[0]
+                         if _dataset_candidates
+                         else Path("/kaggle/working/Multi-Bot/trading-system"))
+        DATA_DIR  = str(_DATASET_ROOT / "processed_data" / "histdata")
+        _REPO_ROOT = Path("/kaggle/working/remote/Multi-Bot")
+    else:
+        DATA_DIR  = os.path.join(_ENGINE_DIR, "..", "processed_data", "histdata")
+        _REPO_ROOT = Path(_ENGINE_DIR).parent.parent
     OUTPUT_DIR = os.path.join(_ENGINE_DIR, "backtest_results")
-    _REPO_ROOT = Path(_ENGINE_DIR).parent.parent
 
 CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "robustness_checkpoint.json")
 SUMMARY_PATH    = os.path.join(OUTPUT_DIR, "robustness_summary.txt")
@@ -163,7 +193,11 @@ def _git(cmd: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedP
 
 
 def _push_checkpoint_to_github(label: str) -> None:
-    """Copy checkpoint + summary into repo clone and push to GitHub."""
+    """Push backtest_results/ to GitHub.
+
+    OUTPUT_DIR already points into the remote git clone (via env_config) so no
+    file-copy step is needed — just git-add + commit + push.
+    """
     if not GITHUB_TOKEN:
         logger.warning("GITHUB_TOKEN not set — skipping GitHub push after %s", label)
         return
@@ -178,12 +212,15 @@ def _push_checkpoint_to_github(label: str) -> None:
         _git(["git", "remote", "set-url", "origin", remote_url], _REPO_ROOT)
         _git(["git", "pull", "--ff-only", "origin", GITHUB_BRANCH], _REPO_ROOT, check=False)
 
-        # Copy backtest_results/ into repo clone
-        src_dir = Path(OUTPUT_DIR)
-        dst_dir = _REPO_ROOT / "trading-system" / "trading-engine" / "backtest_results"
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        for f in src_dir.glob("robustness*"):
-            shutil.copy2(f, dst_dir / f.name)
+        # Files are written directly into the clone — just stage the directory.
+        # Fallback copy: if OUTPUT_DIR is NOT inside the clone (env_config unavailable),
+        # copy robustness* files into the expected clone location.
+        _clone_results = _REPO_ROOT / "trading-system" / "trading-engine" / "backtest_results"
+        _src = Path(OUTPUT_DIR)
+        if _src.resolve() != _clone_results.resolve() and _clone_results != _src:
+            _clone_results.mkdir(parents=True, exist_ok=True)
+            for f in _src.glob("robustness*"):
+                shutil.copy2(f, _clone_results / f.name)
 
         _git(["git", "add", "trading-system/trading-engine/backtest_results/"], _REPO_ROOT)
 
@@ -281,7 +318,7 @@ def _build_ml_cache(
     symbol: str,
     htf: dict,
     ml_models: dict,
-    batch_size: int = 512,
+    batch_size: int = 1024,
 ) -> dict:
     gru_model = ml_models.get("gru")
     regime_4h = ml_models.get("regime_htf") or ml_models.get("regime_4h")
@@ -329,29 +366,54 @@ def _build_ml_cache(
         regime_preds       = {}
         _regime_htf_series = _regime_htf_conf = _regime_ltf_series = _regime_ltf_conf = None
 
-        if regime_4h and getattr(regime_4h, "is_trained", False) and regime_4h._model is not None:
+        # Run 4H and 1H regime feature-matrix builds in parallel (CPU-only numpy)
+        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
+
+        def _run_regime_4h():
+            if not (regime_4h and getattr(regime_4h, "is_trained", False)
+                    and regime_4h._model is not None):
+                return None
             df_4h = htf.get("4H")
             if df_4h is not None and len(df_4h) >= 50:
-                _r4h, _c4h, _p4h = _batch_regime(regime_4h, df_4h, htf)
-                if _r4h is not None:
-                    _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
-                    _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
-                    _htf_cls = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
-                    regime_preds = {i: str(v) for i, v in enumerate(
-                        _htf_cls[np.clip(_regime_htf_series.values, 0, 2)])}
-            else:
-                _regime_htf_series, _regime_htf_conf, regime_preds = _batch_regime(regime_4h, df, htf)
-            gc.collect()
+                return "htf_df", _batch_regime(regime_4h, df_4h, htf)
+            return "htf_full", _batch_regime(regime_4h, df, htf)
 
-        if regime_1h and getattr(regime_1h, "is_trained", False) and regime_1h._model is not None:
+        def _run_regime_1h():
+            if not (regime_1h and getattr(regime_1h, "is_trained", False)
+                    and regime_1h._model is not None):
+                return None
             df_1h = htf.get("1H")
             if df_1h is not None and len(df_1h) >= 50:
-                _r1h, _c1h, _ = _batch_regime(regime_1h, df_1h, htf)
-                if _r1h is not None:
+                return "ltf_df", _batch_regime(regime_1h, df_1h, htf)
+            return "ltf_full", _batch_regime(regime_1h, df, htf)
+
+        with _TPE(max_workers=2) as _pool:
+            _f4h = _pool.submit(_run_regime_4h)
+            _f1h = _pool.submit(_run_regime_1h)
+            _res4h = _f4h.result()
+            _res1h = _f1h.result()
+
+        if _res4h is not None:
+            _kind4h, (_r4h, _c4h, _p4h) = _res4h
+            if _r4h is not None:
+                if _kind4h == "htf_df":
+                    _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
+                    _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
+                else:
+                    _regime_htf_series, _regime_htf_conf = _r4h, _c4h
+                _htf_cls = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
+                regime_preds = {i: str(v) for i, v in enumerate(
+                    _htf_cls[np.clip(_regime_htf_series.values, 0, 2)])}
+            gc.collect()
+
+        if _res1h is not None:
+            _kind1h, (_r1h, _c1h, _) = _res1h
+            if _r1h is not None:
+                if _kind1h == "ltf_df":
                     _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
                     _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
-            else:
-                _regime_ltf_series, _regime_ltf_conf, _ = _batch_regime(regime_1h, df, htf)
+                else:
+                    _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
             gc.collect()
 
         logger.info("Building sequence features %s (%d bars)...", symbol, n)
