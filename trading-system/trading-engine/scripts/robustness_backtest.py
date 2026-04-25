@@ -337,10 +337,8 @@ def _build_ml_cache(
         regime_preds       = {}
         _regime_htf_series = _regime_htf_conf = _regime_ltf_series = _regime_ltf_conf = None
 
-        # Phase 1: build feature matrices in parallel (pure numpy/pandas — CPU only).
-        # Phase 2: GPU predict_batch calls serially — CUDA is not thread-safe across
-        # two concurrent forward passes from different threads.
-        from concurrent.futures import ThreadPoolExecutor as _TPE
+        # Build feature matrix once per source df (serially), slice per model.
+        # predict_batch (GPU/DataParallel) runs serially — one model at a time.
         from models.regime_classifier import RegimeClassifier as _RC
 
         _do_4h = bool(regime_4h and getattr(regime_4h, "is_trained", False)
@@ -353,27 +351,20 @@ def _build_ml_cache(
         _df_src_1h = htf.get("1H") if (_do_1h and htf.get("1H") is not None
                                         and len(htf.get("1H")) >= 50) else df
 
-        def _build_X_4h():
-            return _RC._build_feature_matrix(_df_src_4h, htf, symbol)
-
-        def _build_X_1h():
-            return _RC._build_feature_matrix(_df_src_1h, htf, symbol)
-
         _X_4h = _X_1h = None
-        _workers = (2 if (_do_4h and _do_1h) else 1)
-        with _TPE(max_workers=_workers) as _pool:
-            _f4 = _pool.submit(_build_X_4h) if _do_4h else None
-            _f1 = _pool.submit(_build_X_1h) if _do_1h else None
-            if _f4 is not None:
-                try:
-                    _X_4h = _f4.result()
-                except Exception as _exc:
-                    logger.error("regime 4H feature build failed %s: %s", symbol, _exc)
-            if _f1 is not None:
-                try:
-                    _X_1h = _f1.result()
-                except Exception as _exc:
-                    logger.error("regime 1H feature build failed %s: %s", symbol, _exc)
+        try:
+            if _do_4h:
+                _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
+        except Exception as _exc:
+            logger.error("regime 4H feature build failed %s: %s", symbol, _exc)
+        try:
+            if _do_1h:
+                if _do_4h and _df_src_1h is _df_src_4h and _X_4h is not None:
+                    _X_1h = _X_4h
+                else:
+                    _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
+        except Exception as _exc:
+            logger.error("regime 1H feature build failed %s: %s", symbol, _exc)
 
         # Phase 2: GPU inference (serial — one model at a time on CUDA).
         def _infer_regime(rc_model, X_feat, df_src):

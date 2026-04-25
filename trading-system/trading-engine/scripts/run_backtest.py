@@ -728,12 +728,9 @@ def _precompute_ml_cache(
         n = len(df)
         SEQUENCE_LENGTH = 30
 
-        # ── Regime inference — two-phase to maximise CPU/GPU utilisation ────────
-        # Phase 1: _build_feature_matrix (pure numpy/pandas) runs on both 4H and
-        #          1H dataframes in parallel using 2 CPU threads.
-        # Phase 2: predict_batch (GPU / DataParallel) runs serially — CUDA is not
-        #          thread-safe across concurrent forward passes from separate threads.
-        from concurrent.futures import ThreadPoolExecutor as _TPE
+        # ── Regime inference ──────────────────────────────────────────────────────
+        # Build feature matrix once per source df (serially), slice per model.
+        # predict_batch (GPU/DataParallel) runs serially — one model at a time.
         from models.regime_classifier import RegimeClassifier as _RC
 
         regime_preds: dict[int, str] = {}
@@ -753,21 +750,20 @@ def _precompute_ml_cache(
             _df_src_1h = df if _do_1h else None
 
         _X_4h = _X_1h = None
-        _n_feat_workers = int(_do_4h) + int(_do_1h)
-        if _n_feat_workers > 0:
-            with _TPE(max_workers=_n_feat_workers) as _pool:
-                _f4 = _pool.submit(_RC._build_feature_matrix, _df_src_4h, htf, symbol) if _do_4h else None
-                _f1 = _pool.submit(_RC._build_feature_matrix, _df_src_1h, htf, symbol) if _do_1h else None
-                if _f4 is not None:
-                    try:
-                        _X_4h = _f4.result()
-                    except Exception as _exc:
-                        logger.error("ML cache: regime 4H feature build failed %s: %s", symbol, _exc)
-                if _f1 is not None:
-                    try:
-                        _X_1h = _f1.result()
-                    except Exception as _exc:
-                        logger.error("ML cache: regime 1H feature build failed %s: %s", symbol, _exc)
+        try:
+            if _do_4h:
+                _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
+        except Exception as _exc:
+            logger.error("ML cache: regime 4H feature build failed %s: %s", symbol, _exc)
+        try:
+            if _do_1h:
+                # Reuse matrix when both models fall back to the same source df
+                if _do_4h and _df_src_1h is _df_src_4h and _X_4h is not None:
+                    _X_1h = _X_4h
+                else:
+                    _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
+        except Exception as _exc:
+            logger.error("ML cache: regime 1H feature build failed %s: %s", symbol, _exc)
 
         def _infer_regime(rc_model, X_feat, df_src):
             _mode = getattr(rc_model, "_mode", "ltf_behaviour")
