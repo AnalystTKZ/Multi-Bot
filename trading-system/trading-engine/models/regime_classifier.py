@@ -226,12 +226,17 @@ class RegimeClassifier(BaseModel):
             from services.feature_engine import FeatureEngine, REGIME_FEATURES
             fe = FeatureEngine()
             feat = fe.get_regime_features(df, df_htf=htf, symbol=symbol)
+            # Slice to TF-specific columns if model was built on a feature subset
+            if len(feat) == N_FEATURES and len(self._col_idx) < N_FEATURES:
+                feat = feat[self._col_idx]
             x = torch.tensor(feat.reshape(1, -1), dtype=torch.float32).to(DEVICE)
 
-            self._model.eval()
+            # Unwrap DataParallel — DP cannot split a batch of 1 across 2 GPUs
+            _infer_m = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+            _infer_m.eval()
             with torch.no_grad():
                 with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
-                    logits = self._model(x)
+                    logits = _infer_m(x)
                 proba_t = torch.softmax(logits.float(), dim=1)[0]
             proba = proba_t.cpu().numpy().tolist()
             raw_id = int(np.argmax(proba))
