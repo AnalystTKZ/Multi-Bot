@@ -139,12 +139,68 @@ GITHUB_EMAIL  = os.getenv("GITHUB_EMAIL",  "bot@kaggle.local")
 # ─── Symbols (NEVER seen during training) ─────────────────────────────────────
 ROBUSTNESS_SYMBOLS = ["USDZAR", "USDMXN", "EURAUD", "GBPCHF", "AUDJPY"]
 
-# ─── Epochs (3 × 3-year windows) ─────────────────────────────────────────────
-EPOCHS = {
-    1: ("2016-01-01", "2018-12-31", "Pre-COVID (2016-2018)"),
-    2: ("2019-01-01", "2021-12-31", "COVID & Recovery (2019-2021)"),
-    3: ("2022-01-01", "2025-12-31", "Rate Hike Cycle (2022-2025)"),
-}
+# ─── Epochs — mirror pipeline/step5_split.py calendar split ───────────────────
+def _load_epochs() -> dict:
+    """
+    Read epoch windows from split_summary.json so robustness epochs align exactly
+    with the in-sample train/val/test split.
+      Epoch 1 → train era   (generalisation check during training period)
+      Epoch 2 → val era     (Round 1 window — safe to iterate)
+      Epoch 3 → test era    (blind window — use sparingly)
+    Falls back to hardcoded dates if the file is missing.
+    """
+    _candidates = [
+        Path(_ENGINE_DIR) / ".." / "ml_training" / "datasets" / "split_summary.json",
+    ]
+    if _ENV is not None:
+        _ml = _ENV.get("ml_training")
+        if _ml:
+            _candidates.insert(0, Path(_ml) / "datasets" / "split_summary.json")
+
+    for _p in _candidates:
+        try:
+            _p = Path(_p).resolve()
+            if not _p.exists():
+                continue
+            with open(_p) as _f:
+                _s = json.load(_f)
+            _dr = _s["date_ranges"]
+            epochs = {
+                1: (
+                    _dr["train"]["start"][:10],
+                    _dr["train"]["end"][:10],
+                    f"Train era ({_dr['train']['start'][:4]}–{_dr['train']['end'][:4]})",
+                ),
+                2: (
+                    _dr["validation"]["start"][:10],
+                    _dr["validation"]["end"][:10],
+                    f"Val era / Round 1 ({_dr['validation']['start'][:4]}–{_dr['validation']['end'][:4]})",
+                ),
+                3: (
+                    _dr["test"]["start"][:10],
+                    _dr["test"]["end"][:10],
+                    f"Test era / Blind ({_dr['test']['start'][:4]}–{_dr['test']['end'][:4]})",
+                ),
+            }
+            logger.info(
+                "Epochs from split_summary — E1: %s→%s  E2: %s→%s  E3: %s→%s",
+                epochs[1][0], epochs[1][1],
+                epochs[2][0], epochs[2][1],
+                epochs[3][0], epochs[3][1],
+            )
+            return epochs
+        except Exception as _exc:
+            logger.warning("split_summary.json load failed (%s): %s — using fallback", _p, _exc)
+
+    logger.warning("split_summary.json not found — using hardcoded epoch dates")
+    return {
+        1: ("2016-01-01", "2022-12-31", "Pre-val era (2016-2022)"),
+        2: ("2023-01-01", "2024-08-27", "Val era / Round 1 (2023-2024)"),
+        3: ("2024-08-27", "2026-12-31", "Test era / Blind (2024-2026)"),
+    }
+
+
+EPOCHS = _load_epochs()
 
 
 # ─── Checkpoint helpers ───────────────────────────────────────────────────────
