@@ -143,10 +143,12 @@ class QualityScorer(BaseModel):
             arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
             x = torch.from_numpy(arr).to(DEVICE)
 
-            self._model.eval()
+            # Unwrap DataParallel for single-sample inference — DP can't split batch=1
+            _infer_m = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+            _infer_m.eval()
             with torch.no_grad():
                 with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
-                    ev_raw = self._model(x)
+                    ev_raw = _infer_m(x)
                 ev = float(ev_raw.float()[0].item())
                 quality_score = float(torch.sigmoid(ev_raw.float())[0].item())
             return {"ev": ev, "quality_score": float(np.clip(quality_score, 0.0, 1.0))}
@@ -361,7 +363,12 @@ class QualityScorer(BaseModel):
             n_feat = X.shape[1]
             _warm_start = (self._model is not None and self._n_features == n_feat)
             if not _warm_start:
-                self._model      = _build_mlp(n_feat).to(DEVICE)
+                _m = _build_mlp(n_feat).to(DEVICE)
+                _n_gpu = torch.cuda.device_count() if DEVICE.type == "cuda" else 0
+                if _n_gpu > 1:
+                    _m = torch.nn.DataParallel(_m)
+                    logger.info("QualityScorer: DataParallel across %d GPUs", _n_gpu)
+                self._model      = _m
                 self._n_features = n_feat
                 logger.info("QualityScorer: cold start")
             else:
@@ -369,12 +376,13 @@ class QualityScorer(BaseModel):
 
             _pin     = DEVICE.type == "cuda"
             _workers = 2 if DEVICE.type == "cuda" else 0
+            _bs      = min(512, len(tr_ds)) if DEVICE.type == "cuda" else min(256, len(tr_ds))
             tr_ds    = TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(y_tr))
             va_ds    = TensorDataset(torch.from_numpy(X_va), torch.from_numpy(y_va))
-            tr_dl    = DataLoader(tr_ds, batch_size=min(256, len(tr_ds)), shuffle=True,
+            tr_dl    = DataLoader(tr_ds, batch_size=_bs, shuffle=True,
                                   num_workers=_workers, pin_memory=_pin,
                                   persistent_workers=(_workers > 0))
-            va_dl    = DataLoader(va_ds, batch_size=min(256, len(va_ds)), shuffle=False,
+            va_dl    = DataLoader(va_ds, batch_size=_bs, shuffle=False,
                                   num_workers=_workers, pin_memory=_pin,
                                   persistent_workers=(_workers > 0))
 
@@ -446,8 +454,8 @@ class QualityScorer(BaseModel):
                 if va_loss < best_val_loss:
                     best_val_loss = va_loss
                     no_improve    = 0
-                    best_state    = {k: v.cpu().clone()
-                                     for k, v in self._model.state_dict().items()}
+                    _snap = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+                    best_state    = {k: v.cpu().clone() for k, v in _snap.state_dict().items()}
                 else:
                     no_improve += 1
                     if no_improve >= patience:
@@ -455,7 +463,8 @@ class QualityScorer(BaseModel):
                         break
 
             if best_state is not None:
-                self._model.load_state_dict(best_state)
+                _restore = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+                _restore.load_state_dict(best_state)
 
             # Final metrics: MAE and EV direction accuracy (predicted positive → actual positive)
             self._model.eval()
@@ -490,8 +499,10 @@ class QualityScorer(BaseModel):
         try:
             import torch
             os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+            import torch
+            _m = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
             payload = {
-                "state_dict":    {k: v.cpu() for k, v in self._model.state_dict().items()},
+                "state_dict":    {k: v.cpu() for k, v in _m.state_dict().items()},
                 "n_features":    self._n_features,
                 "feature_order": self._feature_order,
             }
@@ -523,9 +534,13 @@ class QualityScorer(BaseModel):
                 os.remove(path)
                 return
 
+            import torch
             m = _build_mlp(n_feat)
             m.load_state_dict(state_dict)
             m = m.to(DEVICE)
+            _n_gpu = torch.cuda.device_count() if DEVICE.type == "cuda" else 0
+            if _n_gpu > 1:
+                m = torch.nn.DataParallel(m)
             m.eval()
 
             self._model         = m
