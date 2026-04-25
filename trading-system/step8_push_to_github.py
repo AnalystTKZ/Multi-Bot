@@ -2,13 +2,16 @@
 step8_push_to_github.py — Push training outputs back to GitHub.
 
 Setup:
-  - Pipeline runs in /kaggle/working/Multi-Bot (copied from input dataset, no git history)
-  - Notebook cell 0 clones the repo fresh to /kaggle/working/remote/Multi-Bot
-  - This script copies new training artifacts into that clone and pushes to GitHub
+  - Pipeline runs in /kaggle/working/Multi-Bot/trading-system (working copy, no git history)
+  - Notebook cell 0 clones the repo to /kaggle/working/remote/Multi-Bot (git clone)
+  - env_config.py routes all weight/log writes directly into the git clone when it exists,
+    so by the time this script runs the clone's working tree is already up-to-date.
+  - This script handles fallback copying (if the clone wasn't present at training time),
+    then stages, commits, and pushes to GitHub.
 
 This script:
   1. Sets committer identity + injects GITHUB_TOKEN into the remote URL
-  2. Copies new training artifacts into the clone
+  2. Falls back to copying artifacts from the working copy if they weren't written directly
   3. Stages + commits + pushes to main
 
 Required env var:
@@ -45,65 +48,76 @@ GITHUB_EMAIL  = os.getenv("GITHUB_EMAIL",  "bot@kaggle.local")
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 try:
-    _HERE = Path(__file__).resolve().parent   # trading-system/
+    _WORK_TS = Path(__file__).resolve().parent   # working copy trading-system/
 except NameError:
-    _HERE = Path("/kaggle/working/Multi-Bot/trading-system")
+    _WORK_TS = Path("/kaggle/working/Multi-Bot/trading-system")
 
-# On Kaggle: fresh clone is at /kaggle/working/remote/Multi-Bot
-# Locally: two levels up from trading-system/
-_KAGGLE_CLONE = Path("/kaggle/working/remote/Multi-Bot")
-REPO_ROOT = _KAGGLE_CLONE if _KAGGLE_CLONE.exists() else _HERE.parent
+# Remote git clone — outputs are written here directly by env_config when present.
+_REMOTE_CLONE = Path("/kaggle/working/remote/Multi-Bot")
+REPO_ROOT = _REMOTE_CLONE if _REMOTE_CLONE.exists() else _WORK_TS.parent
 
-ENGINE = _HERE / "trading-engine"
-ML_DIR = _HERE / "ml_training"
+# The remote clone's trading-system/ — this is where weights actually live after training.
+_REMOTE_TS = _REMOTE_CLONE / "trading-system" if _REMOTE_CLONE.exists() else _WORK_TS
+
+# Working copy engine/ml dirs — used as fallback source if remote clone wasn't present
+# during training (e.g. GITHUB_TOKEN wasn't set, so env_config fell back to working copy).
+_WORK_ENGINE = _WORK_TS / "trading-engine"
+_WORK_ML     = _WORK_TS / "ml_training"
+
+# Remote clone engine/ml dirs — primary artifact location.
+_REMOTE_ENGINE = _REMOTE_TS / "trading-engine"
+_REMOTE_ML     = _REMOTE_TS / "ml_training"
+
 
 # ── Artifact manifest ─────────────────────────────────────────────────────────
-# (source_path, dest_path relative to REPO_ROOT)
-# Missing sources are silently skipped.
+# Fallback copy list: (working_copy_source, dest_path_relative_to_REPO_ROOT)
+# Only copied when the file is missing from the remote clone (i.e. env_config
+# fell back to the working copy because the clone didn't exist at training time).
+# If outputs were written directly to the clone, these copies are no-ops.
 
-ARTIFACTS: list[tuple[Path, Path]] = [
-    (ENGINE / "weights" / "gru_lstm" / "model.pt",
+_FALLBACK_ARTIFACTS: list[tuple[Path, Path]] = [
+    (_WORK_ENGINE / "weights" / "gru_lstm" / "model.pt",
      Path("trading-system/trading-engine/weights/gru_lstm/model.pt")),
 
-    (ENGINE / "weights" / "regime_4h.pkl",
+    (_WORK_ENGINE / "weights" / "regime_4h.pkl",
      Path("trading-system/trading-engine/weights/regime_4h.pkl")),
 
-    (ENGINE / "weights" / "regime_1h.pkl",
+    (_WORK_ENGINE / "weights" / "regime_1h.pkl",
      Path("trading-system/trading-engine/weights/regime_1h.pkl")),
 
-    (ENGINE / "weights" / "quality_scorer.pkl",
+    (_WORK_ENGINE / "weights" / "quality_scorer.pkl",
      Path("trading-system/trading-engine/weights/quality_scorer.pkl")),
 
-    (ENGINE / "weights" / "rl_ppo" / "model.zip",
+    (_WORK_ENGINE / "weights" / "rl_ppo" / "model.zip",
      Path("trading-system/trading-engine/weights/rl_ppo/model.zip")),
 
-    (ENGINE / "weights" / "macro_correlations.json",
+    (_WORK_ENGINE / "weights" / "macro_correlations.json",
      Path("trading-system/trading-engine/weights/macro_correlations.json")),
 
-    (ENGINE / "weights" / "gru_lstm" / "weights_manifest.json",
+    (_WORK_ENGINE / "weights" / "gru_lstm" / "weights_manifest.json",
      Path("trading-system/trading-engine/weights/gru_lstm/weights_manifest.json")),
 
-    (ML_DIR / "metrics" / "training_summary.json",
+    (_WORK_ML / "metrics" / "training_summary.json",
      Path("trading-system/ml_training/metrics/training_summary.json")),
 
-    (ML_DIR / "metrics" / "training_7b_summary.json",
+    (_WORK_ML / "metrics" / "training_7b_summary.json",
      Path("trading-system/ml_training/metrics/training_7b_summary.json")),
 
-    (ENGINE / "logs" / "backtest_diagnostics.csv",
+    (_WORK_ENGINE / "logs" / "backtest_diagnostics.csv",
      Path("trading-system/trading-engine/logs/backtest_diagnostics.csv")),
 
-    (ENGINE / "logs" / "trade_journal_detailed.jsonl",
+    (_WORK_ENGINE / "logs" / "trade_journal_detailed.jsonl",
      Path("trading-system/trading-engine/logs/trade_journal_detailed.jsonl")),
 
-    (_HERE / "backtesting" / "results" / "latest_summary.json",
+    (_WORK_TS / "backtesting" / "results" / "latest_summary.json",
      Path("trading-system/backtesting/results/latest_summary.json")),
 ]
 
-ARTIFACT_DIRS: list[tuple[Path, Path]] = [
-    (ENGINE / "backtest_results",
+_FALLBACK_DIRS: list[tuple[Path, Path]] = [
+    (_WORK_ENGINE / "backtest_results",
      Path("trading-system/trading-engine/backtest_results")),
 
-    (ML_DIR / "logs",
+    (_WORK_ML / "logs",
      Path("trading-system/ml_training/logs")),
 ]
 
@@ -114,13 +128,21 @@ def _run(cmd: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedP
 
 
 def _copy_artifact(src: Path, dst_rel: Path) -> bool:
+    """Copy src → REPO_ROOT/dst_rel only when dst doesn't already exist (direct-write case)."""
     if not src.exists():
-        logger.debug("skip (missing): %s", src)
+        logger.debug("skip (missing source): %s", src)
         return False
     dst = REPO_ROOT / dst_rel
+    # If the destination already exists and has the same content (direct-write path), skip.
+    if dst.exists() and dst.stat().st_size == src.stat().st_size and dst.samefile(src) is False:
+        # File is present but came from a different path — still copy to keep in sync.
+        pass
+    if dst.exists() and dst.resolve() == src.resolve():
+        logger.debug("skip (same file): %s", dst_rel)
+        return False
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
-    logger.info("  copied: %s → %s", src.name, dst_rel)
+    logger.info("  fallback copied: %s → %s", src.name, dst_rel)
     return True
 
 
@@ -141,9 +163,11 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("=== STEP 8: PUSH TRAINING OUTPUTS TO GITHUB ===")
-    logger.info("Repo:   %s", GITHUB_REPO)
-    logger.info("Branch: %s", GITHUB_BRANCH)
-    logger.info("Root:   %s", REPO_ROOT)
+    logger.info("Repo:        %s", GITHUB_REPO)
+    logger.info("Branch:      %s", GITHUB_BRANCH)
+    logger.info("Repo root:   %s", REPO_ROOT)
+    logger.info("Remote TS:   %s", _REMOTE_TS)
+    logger.info("Direct-write:%s", "YES" if _REMOTE_CLONE.exists() else "NO (fallback copy mode)")
 
     remote_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
 
@@ -154,15 +178,17 @@ def main() -> None:
     logger.info("Pulling latest from origin/%s ...", GITHUB_BRANCH)
     _run(["git", "pull", "--ff-only", "origin", GITHUB_BRANCH], cwd=REPO_ROOT)
 
-    # ── Copy new artifacts into the working tree ──────────────────────────────
-    logger.info("Collecting artifacts ...")
-    n_files = 0
-    for src, dst_rel in ARTIFACTS:
+    # ── Fallback copy: only needed when clone wasn't present during training ──
+    # When env_config routed writes directly to the clone, these are no-ops
+    # (dst already exists at same path as src, or dst is already newer).
+    n_copied = 0
+    for src, dst_rel in _FALLBACK_ARTIFACTS:
         if _copy_artifact(src, dst_rel):
-            n_files += 1
-    for src_dir, dst_rel in ARTIFACT_DIRS:
-        n_files += _copy_dir(src_dir, dst_rel)
-    logger.info("Collected %d file(s)", n_files)
+            n_copied += 1
+    for src_dir, dst_rel in _FALLBACK_DIRS:
+        n_copied += _copy_dir(src_dir, dst_rel)
+    if n_copied:
+        logger.info("Fallback: copied %d file(s) from working copy", n_copied)
 
     # ── Stage, commit, push ───────────────────────────────────────────────────
     _run(["git", "add",
@@ -171,6 +197,7 @@ def main() -> None:
           "trading-system/trading-engine/logs/",
           "trading-system/ml_training/",
           "trading-system/backtesting/results/",
+          ".gitignore",
           ], cwd=REPO_ROOT)
 
     status = _run(["git", "status", "--porcelain"], cwd=REPO_ROOT)

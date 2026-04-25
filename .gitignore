@@ -61,8 +61,7 @@ trading-system/processed_data/
 trading-system/ml_training/datasets/
 
 # Model weights — tracked (single source of truth: trading-engine/weights/)
-# Backups are runtime artifacts, excluded
-trading-system/trading-engine/weights/backups/
+# Backups are tracked so previous weight versions are recoverable from git history
 
 # Runtime logs and journals — tracked (single source of truth: trading-engine/logs/)
 # Raw .log text files excluded; structured CSV/JSONL journals are tracked

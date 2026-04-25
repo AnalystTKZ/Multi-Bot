@@ -3,21 +3,31 @@ env_config.py — Environment abstraction layer.
 
 Resolves all root paths based on where the code is running:
   - Kaggle (split-dataset setup):
-      Code clone: /kaggle/working/Multi-Bot/  (no training_data or processed_data)
-      Dataset:    /kaggle/input/<slug>/        (training_data/ + processed_data/, read-only)
-      Outputs:    written back to base/ paths (weights, logs, ml_training as before)
+      Code clone:  /kaggle/working/Multi-Bot/         (no training_data or processed_data)
+      Remote clone:/kaggle/working/remote/Multi-Bot/  (git clone used for GitHub push)
+      Dataset:     /kaggle/input/<slug>/               (training_data/ + processed_data/, read-only)
+      Outputs:     written directly to the remote clone (trading-system/) when it exists,
+                   so step8_push_to_github.py only needs to git-add without copying.
   - Local: everything relative to this file's parent (trading-system/)
+
+Output path priority (Kaggle only):
+  If /kaggle/working/remote/Multi-Bot/trading-system exists (git clone present):
+    weights     → remote clone's trading-engine/weights/   (written directly, git-clean push)
+    ml_training → remote clone's ml_training/
+    engine logs → remote clone's trading-engine/logs/
+  Otherwise: fall back to the working copy (same as before).
 
 Usage (in any pipeline script or model script):
     from env_config import get_env
 
     env = get_env()
-    BASE       = env["base"]        # trading-system/ root (code)
+    BASE       = env["base"]        # trading-system/ root (code — working copy)
     DATA_PATH  = env["data"]        # training_data/  (dataset source on Kaggle)
     PROC_DATA  = env["processed"]   # processed_data/ (dataset source on Kaggle)
     OUTPUT     = env["output"]      # writable output root
-    WEIGHTS    = env["weights"]     # trading-engine/weights/
-    ML_DIR     = env["ml_training"] # ml_training/
+    WEIGHTS    = env["weights"]     # trading-engine/weights/  (→ remote clone on Kaggle)
+    ML_DIR     = env["ml_training"] # ml_training/             (→ remote clone on Kaggle)
+    REMOTE     = env["remote"]      # remote clone trading-system/ root (or None locally)
 """
 from __future__ import annotations
 import os
@@ -86,21 +96,31 @@ def get_env() -> dict[str, Path]:
             # Fallback: old single-repo layout where data lived in the clone
             data_dir = base / "training_data"
             proc_dir = base / "processed_data"
+
+        # Remote git clone — outputs write here directly so the push is clean.
+        # If the clone doesn't exist yet (e.g. GITHUB_TOKEN not set), fall back
+        # to the working copy so training still runs without erroring.
+        _remote_ts = Path("/kaggle/working/remote/Multi-Bot/trading-system")
+        remote = _remote_ts if _remote_ts.exists() else None
+        out_base = remote if remote is not None else base
     else:
         base     = Path(__file__).resolve().parent
         output   = base
         data_dir = base / "training_data"
         proc_dir = base / "processed_data"
+        remote   = None
+        out_base = base
 
     return {
         "base":        base,
         "data":        data_dir,
         "processed":   proc_dir,
-        "ml_training": base / "ml_training",
-        "weights":     base / "trading-engine" / "weights",
-        "engine":      base / "trading-engine",
-        "pipeline":    base / "pipeline",
+        "ml_training": out_base / "ml_training",
+        "weights":     out_base / "trading-engine" / "weights",
+        "engine":      out_base / "trading-engine",
+        "pipeline":    base / "pipeline",        # code — always from working copy
         "output":      output,
+        "remote":      remote,                   # Path or None
         "on_kaggle":   on_kaggle,  # type: ignore[dict-item]
     }
 
@@ -113,6 +133,7 @@ def ensure_output_dirs(env: dict) -> None:
         env["ml_training"] / "logs",
         env["weights"] / "gru_lstm",
         env["weights"] / "rl_ppo",
+        env["weights"] / "vector_store",
         env["engine"] / "logs",
     ]
     for d in dirs:
