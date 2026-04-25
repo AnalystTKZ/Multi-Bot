@@ -31,6 +31,19 @@ sys.path.insert(0, _ENGINE_DIR)
 # Models use relative "weights/..." paths — must run from trading-engine/
 os.chdir(_ENGINE_DIR)
 
+# env_config resolves processed_data/ to the Kaggle dataset mount on Kaggle,
+# or to trading-system/processed_data/ locally. Without this, DATA_DIR pointed
+# at trading-system/processed_data/histdata/ which doesn't exist on Kaggle
+# (data is mounted at /kaggle/input/<slug>/processed_data/histdata/).
+_TS_DIR = os.path.join(_ENGINE_DIR, "..")
+sys.path.insert(0, _TS_DIR)
+try:
+    from env_config import get_env as _get_env
+    _ENV = _get_env()
+    _DATA_DIR_RESOLVED = str(_ENV["processed"] / "histdata")
+except Exception:
+    _DATA_DIR_RESOLVED = os.path.join(_TS_DIR, "processed_data", "histdata")
+
 import numpy as np
 import pandas as pd
 
@@ -48,7 +61,7 @@ MAX_DRAWDOWN_PCT   = 0.20       # 20% portfolio halt
 COOLDOWN_BARS      = 10         # bars between signals per symbol
 MIN_CONFIDENCE     = 0.70       # minimum signal confidence — PM R:R gate also enforces this
 MAX_HOLD_BARS      = 200        # max bars before time-exit
-DATA_DIR           = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "processed_data", "histdata")
+DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
 
 # PM settings object — mirrors what the live engine passes to PortfolioManager

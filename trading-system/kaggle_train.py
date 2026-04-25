@@ -172,7 +172,9 @@ def run_retrain(model: str, label: str = "") -> None:
 
 
 def _journal_path() -> Path:
-    return env["base"] / "trading-engine" / "logs" / "trade_journal_detailed.jsonl"
+    # env["engine"] resolves to the remote clone's trading-engine/ on Kaggle
+    # when the clone exists — same root step6_backtest.py writes the journal to.
+    return env["engine"] / "logs" / "trade_journal_detailed.jsonl"
 
 
 def _journal_count() -> int:

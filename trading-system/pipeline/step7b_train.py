@@ -65,21 +65,30 @@ def run_retrain(model: str) -> dict:
 def main():
     logger.info("=== STEP 7b: QUALITY + RL TRAINING ===")
 
-    # Require real journal from backtest — no synthetic fallback
+    # Require real journal from backtest — no synthetic fallback.
+    # Exit 0 (not error) when the journal is missing or too small: this happens
+    # on the very first run before any backtest trades exist. kaggle_train.py
+    # treats a non-zero exit as a hard failure that aborts the pipeline, so we
+    # must exit gracefully here rather than crashing the whole run.
     if not JOURNAL_PATH.exists() or JOURNAL_PATH.stat().st_size < 100:
-        raise RuntimeError(
-            f"Journal missing at {JOURNAL_PATH} — run step6_backtest.py first"
+        logger.warning(
+            "Journal missing or empty at %s — backtest produced no trades yet. "
+            "Skipping Quality+RL training (will train after first successful backtest).",
+            JOURNAL_PATH,
         )
+        sys.exit(0)
 
     with open(JOURNAL_PATH) as f:
         n_entries = sum(1 for line in f if line.strip())
 
     logger.info("Journal entries: %d", n_entries)
     if n_entries < MIN_JOURNAL_ENTRIES:
-        raise RuntimeError(
-            f"Journal has only {n_entries} entries (need {MIN_JOURNAL_ENTRIES}) — "
-            "backtest may have produced no trades. Check step6 logs."
+        logger.warning(
+            "Journal has only %d entries (need %d) — backtest produced too few trades. "
+            "Skipping Quality+RL training. Check step6 logs.",
+            n_entries, MIN_JOURNAL_ENTRIES,
         )
+        sys.exit(0)
 
     metrics = {}
     for model_name in ["quality", "rl"]:
