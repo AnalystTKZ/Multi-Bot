@@ -43,6 +43,9 @@ def _get_device():
         del os.environ["CUDA_VISIBLE_DEVICES"]
     if torch.cuda.is_available():
         logger.info("QualityScorer: CUDA available — using GPU")
+        torch.backends.cudnn.benchmark        = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32       = True
         return torch.device("cuda")
     if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
         raise RuntimeError(

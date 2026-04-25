@@ -53,6 +53,13 @@ try:
             logger.info("  GPU %d: %s (%.1f GB)",
                         _i, _torch.cuda.get_device_name(_i),
                         _torch.cuda.get_device_properties(_i).total_memory / 1e9)
+        # ── GPU performance flags ──────────────────────────────────────────────
+        # cuDNN autotuner: picks fastest conv algorithm for fixed input shapes.
+        _torch.backends.cudnn.benchmark = True
+        # TF32: ~3× faster matmul on Ampere+ (T4 supports it); negligible accuracy loss.
+        _torch.backends.cuda.matmul.allow_tf32 = True
+        _torch.backends.cudnn.allow_tf32       = True
+        logger.info("cuDNN benchmark=True, TF32 matmul=True")
     else:
         _DEVICE = "cpu"
         logger.info("Device: CPU")
@@ -61,6 +68,11 @@ try:
                 "retrain_incremental: CUDA not available on Kaggle — "
                 "enable GPU accelerator in notebook settings."
             )
+    # ── CPU thread config: use all 4 Kaggle CPUs ──────────────────────────────
+    _n_cpu = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
+    _torch.set_num_threads(_n_cpu)
+    _torch.set_num_interop_threads(max(1, _n_cpu // 2))
+    logger.info("PyTorch CPU threads: %d intra / %d interop", _n_cpu, max(1, _n_cpu // 2))
 except RuntimeError:
     raise
 
@@ -72,7 +84,9 @@ BACKUP_DIR      = str(_ENV["weights"] / "backups")
 MAX_BACKUPS = 5
 MONTHS_OF_DATA = int(os.getenv("RETRAIN_MONTHS", "0"))  # 0 = use all available data
 GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "50"))
-GRU_BATCH_SIZE = int(os.getenv("GRU_BATCH_SIZE", "512"))
+# 1024 per GPU × 2 GPUs (DataParallel) = 2048 effective batch; grad_accum×4 = 8192 logical.
+# Overrideable via env var for memory-constrained runs.
+GRU_BATCH_SIZE = int(os.getenv("GRU_BATCH_SIZE", "1024"))
 MAJOR_SYMBOLS = [
     "AUDUSD", "EURGBP", "EURJPY", "EURUSD", "GBPJPY",
     "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY", "XAUUSD",
@@ -973,102 +987,126 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
 
     try:
         import gc
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from models.vector_store import VectorStore
         from models.gru_lstm_predictor import GRULSTMPredictor
+        from models.regime_classifier import RegimeClassifier as _RC
         from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_FEATURES, REGIME_4H_FEATURES
 
-        logger.info("=== VectorStore: building similarity indices ===")
+        logger.info("=== VectorStore: building similarity indices (parallel feature build) ===")
         store = VectorStore()
         gru_model = GRULSTMPredictor()
         fe = FeatureEngine()
 
-        # Limit samples per symbol to keep index size manageable
-        MAX_BARS_PER_SYMBOL = 50_000  # ~3 months of 15M data per symbol
+        MAX_BARS_PER_SYMBOL = 50_000
+        _col_idx = [REGIME_FEATURES.index(f) for f in REGIME_4H_FEATURES if f in REGIME_FEATURES]
+        _n_workers = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
 
-        for sym in symbols:
+        def _build_sym_vectors(sym: str):
+            """CPU-only: load data + build all three feature arrays for one symbol.
+            Returns (sym, tp_vecs, tp_metas, ms_vecs, ms_metas, emb_seqs, emb_metas_idx, df_index)
+            or raises on failure."""
             df = _load_ohlcv(sym, "15M", split="train")
             if df is None or len(df) < 200:
-                continue
+                return None
 
-            # --- trade_patterns: 45-dim SEQUENCE_FEATURES snapshot (last bar of each window) ---
+            result = {"sym": sym, "df_index": df.index}
+
+            # trade_patterns
             try:
                 feat_df = fe._build_sequence_df(df, None, symbol=sym)
-                seq_feats = feat_df[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
-                seq_feats = seq_feats[~(~(seq_feats == seq_feats)).any(axis=1)]  # drop NaN rows
-
-                n = min(len(seq_feats), MAX_BARS_PER_SYMBOL)
-                step = max(1, len(seq_feats) // n)
-                vecs = seq_feats[::step][:n]
-                metas = [
-                    {"symbol": sym, "timeframe": "15M", "ts": str(df.index[min(i * step, len(df) - 1)])}
-                    for i in range(len(vecs))
-                ]
-                store.add_batch("trade_patterns", vecs, metas)
-                logger.info("VectorStore trade_patterns: +%d vectors for %s", len(vecs), sym)
-                del feat_df, seq_feats, vecs
-                gc.collect()
+                sq = feat_df[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
+                sq = sq[~np.isnan(sq).any(axis=1)]
+                n = min(len(sq), MAX_BARS_PER_SYMBOL)
+                step = max(1, len(sq) // n)
+                vecs = sq[::step][:n]
+                metas = [{"symbol": sym, "timeframe": "15M",
+                          "ts": str(df.index[min(i * step, len(df) - 1)])}
+                         for i in range(len(vecs))]
+                result["tp"] = (vecs, metas)
+                del feat_df, sq
             except Exception as exc:
                 logger.warning("VectorStore trade_patterns failed for %s: %s", sym, exc)
 
-            # --- market_structures: 34-dim REGIME_4H_FEATURES subset ---
-            # Use REGIME_4H_FEATURES (34-dim), NOT the full REGIME_FEATURES (67-dim).
-            # REGIME_4H_FEATURES is the clean structural fingerprint for similarity search:
-            #   15 HTF structural features + 17 macro index returns + 2 macro scalars = 34.
-            # REGIME_FEATURES (67-dim) is bloated with 5M/15M noise, prev_regime one-hots,
-            # and zeroed-out S/R stubs that corrupt cosine similarity.
-            # The old hardcoded dim=53 was stale — it predated INDEX_FEATURES (+17) being
-            # appended to REGIME_FEATURES, which pushed it to 67. This is the correct fix.
+            # market_structures
             try:
-                from models.regime_classifier import RegimeClassifier
-                from services.feature_engine import REGIME_FEATURES, REGIME_4H_FEATURES
-                all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("5M", "15M", "1H", "4H", "1D")}
-                # Build full 67-dim matrix, then slice to the 34 REGIME_4H_FEATURES columns.
-                X_all = RegimeClassifier._build_feature_matrix(df, all_htf, sym)
-                col_idx = [REGIME_FEATURES.index(f) for f in REGIME_4H_FEATURES if f in REGIME_FEATURES]
-                X_htf = X_all[:, col_idx]  # (N, 34)
+                all_htf = {tf: _load_ohlcv(sym, tf, split="all")
+                           for tf in ("5M", "15M", "1H", "4H", "1D")}
+                X_all = _RC._build_feature_matrix(df, all_htf, sym)
+                X_htf = X_all[:, _col_idx]
                 step = max(1, len(df) // MAX_BARS_PER_SYMBOL)
                 idx = np.arange(50, len(df), step)
-                idx = idx[idx < len(X_htf)]  # guard: X_htf may be shorter than df
-                regime_vecs = X_htf[idx]
-                regime_metas = [
-                    {"symbol": sym, "timeframe": "15M", "ts": str(df.index[i])}
-                    for i in idx
-                ]
-                if len(regime_vecs) > 0:
-                    store.add_batch("market_structures", regime_vecs.astype("float32"), regime_metas)
-                    logger.info("VectorStore market_structures: +%d vectors (34-dim 4H) for %s",
-                                len(regime_vecs), sym)
-                del all_htf, X_all, X_htf, regime_vecs, regime_metas
-                gc.collect()
+                idx = idx[idx < len(X_htf)]
+                rvecs = X_htf[idx].astype("float32")
+                rmetas = [{"symbol": sym, "timeframe": "15M", "ts": str(df.index[i])} for i in idx]
+                result["ms"] = (rvecs, rmetas)
+                del all_htf, X_all, X_htf
             except Exception as exc:
                 logger.warning("VectorStore market_structures failed for %s: %s", sym, exc)
 
-            # --- regime_embeddings: 64-dim GRU shared layer ---
+            # regime_embeddings: build sequences (GPU call happens in main thread)
             if gru_model.is_trained:
                 try:
                     feat_df2 = fe._build_sequence_df(df, None, symbol=sym)
-                    seq_arr = feat_df2[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
-                    seq_arr = seq_arr[~(~(seq_arr == seq_arr)).any(axis=1)]
-
-                    n_seq = len(seq_arr) - 30
+                    sq2 = feat_df2[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
+                    sq2 = sq2[~np.isnan(sq2).any(axis=1)]
+                    n_seq = len(sq2) - 30
                     if n_seq > 0:
                         step4 = max(1, n_seq // (MAX_BARS_PER_SYMBOL // 4))
                         indices = list(range(0, n_seq, step4))
-                        seqs = np.stack([seq_arr[i:i + 30] for i in indices], axis=0)  # (N, 30, 45)
-                        embs = gru_model.get_embedding_batch(seqs)  # (N, 64)
-                        if embs is not None:
-                            emb_metas = [
-                                {"symbol": sym, "timeframe": "15M", "ts": str(df.index[min(i + 30, len(df) - 1)])}
-                                for i in indices
-                            ]
-                            store.add_batch("regime_embeddings", embs, emb_metas)
-                            logger.info("VectorStore regime_embeddings: +%d vectors for %s", len(embs), sym)
-                    del feat_df2, seq_arr
-                    gc.collect()
+                        seqs = np.stack([sq2[i:i + 30] for i in indices], axis=0)
+                        result["emb_seqs"] = seqs
+                        result["emb_idx"] = indices
+                    del feat_df2, sq2
                 except Exception as exc:
-                    logger.warning("VectorStore regime_embeddings failed for %s: %s", sym, exc)
+                    logger.warning("VectorStore regime_embeddings prep failed for %s: %s", sym, exc)
 
             del df
+            return result
+
+        # Phase 1: parallel CPU feature build across all symbols
+        sym_results = {}
+        with ThreadPoolExecutor(max_workers=_n_workers) as pool:
+            futures = {pool.submit(_build_sym_vectors, sym): sym for sym in symbols}
+            for fut in as_completed(futures):
+                sym = futures[fut]
+                try:
+                    r = fut.result()
+                    if r is not None:
+                        sym_results[sym] = r
+                except Exception as exc:
+                    logger.warning("VectorStore feature build failed for %s: %s", sym, exc)
+
+        # Phase 2: serial GPU add_batch (FAISS GPU index is not thread-safe)
+        for sym in symbols:
+            r = sym_results.get(sym)
+            if r is None:
+                continue
+
+            if "tp" in r:
+                vecs, metas = r["tp"]
+                store.add_batch("trade_patterns", vecs, metas)
+                logger.info("VectorStore trade_patterns: +%d vectors for %s", len(vecs), sym)
+
+            if "ms" in r:
+                rvecs, rmetas = r["ms"]
+                store.add_batch("market_structures", rvecs, rmetas)
+                logger.info("VectorStore market_structures: +%d vectors (34-dim 4H) for %s", len(rvecs), sym)
+
+            if "emb_seqs" in r and gru_model.is_trained:
+                seqs = r["emb_seqs"]
+                indices = r["emb_idx"]
+                df_index = r["df_index"]
+                embs = gru_model.get_embedding_batch(seqs)
+                if embs is not None:
+                    emb_metas = [
+                        {"symbol": sym, "timeframe": "15M",
+                         "ts": str(df_index[min(i + 30, len(df_index) - 1)])}
+                        for i in indices
+                    ]
+                    store.add_batch("regime_embeddings", embs, emb_metas)
+                    logger.info("VectorStore regime_embeddings: +%d vectors for %s", len(embs), sym)
+
             gc.collect()
 
         store.save()

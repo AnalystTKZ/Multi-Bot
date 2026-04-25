@@ -76,6 +76,9 @@ def _get_device():
             logger.info("  GPU %d: %s (%.1f GB)", i,
                         torch.cuda.get_device_name(i),
                         torch.cuda.get_device_properties(i).total_memory / 1e9)
+        torch.backends.cudnn.benchmark        = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32       = True
         return torch.device("cuda")
     if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
         raise RuntimeError(

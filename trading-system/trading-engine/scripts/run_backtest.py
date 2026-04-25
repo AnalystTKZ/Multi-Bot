@@ -50,6 +50,19 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backtest")
 
+# ── GPU/CPU performance flags ──────────────────────────────────────────────────
+try:
+    import torch as _bt_torch
+    if _bt_torch.cuda.is_available():
+        _bt_torch.backends.cudnn.benchmark        = True
+        _bt_torch.backends.cuda.matmul.allow_tf32 = True
+        _bt_torch.backends.cudnn.allow_tf32        = True
+    _bt_n_cpu = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
+    _bt_torch.set_num_threads(_bt_n_cpu)
+    _bt_torch.set_num_interop_threads(max(1, _bt_n_cpu // 2))
+except Exception:
+    pass
+
 # ─── Config ───────────────────────────────────────────────────────────────────
 INITIAL_CAPITAL    = 10000.0
 RISK_PER_TRADE     = 0.01       # 1% per trade
@@ -1150,27 +1163,45 @@ def _backtest_trader(
     # ── GPU-batched ML pre-computation ────────────────────────────────────────
     # Use shared cross-trader cache when available — avoids recomputing GRU/Regime
     # inference for every (trader × symbol) pair (55 calls → 11 calls).
-    # Falls back to per-trader computation when no shared cache is provided.
+    # Cache misses are built in parallel across 4 CPU workers: the CPU-bound
+    # feature-matrix build runs concurrently; the GPU forward pass inside
+    # _precompute_ml_cache is already batched so GIL isn't a bottleneck.
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
     symbol_ml_cache: dict[str, dict[int, dict]] = {}
+    _bt_cpu_workers = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
+
+    def _build_cache_sym(sym):
+        return sym, _precompute_ml_cache(
+            symbol_dfs[sym], sym, symbol_htf.get(sym, {}), ml_models
+        )
+
     if shared_ml_cache is not None:
-        # Reuse pre-computed cache; only build for symbols not already cached
-        for sym in symbol_dfs:
-            if sym in shared_ml_cache:
-                symbol_ml_cache[sym] = shared_ml_cache[sym]
-            elif ml_models:
-                logger.info("%s: ML cache miss for %s — computing now", trader_id, sym)
-                c = _precompute_ml_cache(
-                    symbol_dfs[sym], sym, symbol_htf.get(sym, {}), ml_models
-                )
-                shared_ml_cache[sym] = c
-                symbol_ml_cache[sym] = c
+        # Parallel build for cache misses; hits are reused directly.
+        missing = [sym for sym in symbol_dfs if sym not in shared_ml_cache and ml_models]
+        hits    = [sym for sym in symbol_dfs if sym in shared_ml_cache]
+        for sym in hits:
+            symbol_ml_cache[sym] = shared_ml_cache[sym]
+        if missing:
+            logger.info("%s: ML cache miss for %d symbols — building in parallel", trader_id, len(missing))
+            with ThreadPoolExecutor(max_workers=min(_bt_cpu_workers, len(missing))) as pool:
+                for fut in _as_completed(pool.submit(_build_cache_sym, s) for s in missing):
+                    try:
+                        sym, c = fut.result()
+                        shared_ml_cache[sym] = c
+                        symbol_ml_cache[sym] = c
+                    except Exception as exc:
+                        logger.warning("ML cache build failed: %s", exc)
     elif ml_models:
-        logger.info("%s: pre-computing ML inference cache for %d symbols...",
+        logger.info("%s: pre-computing ML inference cache for %d symbols (parallel)...",
                     trader_id, len(symbol_dfs))
-        for sym, df in symbol_dfs.items():
-            symbol_ml_cache[sym] = _precompute_ml_cache(
-                df, sym, symbol_htf.get(sym, {}), ml_models
-            )
+        with ThreadPoolExecutor(max_workers=min(_bt_cpu_workers, len(symbol_dfs))) as pool:
+            for fut in _as_completed(pool.submit(_build_cache_sym, s) for s in symbol_dfs):
+                try:
+                    sym, c = fut.result()
+                    symbol_ml_cache[sym] = c
+                except Exception as exc:
+                    logger.warning("ML cache build failed: %s", exc)
 
     # ── Build a merged bar iterator sorted by timestamp ───────────────────────
     # Each entry: (timestamp, symbol, bar_index_in_that_df)
