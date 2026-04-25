@@ -73,3 +73,6 @@ trading-system/backtesting/datasets/
 # Production env — never commit real secrets
 trading-system/.env.production
 trading-system/.env
+
+# FAISS vector store — too large for GitHub (100-310 MB)
+trading-system/trading-engine/weights/vector_store/
