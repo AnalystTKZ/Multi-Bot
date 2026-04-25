@@ -247,16 +247,37 @@ def _load_parquet(symbol: str, tf: str, start: str, end: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, f"{symbol}_{tf}.parquet")
     if not os.path.exists(path):
         raise FileNotFoundError(f"No parquet for {symbol} {tf}: {path}")
-    df = pd.read_parquet(path)
-    df.index = pd.to_datetime(df.index, utc=True)
+    start_ts = pd.Timestamp(start, tz="UTC")
+    end_ts   = pd.Timestamp(end,   tz="UTC") + pd.Timedelta(days=1)
+    # Push the date filter into the parquet read — only the epoch window is
+    # loaded into RAM, not the full 9-year file.
+    try:
+        import pyarrow.parquet as _pq
+        import pyarrow.dataset as _ds
+        _tbl = _pq.read_table(
+            path,
+            filters=[
+                ("index", ">=", start_ts),
+                ("index", "<",  end_ts),
+            ],
+        )
+        df = _tbl.to_pandas()
+        del _tbl
+    except Exception:
+        # Fallback: full read + slice (pyarrow filter may fail on non-standard index column name)
+        df = pd.read_parquet(path)
+        df.index = pd.to_datetime(df.index, utc=True)
+        df = df.loc[(df.index >= start_ts) & (df.index < end_ts)]
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, utc=True)
+    elif df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
     df.columns = [c.lower() for c in df.columns]
     for col in ("open", "high", "low", "close", "volume"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["open", "high", "low", "close"])
-    start_ts = pd.Timestamp(start, tz="UTC")
-    end_ts   = pd.Timestamp(end,   tz="UTC") + pd.Timedelta(days=1)
-    return df.loc[(df.index >= start_ts) & (df.index < end_ts)]
+    return df.dropna(subset=["open", "high", "low", "close"])
 
 
 def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:

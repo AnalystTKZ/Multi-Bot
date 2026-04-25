@@ -236,7 +236,8 @@ def _read_market_csv_streaming(
 
 def _load_csv(symbol: str, timeframe: str = "15M", start: str | None = None, end: str | None = None) -> pd.DataFrame:
     """Load OHLCV from processed_data/histdata/{SYM}_{TF}.parquet (step0 pipeline output).
-    Uses ALL available history — no date cutoff unless start/end explicitly passed.
+    Only the requested date window is loaded into RAM — pyarrow row-group filtering
+    avoids reading the full 9-year file when start/end are specified.
     No CSV fallbacks: run pipeline/step0_resample.py first if parquet is missing.
     """
     tf_upper = timeframe.upper()
@@ -246,17 +247,39 @@ def _load_csv(symbol: str, timeframe: str = "15M", start: str | None = None, end
         return pd.DataFrame()
 
     try:
-        df = pd.read_parquet(parquet_path)
-        df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
+        start_ts = _utc_ts(start)
+        end_ts   = _utc_ts(end)
+
+        # Push date range into the parquet read when both bounds are known.
+        # pyarrow uses row-group min/max statistics to skip groups outside the
+        # filter range — no full file scan required.
+        if start_ts is not None or end_ts is not None:
+            try:
+                import pyarrow.parquet as _pq
+                _filters = []
+                if start_ts is not None:
+                    _filters.append(("index", ">=", start_ts))
+                if end_ts is not None:
+                    _filters.append(("index", "<=", end_ts))
+                _tbl = _pq.read_table(parquet_path, filters=_filters)
+                df = _tbl.to_pandas()
+                del _tbl
+            except Exception:
+                # Fallback: full read + slice
+                df = pd.read_parquet(parquet_path)
+                df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
+                df = _filter_date_range(df, start_ts, end_ts)
+        else:
+            df = pd.read_parquet(parquet_path)
+
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
+        elif df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
         df = df[df.index.notna()].sort_index()
         df.columns = [c.lower() for c in df.columns]
         ohlcv = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-        df = df[ohlcv].copy()
-
-        start_ts = _utc_ts(start)
-        end_ts = _utc_ts(end)
-        df = _filter_date_range(df, start_ts, end_ts)
-        df = df.dropna(subset=["open", "high", "low", "close"])
+        df = df[ohlcv].dropna(subset=["open", "high", "low", "close"])
 
         logger.info("Loaded parquet %s/%s: %d bars (%s → %s)",
                     symbol, tf_upper, len(df),
