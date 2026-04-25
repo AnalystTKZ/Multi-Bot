@@ -63,6 +63,10 @@ trading-system/ml_training/datasets/
 # Model weights — tracked (single source of truth: trading-engine/weights/)
 # Backups are tracked so previous weight versions are recoverable from git history
 
+# FAISS vector store — files exceed GitHub's 100 MB limit (trade_patterns.faiss=310 MB)
+# These rebuild automatically during retrain_incremental.py — not source weights
+trading-system/trading-engine/weights/vector_store/
+
 # Runtime logs and journals — tracked (single source of truth: trading-engine/logs/)
 # Raw .log text files excluded; structured CSV/JSONL journals are tracked
 trading-system/trading-engine/logs/*.log
