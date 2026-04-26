@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Step 7b: Quality + RL training — runs AFTER step6 backtest generates a real journal.
-Requires trade_journal_detailed.jsonl with >= 50 real entries.
+Requires trade_journal_detailed.jsonl with >= MIN_JOURNAL_STEP7B real entries
+(default 50).
 No synthetic fallback — if journal is missing or too small, step fails loudly.
 """
 from __future__ import annotations
@@ -29,8 +30,8 @@ ML_LOGS    = ML_DIR / "logs"
 for d in [ML_METRICS, ML_LOGS]:
     d.mkdir(parents=True, exist_ok=True)
 
-JOURNAL_PATH        = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
-MIN_JOURNAL_ENTRIES = 50
+JOURNAL_PATH         = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
+MIN_JOURNAL_ENTRIES = int(os.getenv("MIN_JOURNAL_STEP7B", "50"))
 
 
 def run_retrain(model: str) -> dict:

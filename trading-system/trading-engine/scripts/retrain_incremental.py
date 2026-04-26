@@ -781,23 +781,56 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
 
 
 def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str) -> None:
-    """Log persistence and return-separation using rule-based labels (matches training labels)."""
+    """Log persistence and return-separation using the same rule labels as training."""
     try:
         from models.regime_classifier import RegimeClassifier as _RC_diag
         _diag_sym = symbols[-1] if symbols else None
         _diag_df  = _load_ohlcv(_diag_sym, source_tf, split="train") if _diag_sym else None
         if _diag_df is None or len(_diag_df) < 200:
             return
-        _lbl = _RC_diag.create_rule_labels(_diag_df, timeframe=source_tf)
+        _mode = "htf_bias" if str(source_tf).upper() == "4H" else "ltf_behaviour"
+        _classes = (
+            ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]
+            if _mode == "htf_bias"
+            else ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]
+        )
+        _min_conf = float(os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"))
+        _lbl, _conf = _RC_diag.create_rule_labels(
+            _diag_df, timeframe=source_tf, mode=_mode, return_confidence=True,
+        )
         _run_id = (_lbl != _lbl.shift()).cumsum()
         _runs = _lbl.groupby(_run_id).agg(["count", "first"])
         _persistence = _runs.groupby("first")["count"].mean()
-        logger.info("Regime[%s] persistence (avg bars/run) on %s %s:\n%s",
-                    source_tf, _diag_sym, source_tf, _persistence.to_dict())
+        _persistence_named = {
+            _classes[int(k)]: float(v)
+            for k, v in _persistence.to_dict().items()
+            if int(k) < len(_classes)
+        }
+        logger.info("Regime[%s mode=%s] persistence (avg bars/run) on %s %s:\n%s",
+                    source_tf, _mode, _diag_sym, source_tf, _persistence_named)
         _nr = _diag_df["close"].pct_change().shift(-1)
-        _sep = _nr.groupby(_lbl).mean()
-        logger.info("Regime[%s] return separation on %s %s:\n%s",
-                    source_tf, _diag_sym, source_tf, _sep.to_dict())
+        _sep_all = _nr.groupby(_lbl).agg(["count", "mean", "std"])
+        _clean = _conf >= _min_conf
+        _sep_clean = _nr[_clean].groupby(_lbl[_clean]).agg(["count", "mean", "std"])
+
+        def _named_sep(_df):
+            out = {}
+            for k, row in _df.iterrows():
+                k_i = int(k)
+                if k_i >= len(_classes):
+                    continue
+                _std = float(row.get("std", 0.0) or 0.0)
+                out[_classes[k_i]] = {
+                    "n": int(row.get("count", 0)),
+                    "mean": float(row.get("mean", 0.0) or 0.0),
+                    "mean_over_std": float((row.get("mean", 0.0) or 0.0) / (_std + 1e-12)),
+                }
+            return out
+
+        logger.info("Regime[%s mode=%s] return separation on %s %s (all labels):\n%s",
+                    source_tf, _mode, _diag_sym, source_tf, _named_sep(_sep_all))
+        logger.info("Regime[%s mode=%s] return separation on %s %s (clean labels conf>=%.2f):\n%s",
+                    source_tf, _mode, _diag_sym, source_tf, _min_conf, _named_sep(_sep_clean))
     except Exception as _e:
         logger.warning("Regime[%s] diagnostics failed: %s", source_tf, _e)
 
@@ -894,7 +927,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
             logger.error("Regime HTF training failed: %s", res_4h["error"])
             results["HTF"] = res_4h
         else:
-            logger.info("Regime HTF complete: acc=%.3f, n=%d", res_4h.get("accuracy", 0), n_4h)
+            logger.info("Regime HTF complete: acc=%.3f, n=%d per_class=%s",
+                        res_4h.get("accuracy", 0), n_4h, res_4h.get("per_class_accuracy", {}))
             _regime_diagnostics(model_htf, group_gmms_htf, symbols, "4H")
             results["HTF"] = res_4h
             log_retrain("regime_classifier_htf", {**res_4h, "status": "complete"})
@@ -921,7 +955,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
             logger.error("Regime LTF training failed: %s", res_1h["error"])
             results["LTF"] = res_1h
         else:
-            logger.info("Regime LTF complete: acc=%.3f, n=%d", res_1h.get("accuracy", 0), n_1h)
+            logger.info("Regime LTF complete: acc=%.3f, n=%d per_class=%s",
+                        res_1h.get("accuracy", 0), n_1h, res_1h.get("per_class_accuracy", {}))
             _regime_diagnostics(model_ltf, group_gmms_ltf, symbols, "1H")
             results["LTF"] = res_1h
             log_retrain("regime_classifier_ltf", {**res_1h, "status": "complete"})
@@ -939,7 +974,13 @@ def retrain_regime(dry_run: bool = False) -> dict:
     return {
         "trained": True,
         "samples": total_samples,
-        "results": {tf: {"accuracy": r.get("accuracy", 0)} for tf, r in results.items()},
+        "results": {
+            tf: {
+                "accuracy": r.get("accuracy", 0),
+                "per_class_accuracy": r.get("per_class_accuracy", {}),
+            }
+            for tf, r in results.items()
+        },
     }
 
 

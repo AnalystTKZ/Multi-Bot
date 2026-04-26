@@ -599,8 +599,8 @@ class RegimeClassifier(BaseModel):
           4. RANGING (1):        everything else — sideways oscillation
           Persistence: TRENDING=20 bars, VOLATILE=10 bars, RANGING/CONSOLIDATING=5 bars.
 
-        Bars with confidence < 0.4 are "ambiguous" — the MLP trains with reduced
-        sample weight so it learns uncertainty on those bars.
+        Bars with confidence < 0.4 are "ambiguous" — by default retraining drops
+        them before fitting the MLP so the classifier learns clean regime boundaries.
 
         Returns:
           labels pd.Series[int]                        (always)
@@ -657,8 +657,17 @@ class RegimeClassifier(BaseModel):
 
             # BIAS_NEUTRAL: everything else — high confidence when clearly non-directional
             neutral_mask = ~bu_mask & ~bd_mask
-            adx_neutral_conf = (1.0 - (adx / 25.0).clip(0.0, 1.0))
-            neutral_conf     = adx_neutral_conf.clip(0.2, 1.0)  # floor 0.2 so NEUTRAL bars aren't suppressed
+            # NEUTRAL should mean "clearly no directional bias", not merely "failed
+            # the trend rule". Combine low ADX, weak EMA stack, and small drift so
+            # clean neutral samples survive while conflicted bars become ambiguous.
+            adx_neutral_conf   = (1.0 - (adx / 25.0).clip(0.0, 1.0))
+            stack_neutral_conf = (1.0 - (ema_stack.abs() / 2.0).clip(0.0, 1.0))
+            drift_neutral_conf = (1.0 - (drift.abs() / (drift_p40 + 1e-9)).clip(0.0, 1.0))
+            neutral_conf = (
+                0.50 * adx_neutral_conf
+                + 0.25 * stack_neutral_conf
+                + 0.25 * drift_neutral_conf
+            ).clip(0.0, 1.0)
             conf[neutral_mask] = neutral_conf[neutral_mask].astype(np.float32)
 
             # ── Persistence filter (HTF) ──────────────────────────────────────
@@ -731,7 +740,7 @@ class RegimeClassifier(BaseModel):
             labels[ranging_mask] = 1
             adx_range_conf = (1.0 - (adx / 25.0).clip(0.0, 1.0))
             atr_range_conf = (1.0 - (atr_pctile / vol_thresh).clip(0.0, 1.0))
-            ranging_conf   = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.3, 1.0)
+            ranging_conf   = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.45, 1.0)
             conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
 
             # Ambiguous bars: don't fit any explicit definition cleanly — assign most
@@ -978,9 +987,49 @@ class RegimeClassifier(BaseModel):
         Train directly on pre-built feature matrix X (N, F_full) and label array y (N,).
         sample_weight: float32 array (N,) in [0, 1] — confidence per bar from rule labeling.
           High-confidence bars (strong ADX + full stack + clear drift) get weight 1.0.
-          Ambiguous bars (borderline ADX, partial stack, weak drift) get reduced weight.
-          The MLP learns uncertainty on ambiguous bars rather than memorising a hard label.
+          Ambiguous bars (borderline ADX, partial stack, weak drift) are dropped by
+          default when REGIME_DROP_AMBIGUOUS=1, with a safe fallback if filtering
+          would remove a class.
         """
+        X = np.asarray(X)
+        y = np.asarray(y, dtype=np.int64)
+        if sample_weight is not None and len(sample_weight) == len(y):
+            drop_ambiguous = os.getenv("REGIME_DROP_AMBIGUOUS", "1").lower() in (
+                "1", "true", "yes",
+            )
+            min_conf = float(os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"))
+            if drop_ambiguous:
+                sw = sample_weight.astype(np.float32, copy=False)
+                clean_mask = np.isfinite(sw) & (sw >= min_conf)
+                n_clean = int(clean_mask.sum())
+                n_total = int(len(clean_mask))
+                _n_cls = self._n_output_classes
+                clean_counts = np.bincount(y[clean_mask].astype(np.int64), minlength=_n_cls)
+                has_all_classes = bool((clean_counts[:_n_cls] > 0).all())
+                if n_clean >= 100 and has_all_classes:
+                    dropped = n_total - n_clean
+                    logger.info(
+                        "RegimeClassifier[mode=%s]: dropped ambiguous labels below %.2f "
+                        "(kept=%d dropped=%d classes=%s)",
+                        self._mode, min_conf, n_clean, dropped,
+                        {
+                            self._class_list[i]: int(clean_counts[i])
+                            for i in range(_n_cls)
+                        },
+                    )
+                    X = X[clean_mask]
+                    y = y[clean_mask]
+                    sample_weight = sw[clean_mask]
+                else:
+                    logger.warning(
+                        "RegimeClassifier[mode=%s]: keeping ambiguous labels because "
+                        "clean filter would be unsafe (kept=%d/%d class_counts=%s)",
+                        self._mode, n_clean, n_total,
+                        {
+                            self._class_list[i]: int(clean_counts[i])
+                            for i in range(_n_cls)
+                        },
+                    )
         if len(self._col_idx) < N_FEATURES:
             X = X[:, self._col_idx]
             if sample_weight is not None and len(sample_weight) == len(y):
@@ -993,11 +1042,9 @@ class RegimeClassifier(BaseModel):
 
         sample_weight: optional (N,) float32 — per-bar confidence from rule labeling.
           Implemented as weighted CrossEntropyLoss (reduction='none' × weight).
-          Bars with weight < 0.4 (ambiguous) also get softer label targets via
-          per-bar label smoothing: target = weight * one_hot + (1-weight)/N_CLASSES.
-          Entropy regularisation (λ=0.05) penalises overconfident predictions on
-          ALL bars — encourages the model to output high uncertainty on random/ambiguous
-          market conditions rather than always committing to one regime.
+          When REGIME_DROP_AMBIGUOUS=1, low-confidence bars are removed before this
+          method is called. If they are kept, softer per-bar targets and entropy
+          regularisation prevent the model from memorising noisy hard labels.
         """
         try:
             import torch
@@ -1302,7 +1349,15 @@ class RegimeClassifier(BaseModel):
                     with torch.amp.autocast("cuda", enabled=use_amp):
                         preds = self._model(xb).float().argmax(1).cpu().numpy()
                     all_preds.extend(preds)
-            accuracy = float(np.mean(np.array(all_preds) == y_va))
+            all_preds_arr = np.array(all_preds)
+            accuracy = float(np.mean(all_preds_arr == y_va))
+            per_class_accuracy = {
+                _classes[c]: (
+                    round(float((all_preds_arr[y_va == c] == c).mean()), 3)
+                    if (y_va == c).sum() > 0 else 0.0
+                )
+                for c in range(_n_cls)
+            }
             del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu, tr_idx_t
             if DEVICE.type == "cuda":
                 torch.cuda.empty_cache()
@@ -1317,6 +1372,7 @@ class RegimeClassifier(BaseModel):
                 "n_train":   len(X_tr),
                 "n_val":     len(X_va),
                 "val_loss":  round(best_val_loss, 6),
+                "per_class_accuracy": per_class_accuracy,
                 "timeframe": self._timeframe or "default",
             }
 
