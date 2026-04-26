@@ -1172,7 +1172,12 @@ def _precompute_ml_cache(
         raise
 
 
-def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dict | None:
+def _compute_backtest_signal(
+    symbol: str,
+    ml_preds: dict,
+    bar: pd.Series,
+    reject_reasons: dict | None = None,
+) -> dict | None:
     """
     ML-native signal generator gated on HTF bias + LTF behaviour + GRU direction.
 
@@ -1192,17 +1197,24 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
 
     EV gate runs after PM enrichment in _backtest_trader (needs rr_ratio).
     """
+    def _reject(reason: str) -> None:
+        if reject_reasons is not None:
+            reject_reasons[reason] = int(reject_reasons.get(reason, 0)) + 1
+
     close = float(bar["close"])
     atr   = float(bar.get("atr_14", close * 0.001))
     if atr < 1e-9:
+        _reject("bad_atr")
         return None
 
     if not ml_preds:
+        _reject("missing_ml")
         return None
 
     # ── Gate 2: GRU uncertainty ───────────────────────────────────────────────
     _uncertainty = float(ml_preds.get("expected_variance", 0.0))
     if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
+        _reject("high_uncertainty")
         return None
 
     # ── Gate 3: GRU direction ─────────────────────────────────────────────────
@@ -1217,6 +1229,7 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
         side = "sell"
         conf = p_bear
     else:
+        _reject("weak_gru_direction")
         return None
 
     # ── Gate 4: HTF bias alignment ────────────────────────────────────────────
@@ -1228,10 +1241,13 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
     _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.58"))
 
     if _htf_bias == "BIAS_UP" and side == "sell":
+        _reject("htf_bias_conflict")
         return None   # HTF is bullish — no sells
     if _htf_bias == "BIAS_DOWN" and side == "buy":
+        _reject("htf_bias_conflict")
         return None   # HTF is bearish — no buys
     if _htf_bias == "BIAS_NEUTRAL" and conf < _neutral_thresh:
+        _reject("neutral_bias_weak_conf")
         return None   # no structural bias — require stronger GRU conviction
 
     # ── Gate 5: LTF behaviour filter ─────────────────────────────────────────
@@ -1249,33 +1265,41 @@ def _compute_backtest_signal(symbol: str, ml_preds: dict, bar: pd.Series) -> dic
 
     if _ltf_behaviour == "CONSOLIDATING":
         if str(os.getenv("BLOCK_LTF_CONSOLIDATING", "0")).lower() in ("1", "true", "yes"):
+            _reject("blocked_consolidating")
             return None
 
     if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
+        _reject("volatile_weak_conf")
         return None
 
     if _ltf_behaviour == "TRENDING":
         if _strict_trend_pb:
             if not _pullback_valid:
+                _reject("trend_pullback_missing")
                 return None
             if str(_pullback_side or "") != side:
+                _reject("trend_pullback_conflict")
                 return None
         else:
             # When a retest is detected, it must not contradict the GRU side; when
             # none is detected, rely on direction + HTF gates (REQUIRE_TRENDING_PULLBACK=1
             # restores the old "pullback on every TRENDING bar" rule, which is ~0 signals).
             if _pullback_valid and str(_pullback_side or "") and str(_pullback_side) != side:
+                _reject("trend_pullback_conflict")
                 return None
 
     if _ltf_behaviour == "RANGING":
         _strict_rng = str(os.getenv("RANGING_REQUIRE_RANGE", "0")).lower() in ("1", "true", "yes")
         if _strict_rng:
             if not _range_valid:
+                _reject("range_missing")
                 return None
             if str(_range_side or "") != side:
+                _reject("range_side_conflict")
                 return None
         else:
             if _range_valid and str(_range_side or "") and str(_range_side) != side:
+                _reject("range_side_conflict")
                 return None
 
     # ── ATR-based entry / SL / TP ─────────────────────────────────────────────
@@ -1553,6 +1577,7 @@ def _backtest_trader(
     halted = False  # portfolio drawdown halt
     _dbg = {"total": 0, "dd_halt": 0, "daily": 0, "session": 0,
             "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0}
+    _signal_reasons: dict[str, int] = {}
     _loop_t0 = _time.perf_counter()
     _loop_last_log = _loop_t0
     _LOOP_LOG_INTERVAL = 200_000  # log progress every 200k bars
@@ -1665,7 +1690,7 @@ def _backtest_trader(
             "vol_slope_seq":   float(_sarr["vol_slope_seq"][i]) if _sarr["vol_slope_seq"] is not None else 0.0,
             "volume_ratio":    float(_sarr["volume_ratio"][i]) if _sarr["volume_ratio"] is not None else 1.0,
         }
-        raw_signal = _compute_backtest_signal(symbol, ml_preds, bar)
+        raw_signal = _compute_backtest_signal(symbol, ml_preds, bar, reject_reasons=_signal_reasons)
         if raw_signal is None:
             _dbg["no_signal"] += 1
             continue
@@ -1829,6 +1854,12 @@ def _backtest_trader(
         _dbg["cooldown"], _dbg["density"], _dbg["quality_block"],
         _dbg["no_signal"], _dbg["pm_reject"]
     )
+    if _signal_reasons:
+        logger.info("%s no_signal reasons — %s", trader_id, dict(sorted(
+            _signal_reasons.items(),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )))
     if not trades:
         return {
             "trades": 0,
@@ -1840,7 +1871,7 @@ def _backtest_trader(
             "tp1_rate": 0.0,
             "tp2_rate": 0.0,
             "trade_log": [],
-            "gate_diagnostics": dict(_dbg),
+            "gate_diagnostics": {**dict(_dbg), "no_signal_reasons": dict(_signal_reasons)},
         }
 
     pnls = [t["pnl"] for t in trades]
@@ -1892,7 +1923,7 @@ def _backtest_trader(
         "gross_profit": round(gross_profit, 2),
         "gross_loss": round(gross_loss, 2),
         "trade_log": trades,
-        "gate_diagnostics": dict(_dbg),
+        "gate_diagnostics": {**dict(_dbg), "no_signal_reasons": dict(_signal_reasons)},
     }
 
 
@@ -2212,6 +2243,13 @@ def main():
                 f"density={gd.get('density')} pm_reject={gd.get('pm_reject')} "
                 f"daily_skip={gd.get('daily')} cooldown={gd.get('cooldown')}"
             )
+            reasons = gd.get("no_signal_reasons") or {}
+            if reasons:
+                top = sorted(reasons.items(), key=lambda kv: kv[1], reverse=True)[:6]
+                print(
+                    "  no_signal_reasons: "
+                    + ", ".join(f"{name}={count}" for name, count in top)
+                )
 
     # Print calibration summary
     if calibration_report.get("traders"):
