@@ -78,6 +78,11 @@ def _build_env() -> dict:
     env.setdefault("RETRAIN_CPU_WORKERS", _n)
     env.setdefault("MAX_PARALLEL_SYMBOL_LOADS", "4")
     env.setdefault("MAX_PARALLEL_CACHE_BUILDS", "4")
+    # Step 6 feeds the Quality/RL journal. Enforcing the live daily kill switch
+    # here can reduce the journal to a handful of trades, which makes downstream
+    # training impossible. Keep the raw signal path measurable; evaluate strict
+    # daily risk separately by setting BACKTEST_ENFORCE_DAILY_HALT=1.
+    env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "0")
     return env
 
 

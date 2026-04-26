@@ -94,7 +94,11 @@ RISK_PER_TRADE     = 0.01       # 1% per trade
 CAPITAL_PER_TRADER = 1.00       # unified ml_trader owns the full backtest account
 COMMISSION_PCT     = 0.001
 SLIPPAGE_PCT       = 0.0002
-MAX_DAILY_LOSS_PCT = 0.02       # 2% daily circuit breaker
+_ENFORCE_DAILY_HALT = str(os.getenv("BACKTEST_ENFORCE_DAILY_HALT", "1")).lower() in (
+    "1", "true", "yes", "on",
+)
+_CONFIGURED_MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.02"))
+MAX_DAILY_LOSS_PCT = _CONFIGURED_MAX_DAILY_LOSS_PCT if _ENFORCE_DAILY_HALT else 1.0
 MAX_DRAWDOWN_PCT   = 0.20       # 20% portfolio halt
 COOLDOWN_BARS      = 10         # bars between signals per symbol
 MIN_CONFIDENCE     = 0.58       # align PM floor with ML direction gate for unified trader
@@ -1576,7 +1580,9 @@ def _backtest_trader(
     import time as _time
     halted = False  # portfolio drawdown halt
     _dbg = {"total": 0, "dd_halt": 0, "daily": 0, "session": 0,
-            "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0}
+            "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0,
+            "daily_halt_events": 0}
+    _daily_halt_dates: set[str] = set()
     _signal_reasons: dict[str, int] = {}
     _loop_t0 = _time.perf_counter()
     _loop_last_log = _loop_t0
@@ -1618,11 +1624,13 @@ def _backtest_trader(
             pm.notify_date(day_str)   # PM resets its internal daily P&L
 
         # ── Circuit breaker 2: daily loss cap ─────────────────────────────────
-        if daily_halt:
+        if _ENFORCE_DAILY_HALT and daily_halt:
             _dbg["daily"] += 1
             continue
-        if abs(daily_loss) >= daily_budget:
+        if _ENFORCE_DAILY_HALT and abs(daily_loss) >= daily_budget:
             daily_halt = True
+            _dbg["daily_halt_events"] += 1
+            _daily_halt_dates.add(day_str)
             _dbg["daily"] += 1
             logger.info("%s: daily loss cap hit on %s — skipping rest of day",
                         trader_id, day_str)
@@ -1849,10 +1857,12 @@ def _backtest_trader(
     )
     logger.info(
         "%s diagnostics — bars=%d session_skip=%d daily_skip=%d cooldown=%d "
-        "density_suppressed=%d quality_blocked=%d no_signal=%d pm_reject=%d",
+        "density_suppressed=%d quality_blocked=%d no_signal=%d pm_reject=%d "
+        "daily_halt_events=%d daily_halt_dates=%d enforce_daily_halt=%s",
         trader_id, _dbg["total"], _dbg["session"], _dbg["daily"],
         _dbg["cooldown"], _dbg["density"], _dbg["quality_block"],
-        _dbg["no_signal"], _dbg["pm_reject"]
+        _dbg["no_signal"], _dbg["pm_reject"], _dbg["daily_halt_events"],
+        len(_daily_halt_dates), _ENFORCE_DAILY_HALT,
     )
     if _signal_reasons:
         logger.info("%s no_signal reasons — %s", trader_id, dict(sorted(
@@ -1871,7 +1881,12 @@ def _backtest_trader(
             "tp1_rate": 0.0,
             "tp2_rate": 0.0,
             "trade_log": [],
-            "gate_diagnostics": {**dict(_dbg), "no_signal_reasons": dict(_signal_reasons)},
+            "gate_diagnostics": {
+                **dict(_dbg),
+                "no_signal_reasons": dict(_signal_reasons),
+                "daily_halt_dates": sorted(_daily_halt_dates),
+                "enforce_daily_halt": _ENFORCE_DAILY_HALT,
+            },
         }
 
     pnls = [t["pnl"] for t in trades]
@@ -1923,7 +1938,12 @@ def _backtest_trader(
         "gross_profit": round(gross_profit, 2),
         "gross_loss": round(gross_loss, 2),
         "trade_log": trades,
-        "gate_diagnostics": {**dict(_dbg), "no_signal_reasons": dict(_signal_reasons)},
+        "gate_diagnostics": {
+            **dict(_dbg),
+            "no_signal_reasons": dict(_signal_reasons),
+            "daily_halt_dates": sorted(_daily_halt_dates),
+            "enforce_daily_halt": _ENFORCE_DAILY_HALT,
+        },
     }
 
 
@@ -2241,7 +2261,9 @@ def main():
                 f"  gate_diagnostics: bars={gd.get('total')} no_signal={gd.get('no_signal')} "
                 f"quality_block={gd.get('quality_block')} session_skip={gd.get('session')} "
                 f"density={gd.get('density')} pm_reject={gd.get('pm_reject')} "
-                f"daily_skip={gd.get('daily')} cooldown={gd.get('cooldown')}"
+                f"daily_skip={gd.get('daily')} cooldown={gd.get('cooldown')} "
+                f"daily_halt_events={gd.get('daily_halt_events')} "
+                f"enforce_daily_halt={gd.get('enforce_daily_halt')}"
             )
             reasons = gd.get("no_signal_reasons") or {}
             if reasons:
