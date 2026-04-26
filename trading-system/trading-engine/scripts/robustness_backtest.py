@@ -96,7 +96,7 @@ logger = logging.getLogger("robustness_bt")
 # ─── Config (mirrors run_backtest.py exactly) ─────────────────────────────────
 INITIAL_CAPITAL    = 10_000.0
 RISK_PER_TRADE     = 0.01
-CAPITAL_PER_TRADER = 0.20
+CAPITAL_PER_TRADER = 1.00
 COMMISSION_PCT     = 0.001
 SLIPPAGE_PCT       = 0.0002
 MAX_DAILY_LOSS_PCT = 0.02
@@ -113,7 +113,7 @@ _BACKTEST_WARMUP = {
 }
 _HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
 _LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
-_PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "1")).lower() in ("1", "true", "yes", "on")
+_PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "0")).lower() in ("1", "true", "yes", "on")
 
 _PM_SETTINGS = SimpleNamespace(
     ACCOUNT_BALANCE=INITIAL_CAPITAL,

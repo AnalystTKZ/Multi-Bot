@@ -91,13 +91,13 @@ except Exception:
 # ─── Config ───────────────────────────────────────────────────────────────────
 INITIAL_CAPITAL    = 10000.0
 RISK_PER_TRADE     = 0.01       # 1% per trade
-CAPITAL_PER_TRADER = 0.20       # 20% of account allocated per trader
+CAPITAL_PER_TRADER = 1.00       # unified ml_trader owns the full backtest account
 COMMISSION_PCT     = 0.001
 SLIPPAGE_PCT       = 0.0002
 MAX_DAILY_LOSS_PCT = 0.02       # 2% daily circuit breaker
 MAX_DRAWDOWN_PCT   = 0.20       # 20% portfolio halt
 COOLDOWN_BARS      = 10         # bars between signals per symbol
-MIN_CONFIDENCE     = 0.70       # minimum signal confidence — PM R:R gate also enforces this
+MIN_CONFIDENCE     = 0.58       # align PM floor with ML direction gate for unified trader
 MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
@@ -135,7 +135,7 @@ TRADER_NAMES = {
 
 _HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
 _LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
-_PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "1")).lower() in ("1", "true", "yes", "on")
+_PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "0")).lower() in ("1", "true", "yes", "on")
 
 
 def _env_ml_enabled() -> bool:

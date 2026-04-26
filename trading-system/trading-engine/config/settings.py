@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     # Symbols (matches existing system exactly)
     TRADING_PAIRS: List[str] = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "XAUUSD"]
 
-    # Capital allocation per trader (% of total account)
+    # Capital allocation for the unified ML trader (% of total account)
     ACCOUNT_BALANCE: float = 10000.0       # default; overridden by broker at startup
-    CAPITAL_PER_TRADER: float = 0.20       # 20% each × 5 traders = 100%
+    CAPITAL_PER_TRADER: float = 1.00       # unified trader uses the full account by default
     RISK_PER_TRADE: float = 0.01           # 1% per trade
 
     # Risk limits

@@ -332,26 +332,27 @@ class PortfolioManager:
         """
         Returns (tp1_mult, tp2_mult) as multiples of SL distance.
         Minimum enforced R:R is 1:2 (tp1_mult ≥ 2.0).
-        Signals with confidence < 0.70 are rejected before reaching here.
-
-        0.70 → 2.0 / 3.5   (min accepted: 1:2 to TP1, 1:3.5 to TP2)
-        0.75 → 2.5 / 4.0
-        0.80 → 3.0 / 5.0
-        0.85 → 3.5 / 5.5
-        0.90 → 4.0 / 6.0   (max confidence: 1:4 to TP1, 1:6 to TP2)
+        Signals should be accepted once they clear the upstream ML direction gate,
+        which defaults to 0.58 in the unified ML trader. The R:R curve still gets
+        more ambitious as confidence rises, but we no longer hard-kill the whole
+        trade band between 0.58 and 0.70.
         """
         # Minimum accepted R:R is 1:2 (tp1_mult = 2.0).
-        # Floor anchor is 0.70 (aligned with MIN_CONFIDENCE in run_backtest.py).
-        # Signals below 0.70 are already rejected before reaching here.
-        # TP2 is always ≥ 1.5× TP1 distance (second leg of the move).
-        anchors = [
-            (0.70, 2.0, 3.5),   # min conf → min R:R 1:2, TP2 at 3.5×
-            (0.75, 2.5, 4.0),
+        # Floor anchor defaults to 0.58 to match the directional gate, but can
+        # be tightened with PM_MIN_CONFIDENCE if needed.
+        # TP2 is always >= 1.5x TP1 distance (second leg of the move).
+        conf_floor = float(np.clip(float(getattr(self._settings, "PM_MIN_CONFIDENCE", 0.58)), 0.50, 0.90))
+        anchors = [(conf_floor, 2.0, 3.0)]  # min conf -> min R:R 1:2, gentler TP2 for cold-start models
+        for anchor in [
+            (0.65, 2.25, 3.5),
+            (0.72, 2.5, 4.0),
             (0.80, 3.0, 5.0),
             (0.85, 3.5, 5.5),
             (0.90, 4.0, 6.0),
-        ]
-        c = float(np.clip(confidence, 0.70, 0.90))
+        ]:
+            if anchor[0] > conf_floor:
+                anchors.append(anchor)
+        c = float(np.clip(confidence, conf_floor, 0.90))
         for i in range(len(anchors) - 1):
             c0, t1_0, t2_0 = anchors[i]
             c1, t1_1, t2_1 = anchors[i + 1]
