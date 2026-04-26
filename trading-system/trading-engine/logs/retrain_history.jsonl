@@ -11,3 +11,8 @@
 {"timestamp": "2026-04-18T13:03:21.799470+00:00", "model": "rl_agent", "trained": true, "episodes": 8203}
 {"timestamp": "2026-04-18T13:03:34.411811+00:00", "model": "quality_scorer", "mae": 0.96352618932724, "dir_accuracy": 0.5491433724075744, "n_samples": 5541, "ev_stats": {"mean": -0.3645803928375244, "std": 1.3499641418457031, "n_pos": 1037, "n_neg": 4504}}
 {"timestamp": "2026-04-18T13:07:35.766357+00:00", "model": "rl_agent", "trained": true, "episodes": 8203}
+{"timestamp": "2026-04-26T03:09:38.357931+00:00", "model": "regime_classifier_htf", "accuracy": 0.6720882950914899, "n_train": 82632, "n_val": 20658, "val_loss": 1.7739, "timeframe": "4H", "status": "complete"}
+{"timestamp": "2026-04-26T03:12:19.200341+00:00", "model": "regime_classifier_ltf", "accuracy": 0.7168690453951055, "n_train": 321176, "n_val": 80295, "val_loss": 1.587834, "timeframe": "1H", "status": "complete"}
+{"timestamp": "2026-04-26T03:12:19.201035+00:00", "model": "regime_classifier", "trained": true, "samples": 504761, "results": {"HTF": {"accuracy": 0.6720882950914899}, "LTF": {"accuracy": 0.7168690453951055}}}
+{"timestamp": "2026-04-26T03:20:56.534278+00:00", "model": "gru_lstm", "status": "complete", "mode": "multi_symbol", "segments": 44, "samples": 6069276, "groups_trained": 1, "val_loss_points": 35}
+{"timestamp": "2026-04-26T03:20:56.538842+00:00", "model": "gru_lstm", "trained": true, "segments": 44, "samples": 6069276}

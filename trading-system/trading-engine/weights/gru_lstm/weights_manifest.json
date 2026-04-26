@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-24T09:31:30.980293+00:00",
+  "saved_at": "2026-04-26T03:19:56.883696+00:00",
   "gru": {
     "n_features": 74,
     "feature_hash": "de7064f59f88cad2",
@@ -80,7 +80,7 @@
       "macro_yield_spread"
     ],
     "hidden_size": 64,
-    "num_layers": 1
+    "num_layers": 2
   },
   "regime_4h": {
     "n_features": 34,
@@ -147,8 +147,8 @@
     ]
   },
   "quality": {
-    "n_features": 17,
-    "feature_hash": "c6a426177234cd16",
+    "n_features": 20,
+    "feature_hash": "fb09f9028267ad4b",
     "feature_names": [
       "strategy_id",
       "signal_direction",
@@ -166,7 +166,10 @@
       "strategy_win_rate_20",
       "gru_uncertainty",
       "regime_duration",
-      "vol_slope_at_signal"
+      "vol_slope_at_signal",
+      "strategy_win_rate_5",
+      "strategy_win_rate_50",
+      "gru_signal_agreement"
     ]
   }
 }

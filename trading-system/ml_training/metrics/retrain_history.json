@@ -1,1011 +1,5 @@
 [
   {
-<<<<<<< HEAD
-    "timestamp": "2026-04-13T07:23:31.737374+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "AUDUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:26:59.219516+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "AUDUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:27:35.409709+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "AUDUSD",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:27:42.743880+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "AUDUSD",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:40:52.594814+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURGBP",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:44:22.597955+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURGBP",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:44:58.311859+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURGBP",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:45:06.038989+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURGBP",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T07:58:25.735016+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:01:55.005110+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:02:31.390430+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURJPY",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:02:38.674154+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURJPY",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:15:52.386127+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:19:24.171814+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:19:59.986823+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURUSD",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:20:07.589661+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "EURUSD",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:33:25.081739+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:36:53.236793+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:37:28.717355+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPJPY",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:37:36.161612+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPJPY",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:51:04.297533+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:54:38.552458+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:55:14.540170+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPUSD",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T08:55:22.147870+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "GBPUSD",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T09:02:15.861815+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "NZDUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T09:04:03.336720+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "NZDUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T09:04:22.468031+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "NZDUSD",
-    "timeframe": "1D",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T09:04:26.316512+00:00",
-    "model": "regime_classifier",
-    "error": "Insufficient data",
-    "symbol": "NZDUSD",
-    "timeframe": "1W",
-    "status": "symbol_tf_complete"
-  },
-  {
-    "timestamp": "2026-04-13T09:09:31.302556+00:00",
-    "model": "gru_lstm",
-    "symbol": "AUDUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704678,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:31.553971+00:00",
-    "model": "gru_lstm",
-    "symbol": "AUDUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234948,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:31.621291+00:00",
-    "model": "gru_lstm",
-    "symbol": "AUDUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58741,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:31.680681+00:00",
-    "model": "gru_lstm",
-    "symbol": "AUDUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15257,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:32.187697+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURGBP",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704756,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:32.303247+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURGBP",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234979,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:32.366181+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURGBP",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58748,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:32.427723+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURGBP",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15255,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:32.863686+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURJPY",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704417,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.007548+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURJPY",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234916,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.090957+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58735,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.153748+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15257,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.524785+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704977,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.671254+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 235026,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.735654+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58760,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:33.791724+00:00",
-    "model": "gru_lstm",
-    "symbol": "EURUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15258,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.086480+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPJPY",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704330,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.181059+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPJPY",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234918,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.245173+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58736,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.302429+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15259,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.574778+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704770,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.703584+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234968,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.764131+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58746,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:34.822643+00:00",
-    "model": "gru_lstm",
-    "symbol": "GBPUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15256,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.058005+00:00",
-    "model": "gru_lstm",
-    "symbol": "NZDUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 523942,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.149368+00:00",
-    "model": "gru_lstm",
-    "symbol": "NZDUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 174689,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.203631+00:00",
-    "model": "gru_lstm",
-    "symbol": "NZDUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 43675,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.255483+00:00",
-    "model": "gru_lstm",
-    "symbol": "NZDUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 11210,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.539838+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCAD",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704701,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.649057+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCAD",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234962,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.720624+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCAD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58746,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:35.777336+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCAD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15255,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:36.358348+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCHF",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704572,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:36.648717+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCHF",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234958,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:36.710838+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCHF",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58747,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:36.774114+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDCHF",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15257,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:37.364577+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDJPY",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 704798,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:37.619983+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDJPY",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 234955,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:37.681278+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 58740,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:37.739992+00:00",
-    "model": "gru_lstm",
-    "symbol": "USDJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 15254,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:38.824779+00:00",
-    "model": "gru_lstm",
-    "symbol": "XAUUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_complete",
-    "samples": 1201053,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:39.196338+00:00",
-    "model": "gru_lstm",
-    "symbol": "XAUUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_complete",
-    "samples": 401431,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:39.296682+00:00",
-    "model": "gru_lstm",
-    "symbol": "XAUUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_complete",
-    "samples": 101228,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:39.373674+00:00",
-    "model": "gru_lstm",
-    "symbol": "XAUUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_complete",
-    "samples": 27183,
-    "val_loss_points": 0
-  },
-  {
-    "timestamp": "2026-04-13T09:09:39.395342+00:00",
-    "model": "gru_lstm",
-    "trained": true,
-    "combos": 44,
-    "samples": 11607047
-  },
-  {
-    "timestamp": "2026-04-13T09:09:49.905299+00:00",
-    "model": "quality_scorer",
-    "accuracy": 0.43333333333333335,
-    "n_samples": 300
-  },
-  {
-    "timestamp": "2026-04-13T09:10:21.964937+00:00",
-    "model": "rl_agent",
-    "trained": true
-  },
-  {
-    "timestamp": "2026-04-13T22:34:29.293476+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "AUDUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:29.671523+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "AUDUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:29.791679+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "AUDUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:29.876815+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "AUDUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:30.831524+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURGBP",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:31.516752+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURGBP",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:31.604816+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURGBP",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:31.683751+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURGBP",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:32.363680+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURJPY",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:32.589692+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURJPY",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:32.671500+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:32.739903+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:34.668967+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:34.932378+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:35.007191+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:35.068847+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "EURUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:35.997738+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPJPY",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:36.217965+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPJPY",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:36.284968+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:36.345746+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:37.201419+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:37.464076+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:37.539365+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:37.603373+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "GBPUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:38.263937+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "NZDUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:38.487848+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "NZDUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:38.551242+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "NZDUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:38.612436+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "NZDUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:39.319233+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCAD",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:39.612852+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCAD",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:39.686289+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCAD",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:39.754575+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCAD",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:40.411576+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCHF",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:40.590130+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCHF",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:40.663970+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCHF",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:40.731218+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDCHF",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:41.720711+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDJPY",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:42.013435+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDJPY",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:42.084700+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDJPY",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:42.150210+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "USDJPY",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:43.704858+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "XAUUSD",
-    "timeframe": "5M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:44.387975+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "XAUUSD",
-    "timeframe": "15M",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:44.546303+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "XAUUSD",
-    "timeframe": "1H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:44.628668+00:00",
-    "model": "gru_lstm",
-    "error": "libtorch_cpu.so: failed to map segment from shared object",
-    "symbol": "XAUUSD",
-    "timeframe": "4H",
-    "status": "symbol_tf_failed"
-  },
-  {
-    "timestamp": "2026-04-13T22:34:44.650449+00:00",
-    "model": "gru_lstm",
-    "error": "No GRU symbol/timeframe produced trained weights"
-  },
-  {
-    "timestamp": "2026-04-13T22:35:08.990582+00:00",
-    "model": "quality_scorer",
-    "accuracy": 0.43333333333333335,
-    "n_samples": 300
-  },
-  {
-    "timestamp": "2026-04-13T22:35:51.857766+00:00",
-    "model": "rl_agent",
-    "error": "RL weights were not created"
-=======
     "timestamp": "2026-04-18T12:16:44.444832+00:00",
     "model": "regime_classifier_4h",
     "accuracy": 0.4877336909363414,
@@ -1055,6 +49,132 @@
     "trained": true,
     "segments": 44,
     "samples": 7452801
->>>>>>> c4064229d51d2ab2277d986e3e1dcc6150d219ea
+  },
+  {
+    "timestamp": "2026-04-18T12:38:29.758750+00:00",
+    "model": "quality_scorer",
+    "mae": 1.0091915130615234,
+    "dir_accuracy": 0.5819672131147541,
+    "n_samples": 1830,
+    "ev_stats": {
+      "mean": -0.3507595658302307,
+      "std": 1.3554638624191284,
+      "n_pos": 352,
+      "n_neg": 1478
+    }
+  },
+  {
+    "timestamp": "2026-04-18T12:40:08.067328+00:00",
+    "model": "rl_agent",
+    "trained": true,
+    "episodes": 2712
+  },
+  {
+    "timestamp": "2026-04-18T12:48:15.707766+00:00",
+    "model": "quality_scorer",
+    "mae": 1.008920431137085,
+    "dir_accuracy": 0.5591836734693878,
+    "n_samples": 3672,
+    "ev_stats": {
+      "mean": -0.35827067494392395,
+      "std": 1.353819489479065,
+      "n_pos": 695,
+      "n_neg": 2977
+    }
+  },
+  {
+    "timestamp": "2026-04-18T12:50:58.159016+00:00",
+    "model": "rl_agent",
+    "trained": true,
+    "episodes": 5434
+  },
+  {
+    "timestamp": "2026-04-18T12:59:19.188368+00:00",
+    "model": "quality_scorer",
+    "mae": 0.9969426393508911,
+    "dir_accuracy": 0.5374211000901713,
+    "n_samples": 5541,
+    "ev_stats": {
+      "mean": -0.3645803928375244,
+      "std": 1.3499641418457031,
+      "n_pos": 1037,
+      "n_neg": 4504
+    }
+  },
+  {
+    "timestamp": "2026-04-18T13:03:21.799470+00:00",
+    "model": "rl_agent",
+    "trained": true,
+    "episodes": 8203
+  },
+  {
+    "timestamp": "2026-04-18T13:03:34.411811+00:00",
+    "model": "quality_scorer",
+    "mae": 0.96352618932724,
+    "dir_accuracy": 0.5491433724075744,
+    "n_samples": 5541,
+    "ev_stats": {
+      "mean": -0.3645803928375244,
+      "std": 1.3499641418457031,
+      "n_pos": 1037,
+      "n_neg": 4504
+    }
+  },
+  {
+    "timestamp": "2026-04-18T13:07:35.766357+00:00",
+    "model": "rl_agent",
+    "trained": true,
+    "episodes": 8203
+  },
+  {
+    "timestamp": "2026-04-26T03:09:38.357931+00:00",
+    "model": "regime_classifier_htf",
+    "accuracy": 0.6720882950914899,
+    "n_train": 82632,
+    "n_val": 20658,
+    "val_loss": 1.7739,
+    "timeframe": "4H",
+    "status": "complete"
+  },
+  {
+    "timestamp": "2026-04-26T03:12:19.200341+00:00",
+    "model": "regime_classifier_ltf",
+    "accuracy": 0.7168690453951055,
+    "n_train": 321176,
+    "n_val": 80295,
+    "val_loss": 1.587834,
+    "timeframe": "1H",
+    "status": "complete"
+  },
+  {
+    "timestamp": "2026-04-26T03:12:19.201035+00:00",
+    "model": "regime_classifier",
+    "trained": true,
+    "samples": 504761,
+    "results": {
+      "HTF": {
+        "accuracy": 0.6720882950914899
+      },
+      "LTF": {
+        "accuracy": 0.7168690453951055
+      }
+    }
+  },
+  {
+    "timestamp": "2026-04-26T03:20:56.534278+00:00",
+    "model": "gru_lstm",
+    "status": "complete",
+    "mode": "multi_symbol",
+    "segments": 44,
+    "samples": 6069276,
+    "groups_trained": 1,
+    "val_loss_points": 35
+  },
+  {
+    "timestamp": "2026-04-26T03:20:56.538842+00:00",
+    "model": "gru_lstm",
+    "trained": true,
+    "segments": 44,
+    "samples": 6069276
   }
 ]
