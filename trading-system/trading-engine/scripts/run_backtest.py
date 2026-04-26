@@ -414,18 +414,20 @@ def _load_htf_context(symbol: str, start: str, end: str) -> dict:
 
     All filtered to [start, end] and indexed by UTC timestamp for asof lookup.
     """
+    import time as _time
     out = {}
     for tf in ("5M", "1H", "4H", "1D"):
         df = _load_csv(symbol, tf, start=start, end=end)
         if df is None or df.empty or len(df) < 14:
             out[tf] = pd.DataFrame()
             continue
+        _t = _time.perf_counter()
         df = _compute_indicators(df)
+        logger.info("  HTF %s/%s: indicators %.1fs (%d bars)", symbol, tf, _time.perf_counter() - _t, len(df))
         # Pre-compute 1H EMA21 slope: positive = rising, negative = falling
         if tf == "1H" and "ema_21" in df.columns:
             df["ema_21_slope"] = df["ema_21"].diff(3)   # change over 3 bars (3H)
         out[tf] = df
-        logger.info("HTF context %s/%s: %d bars", symbol, tf, len(df))
     return out
 
 
@@ -1283,17 +1285,23 @@ def _backtest_trader(
       8. PM streak gate — size scaled down after 3-4 consecutive losses
     """
     # ── Load + filter all symbol dataframes ──────────────────────────────────
+    import time as _time
     symbol_dfs: dict[str, pd.DataFrame] = {}
     symbol_htf: dict[str, dict] = {}   # HTF context per symbol (1D + 4H)
     symbol_start_idx: dict[str, int] = {}
     start_ts = _utc_ts(start)
 
+    _t_load_all = _time.perf_counter()
+    logger.info("%s: loading %d symbols (15M + HTF indicators)...", trader_id, len(symbols))
     for symbol in symbols:
+        _t_sym = _time.perf_counter()
         df = _load_csv(symbol, "15M", start=start, end=end)
         if len(df) < 200:
             logger.warning("Skipping %s/%s — only %d bars", trader_id, symbol, len(df))
             continue
+        _t_ind = _time.perf_counter()
         df = _compute_indicators(df)
+        logger.info("  %s 15M indicators: %.1fs (%d bars)", symbol, _time.perf_counter() - _t_ind, len(df))
         first_live_idx = int(df.index.searchsorted(start_ts, side="left")) if start_ts is not None else 0
         if len(df) - first_live_idx < 200:
             logger.warning(
@@ -1302,12 +1310,15 @@ def _backtest_trader(
             )
             continue
         symbol_dfs[symbol] = df
+        _t_htf = _time.perf_counter()
         symbol_htf[symbol] = _load_htf_context(symbol, start, end)
+        logger.info("  %s HTF context: %.1fs", symbol, _time.perf_counter() - _t_htf)
         symbol_start_idx[symbol] = max(200, first_live_idx)
-        logger.info("Loaded %s %s: %d bars (%s → %s), tradable from idx=%d",
-                    trader_id, symbol, len(df),
-                    df.index[0].date(), df.index[-1].date(),
+        logger.info("  %s DONE: %.1fs total | %d bars (%s → %s) tradable from idx=%d",
+                    symbol, _time.perf_counter() - _t_sym,
+                    len(df), df.index[0].date(), df.index[-1].date(),
                     symbol_start_idx[symbol])
+    logger.info("%s: all symbols loaded in %.1fs", trader_id, _time.perf_counter() - _t_load_all)
 
     if not symbol_dfs:
         return {"trades": 0, "win_rate": 0.0, "total_return": 0.0,
@@ -1334,9 +1345,11 @@ def _backtest_trader(
             symbol_dfs[sym], sym, symbol_htf.get(sym, {}), ml_models, cache_file=cache_file
         )
 
+    _t_cache_all = _time.perf_counter()
     if shared_ml_cache is not None:
         missing = [sym for sym in symbol_dfs if sym not in shared_ml_cache and ml_models]
         hits    = [sym for sym in symbol_dfs if sym in shared_ml_cache]
+        logger.info("%s: ML cache — %d hits, %d misses", trader_id, len(hits), len(missing))
         for sym in hits:
             symbol_ml_cache[sym] = shared_ml_cache[sym]
         if missing:
@@ -1363,6 +1376,7 @@ def _backtest_trader(
                     symbol_ml_cache[sym] = c
                 except Exception as exc:
                     logger.warning("ML cache build failed for %s: %s", sym, exc)
+    logger.info("%s: ML cache phase DONE: %.1fs", trader_id, _time.perf_counter() - _t_cache_all)
 
     # ── Pre-extract bar arrays as numpy (eliminates df.iloc[i] per bar) ─────────
     # ~10-20 µs per df.iloc[] call × 473k bars = 5-10 min saved in pure Python.
