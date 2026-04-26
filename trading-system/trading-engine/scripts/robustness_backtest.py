@@ -113,6 +113,7 @@ _BACKTEST_WARMUP = {
 }
 _HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
 _LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
+_PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "1")).lower() in ("1", "true", "yes", "on")
 
 _PM_SETTINGS = SimpleNamespace(
     ACCOUNT_BALANCE=INITIAL_CAPITAL,
@@ -767,6 +768,29 @@ def _simulate_trade(
             "exit_price": last_close, "phase1_pnl": phase1_pnl, "phase2_pnl": phase2_pnl}
 
 
+def _enrich_signal_no_pm(raw_signal: dict, equity: float) -> dict | None:
+    entry = float(raw_signal["entry"])
+    sl = float(raw_signal["stop_loss"])
+    tp = float(raw_signal["take_profit"])
+    sl_dist = abs(entry - sl)
+    if sl_dist < 1e-9:
+        return None
+    risk_amount = max(equity * RISK_PER_TRADE, 1e-6)
+    size = max(round(risk_amount / sl_dist, 2), 0.01)
+    rr_ratio = abs(tp - entry) / (sl_dist + 1e-9)
+    return {
+        **raw_signal,
+        "tp1": round(tp, 6),
+        "tp2": round(tp, 6),
+        "take_profit": round(tp, 6),
+        "rr_ratio": round(rr_ratio, 2),
+        "rr_to_tp2": round(rr_ratio, 2),
+        "size": size,
+        "size_full": size,
+        "portfolio_manager": {"disabled": True},
+    }
+
+
 # ─── Per-symbol epoch backtest ────────────────────────────────────────────────
 
 def _run_symbol_epoch(
@@ -775,8 +799,10 @@ def _run_symbol_epoch(
     bundle: dict | None = None,
 ) -> dict:
     logger.info("=== %s Epoch %d (%s → %s) ===", symbol, epoch_num, start, end)
-    from monitors.portfolio_manager import PortfolioManager
-    pm = PortfolioManager(_PM_SETTINGS)
+    pm = None
+    if not _PM_DISABLED:
+        from monitors.portfolio_manager import PortfolioManager
+        pm = PortfolioManager(_PM_SETTINGS)
 
     try:
         if bundle is None:
@@ -881,7 +907,8 @@ def _run_symbol_epoch(
             current_date = day_str
             daily_loss   = 0.0
             daily_halt   = False
-            pm.notify_date(day_str)
+            if pm is not None:
+                pm.notify_date(day_str)
 
         if daily_halt or abs(daily_loss) >= daily_budget:
             daily_halt = True
@@ -914,9 +941,14 @@ def _run_symbol_epoch(
                                else entry_raw * (1 - SLIPPAGE_PCT))
         atr = float(bar.get("atr_14", entry_raw * 0.001))
 
-        enriched = pm.enrich_signal(raw_signal, {"equity": equity, "open_positions_detail": []}, atr=atr)
-        if enriched is None:
-            continue
+        if _PM_DISABLED:
+            enriched = _enrich_signal_no_pm(raw_signal, equity)
+            if enriched is None:
+                continue
+        else:
+            enriched = pm.enrich_signal(raw_signal, {"equity": equity, "open_positions_detail": []}, atr=atr)
+            if enriched is None:
+                continue
 
         result = _simulate_trade(
             df, i, enriched["side"],
@@ -1138,12 +1170,15 @@ def main() -> None:
     if not ml_models:
         logger.warning("No ML models loaded — backtest will produce 0 signals")
 
-    try:
-        from monitors.portfolio_manager import PortfolioManager  # noqa: F401
-        logger.info("[OK] PortfolioManager loaded")
-    except Exception as exc:
-        logger.error("PortfolioManager failed: %s", exc)
-        sys.exit(1)
+    if _PM_DISABLED:
+        logger.info("PortfolioManager disabled for robustness backtest")
+    else:
+        try:
+            from monitors.portfolio_manager import PortfolioManager  # noqa: F401
+            logger.info("[OK] PortfolioManager loaded")
+        except Exception as exc:
+            logger.error("PortfolioManager failed: %s", exc)
+            sys.exit(1)
 
     shared_bundles: dict[str, dict] = {}
     overall_start = min(EPOCHS[e][0] for e in epochs_to_run)

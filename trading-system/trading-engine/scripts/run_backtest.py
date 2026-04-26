@@ -135,6 +135,7 @@ TRADER_NAMES = {
 
 _HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
 _LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
+_PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "1")).lower() in ("1", "true", "yes", "on")
 
 
 def _env_ml_enabled() -> bool:
@@ -653,6 +654,30 @@ def _pip_for_entry(entry: float) -> float:
     if entry > 50:    # JPY pairs (100-160)
         return 0.01
     return 0.0001
+
+
+def _enrich_signal_no_pm(raw_signal: dict, equity: float, atr: float) -> dict | None:
+    entry = float(raw_signal["entry"])
+    sl = float(raw_signal["stop_loss"])
+    tp = float(raw_signal["take_profit"])
+    sl_dist = abs(entry - sl)
+    if sl_dist < 1e-9:
+        return None
+
+    risk_amount = max(equity * RISK_PER_TRADE, 1e-6)
+    size = max(round(risk_amount / sl_dist, 2), 0.01)
+    rr_ratio = abs(tp - entry) / (sl_dist + 1e-9)
+    return {
+        **raw_signal,
+        "tp1": round(tp, 6),
+        "tp2": round(tp, 6),
+        "take_profit": round(tp, 6),
+        "rr_ratio": round(rr_ratio, 2),
+        "rr_to_tp2": round(rr_ratio, 2),
+        "size": size,
+        "size_full": size,
+        "portfolio_manager": {"disabled": True},
+    }
 
 
 def _simulate_trade_pm(
@@ -1664,12 +1689,18 @@ def _backtest_trader(
 
         atr = float(bar.get("atr_14", entry_raw * 0.001))
 
-        # ── Circuit breakers 6-8: PM gates (R:R, correlation, streak) ─────────
-        portfolio_state = {"equity": equity, "open_positions_detail": []}
-        enriched = pm.enrich_signal(raw_signal, portfolio_state, atr=atr)
-        if enriched is None:
-            _dbg["pm_reject"] += 1
-            continue
+        # ── Position enrichment: PM gates or temporary raw-signal bypass ──────
+        if _PM_DISABLED:
+            enriched = _enrich_signal_no_pm(raw_signal, equity, atr)
+            if enriched is None:
+                _dbg["pm_reject"] += 1
+                continue
+        else:
+            portfolio_state = {"equity": equity, "open_positions_detail": []}
+            enriched = pm.enrich_signal(raw_signal, portfolio_state, atr=atr)
+            if enriched is None:
+                _dbg["pm_reject"] += 1
+                continue
 
         entry    = float(enriched["entry"])
         sl       = float(enriched["stop_loss"])
@@ -1729,7 +1760,8 @@ def _backtest_trader(
         # Update PM streak + daily accumulator
         sl_dist     = abs(entry - sl)
         rr_achieved = abs(pnl / (sl_dist * size + 1e-9))
-        pm.record_outcome(trader_id, pnl, rr_achieved)
+        if not _PM_DISABLED:
+            pm.record_outcome(trader_id, pnl, rr_achieved)
 
         last_trade_bar[symbol] = i
         recent_trade_bars[symbol].append(i)
@@ -2149,7 +2181,7 @@ def main():
             "risk_per_trade": RISK_PER_TRADE,
             "max_daily_loss_pct": MAX_DAILY_LOSS_PCT,
             "max_drawdown_halt": MAX_DRAWDOWN_PCT,
-            "portfolio_manager": "enabled",
+            "portfolio_manager": "disabled" if _PM_DISABLED else "enabled",
         },
         "results": results,
         "trade_log": all_trade_logs,

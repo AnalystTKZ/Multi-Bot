@@ -1,1 +1,0 @@
-candidate_id,trader_id,symbol,side,timestamp,atr,adx,ema_stack_score,regime,rsi,pullback_depth,candle_body_ratio,range_size,breakout_strength,distance_from_mean_atr,volatility_stable,range_age_bars,fakeout_prob,p_win,p_bull,p_bear,sentiment_score,ensemble_score,ev,rr_ratio,confidence,tp_hit,sl_hit,pnl,exit_reason,outcome_ts,executed
