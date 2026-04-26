@@ -30,6 +30,7 @@ Required env var for GitHub push:
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import gc
 import json
 import logging
@@ -85,6 +86,15 @@ MAX_DRAWDOWN_PCT   = 0.20
 COOLDOWN_BARS      = 10
 MAX_HOLD_BARS      = 200
 MIN_CONFIDENCE     = float(os.getenv("MIN_CONFIDENCE", "0.0"))
+_BACKTEST_WARMUP = {
+    "5M": pd.Timedelta(days=7),
+    "15M": pd.Timedelta(days=14),
+    "1H": pd.Timedelta(days=60),
+    "4H": pd.Timedelta(days=180),
+    "1D": pd.Timedelta(days=400),
+}
+_HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
+_LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
 
 _PM_SETTINGS = SimpleNamespace(
     ACCOUNT_BALANCE=INITIAL_CAPITAL,
@@ -303,7 +313,10 @@ def _load_parquet(symbol: str, tf: str, start: str, end: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, f"{symbol}_{tf}.parquet")
     if not os.path.exists(path):
         raise FileNotFoundError(f"No parquet for {symbol} {tf}: {path}")
+    warmup = _BACKTEST_WARMUP.get(tf.upper())
     start_ts = pd.Timestamp(start, tz="UTC")
+    if warmup is not None:
+        start_ts = start_ts - warmup
     end_ts   = pd.Timestamp(end,   tz="UTC") + pd.Timedelta(days=1)
     # Push the date filter into the parquet read — only the epoch window is
     # loaded into RAM, not the full 9-year file.
@@ -388,6 +401,24 @@ def _load_htf(symbol: str, start: str, end: str) -> dict:
     return htf
 
 
+def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
+    if not cache:
+        return {}
+    out: dict = {}
+    p_bull = float(cache["p_bull"][idx])
+    if not np.isnan(p_bull):
+        out["p_bull"] = p_bull
+        out["p_bear"] = float(cache["p_bear"][idx])
+        out["expected_variance"] = float(cache["expected_variance"][idx])
+    regime_id = int(cache["regime"][idx])
+    if regime_id >= 0:
+        out["regime"] = str(_HTF_REGIME_NAMES[regime_id])
+    regime_ltf_id = int(cache["regime_ltf"][idx])
+    if regime_ltf_id >= 0:
+        out["regime_ltf"] = str(_LTF_REGIME_NAMES[regime_ltf_id])
+    return out
+
+
 # ─── ML cache (mirrors _precompute_ml_cache from run_backtest.py) ─────────────
 
 def _build_ml_cache(
@@ -396,7 +427,7 @@ def _build_ml_cache(
     htf: dict,
     ml_models: dict,
     batch_size: int = 1024,
-) -> dict:
+) -> dict[str, np.ndarray]:
     gru_model = ml_models.get("gru")
     regime_4h = ml_models.get("regime_htf") or ml_models.get("regime_4h")
     regime_1h = ml_models.get("regime_ltf") or ml_models.get("regime_1h")
@@ -411,7 +442,6 @@ def _build_ml_cache(
         fe = FeatureEngine()
         n  = len(df)
 
-        regime_preds       = {}
         _regime_htf_series = _regime_htf_conf = _regime_ltf_series = _regime_ltf_conf = None
 
         # Build feature matrix once per source df (serially), slice per model.
@@ -465,14 +495,13 @@ def _build_ml_cache(
                 c_arr = np.full(_n, np.nan, dtype=np.float32)
                 c_arr[row_idx] = conf
                 filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
-                preds = dict(enumerate(np.array(_classes)[filled]))
-                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, preds
+                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf
             except Exception as exc:
                 logger.error("regime infer failed %s: %s", symbol, exc)
-                return None, None, {}
+                return None, None
 
         if _do_4h and _X_4h is not None:
-            _r4h, _c4h, _p4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
+            _r4h, _c4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
             del _X_4h
             if _r4h is not None:
                 if _df_src_4h is not df:
@@ -480,13 +509,10 @@ def _build_ml_cache(
                     _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
                 else:
                     _regime_htf_series, _regime_htf_conf = _r4h, _c4h
-                _htf_cls = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
-                regime_preds = {i: str(v) for i, v in enumerate(
-                    _htf_cls[np.clip(_regime_htf_series.values, 0, 2)])}
             gc.collect()
 
         if _do_1h and _X_1h is not None:
-            _r1h, _c1h, _ = _infer_regime(regime_1h, _X_1h, _df_src_1h)
+            _r1h, _c1h = _infer_regime(regime_1h, _X_1h, _df_src_1h)
             del _X_1h
             if _r1h is not None:
                 if _df_src_1h is not df:
@@ -508,7 +534,13 @@ def _build_ml_cache(
         seq_arr = np.nan_to_num(seq_arr, nan=0.0, posinf=0.0, neginf=0.0)
         del feat_df
 
-        gru_preds: dict[int, dict] = {}
+        cache = {
+            "p_bull": np.full(n, np.nan, dtype=np.float32),
+            "p_bear": np.full(n, np.nan, dtype=np.float32),
+            "expected_variance": np.full(n, np.nan, dtype=np.float32),
+            "regime": np.full(n, -1, dtype=np.int8),
+            "regime_ltf": np.full(n, -1, dtype=np.int8),
+        }
         if gru_model and getattr(gru_model, "is_trained", False) and gru_model._model is not None:
             from models.gru_lstm_predictor import DEVICE, SEQUENCE_LENGTH as SEQ_LEN
             n_valid = n - SEQ_LEN + 1
@@ -538,41 +570,27 @@ def _build_ml_cache(
                 p_bear_arr = np.clip(1.0 - all_p_bull, 0.0, 1.0)
                 entry_dep  = np.clip(all_mag * 100.0, 0.0, 1.0)
                 bar_idxs   = np.arange(n_valid, dtype=np.int32) + (SEQ_LEN - 1)
-                gru_preds  = {
-                    int(bar_idxs[i]): {
-                        "p_bull":              float(all_p_bull[i]),
-                        "p_bear":              float(p_bear_arr[i]),
-                        "entry_depth":         float(entry_dep[i]),
-                        "expected_move":       float(all_mag[i]),
-                        "expected_volatility": float(np.sqrt(var_vals[i])),
-                        "expected_variance":   float(var_vals[i]),
-                    }
-                    for i in range(n_valid)
-                }
+                cache["p_bull"][bar_idxs] = all_p_bull
+                cache["p_bear"][bar_idxs] = p_bear_arr
+                cache["expected_variance"][bar_idxs] = var_vals.astype(np.float32, copy=False)
                 del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, entry_dep
-                logger.info("GRU done %s (%d bars)", symbol, len(gru_preds))
+                logger.info("GRU done %s (%d bars)", symbol, n_valid)
         del seq_arr
         gc.collect()
 
-        ltf_preds: dict[int, str] = {}
         if _regime_ltf_series is not None:
-            _ltf_cls = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"])
-            ltf_preds = {i: str(v) for i, v in enumerate(
-                _ltf_cls[np.clip(_regime_ltf_series.values, 0, 3)])}
+            cache["regime_ltf"] = np.clip(_regime_ltf_series.values, 0, 3).astype(np.int8, copy=False)
+        if _regime_htf_series is not None:
+            cache["regime"] = np.clip(_regime_htf_series.values, 0, 2).astype(np.int8, copy=False)
 
-        cache: dict[int, dict] = {}
-        for bar_i in set(gru_preds.keys()) | set(regime_preds.keys()):
-            entry: dict = {}
-            if bar_i in gru_preds:
-                entry.update(gru_preds[bar_i])
-            if bar_i in regime_preds:
-                entry["regime"] = regime_preds[bar_i]
-            if bar_i in ltf_preds:
-                entry["regime_ltf"] = ltf_preds[bar_i]
-            cache[bar_i] = entry
-
-        logger.info("ML cache done %s: %d bars", symbol, len(cache))
-        del gru_preds, regime_preds
+        logger.info(
+            "ML cache done %s: n=%d gru=%d htf=%d ltf=%d",
+            symbol,
+            n,
+            int(np.count_nonzero(~np.isnan(cache["p_bull"]))),
+            int(np.count_nonzero(cache["regime"] >= 0)),
+            int(np.count_nonzero(cache["regime_ltf"] >= 0)),
+        )
         gc.collect()
         return cache
 
@@ -748,28 +766,45 @@ def _simulate_trade(
 def _run_symbol_epoch(
     symbol: str, epoch_num: int, start: str, end: str,
     ml_models: dict, pm,
+    bundle: dict | None = None,
 ) -> dict:
     logger.info("=== %s Epoch %d (%s → %s) ===", symbol, epoch_num, start, end)
 
     try:
-        df  = _load_parquet(symbol, "15M", start, end)
-        htf = _load_htf(symbol, start, end)
+        if bundle is None:
+            df_full = _load_parquet(symbol, "15M", start, end)
+            if len(df_full) < 200:
+                logger.warning("Not enough bars %s epoch %d (%d bars)", symbol, epoch_num, len(df_full))
+                return {"symbol": symbol, "epoch": epoch_num, "trades": 0, "note": "insufficient_data", "trade_log": []}
+            df_full = _compute_indicators(df_full)
+            htf = _load_htf(symbol, start, end)
+            ml_cache_full: dict[str, np.ndarray] = {}
+            if ml_models:
+                try:
+                    ml_cache_full = _build_ml_cache(df_full, symbol, htf, ml_models)
+                except Exception as exc:
+                    logger.error("ML cache failed %s epoch %d: %s", symbol, epoch_num, exc)
+        else:
+            df_full = bundle["df"]
+            ml_cache_full = bundle.get("ml_cache", {})
     except FileNotFoundError as exc:
         logger.error("Data missing for %s: %s", symbol, exc)
         return {"symbol": symbol, "epoch": epoch_num, "error": str(exc), "trades": 0, "trade_log": []}
 
+    start_ts = pd.Timestamp(start, tz="UTC")
+    end_ts = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
+    warmup_start = start_ts - _BACKTEST_WARMUP["15M"]
+    slice_start = int(df_full.index.searchsorted(warmup_start, side="left"))
+    slice_end = int(df_full.index.searchsorted(end_ts, side="left"))
+    df = df_full.iloc[slice_start:slice_end]
     if len(df) < 200:
-        logger.warning("Not enough bars %s epoch %d (%d bars)", symbol, epoch_num, len(df))
+        logger.warning("Not enough sliced bars %s epoch %d (%d bars)", symbol, epoch_num, len(df))
         return {"symbol": symbol, "epoch": epoch_num, "trades": 0, "note": "insufficient_data", "trade_log": []}
 
-    df = _compute_indicators(df)
-
-    ml_cache: dict[int, dict] = {}
-    if ml_models:
-        try:
-            ml_cache = _build_ml_cache(df, symbol, htf, ml_models)
-        except Exception as exc:
-            logger.error("ML cache failed %s epoch %d: %s", symbol, epoch_num, exc)
+    ml_cache = {
+        k: v[slice_start:slice_end]
+        for k, v in (ml_cache_full or {}).items()
+    }
 
     # Pre-extract bar arrays as numpy — eliminates df.iloc[i] per bar (~10-20 µs each).
     _rb_cols = ["close", "high", "low", "atr_14", "range_valid", "range_side",
@@ -815,13 +850,14 @@ def _run_symbol_epoch(
     current_date = None
     daily_halt   = False
     last_trade_i = -COOLDOWN_BARS
-    recent_bars:  list[int] = []
+    recent_bars: deque[int] = deque()
     halted       = False
+    first_live_idx = max(200, int(df.index.searchsorted(start_ts, side="left")))
 
     _dir_thresh     = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
     _density_lambda = float(os.getenv("DENSITY_LAMBDA", "0.12"))
 
-    for i in range(200, len(df)):
+    for i in range(first_live_idx, len(df)):
         if halted:
             break
         dt  = pd.Timestamp(_rb_ts[i], tz="UTC")
@@ -849,13 +885,14 @@ def _run_symbol_epoch(
         if i - last_trade_i < COOLDOWN_BARS:
             continue
 
-        ml_preds   = ml_cache.get(i, {})
+        ml_preds   = _ml_cache_entry(ml_cache, i)
         bar        = _rb_bar(i)
         raw_signal = _compute_signal(symbol, ml_preds, bar)
         if raw_signal is None:
             continue
 
-        recent_bars = [b for b in recent_bars if i - b < 96]
+        while recent_bars and i - recent_bars[0] >= 96:
+            recent_bars.popleft()
         raw_signal["confidence"] = float(raw_signal["confidence"]) * math.exp(
             -_density_lambda * len(recent_bars)
         )
@@ -1049,6 +1086,19 @@ def _load_models() -> dict:
     return models
 
 
+def _prepare_symbol_bundle(symbol: str, start: str, end: str, ml_models: dict) -> dict:
+    logger.info("Preparing shared robustness bundle for %s (%s → %s)", symbol, start, end)
+    df = _load_parquet(symbol, "15M", start, end)
+    if len(df) < 200:
+        raise RuntimeError(f"{symbol}: insufficient data in shared bundle ({len(df)} bars)")
+    df = _compute_indicators(df)
+    htf = _load_htf(symbol, start, end)
+    ml_cache: dict[str, np.ndarray] = {}
+    if ml_models:
+        ml_cache = _build_ml_cache(df, symbol, htf, ml_models)
+    return {"df": df, "ml_cache": ml_cache}
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1088,6 +1138,15 @@ def main() -> None:
         logger.error("PortfolioManager failed: %s", exc)
         sys.exit(1)
 
+    shared_bundles: dict[str, dict] = {}
+    overall_start = min(EPOCHS[e][0] for e in epochs_to_run)
+    overall_end = max(EPOCHS[e][1] for e in epochs_to_run)
+    for symbol in symbols_to_run:
+        try:
+            shared_bundles[symbol] = _prepare_symbol_bundle(symbol, overall_start, overall_end, ml_models)
+        except Exception as exc:
+            logger.error("Shared bundle prep failed for %s: %s", symbol, exc)
+
     all_results: list[dict] = list(completed.values())  # seed with prior results
 
     for epoch_num in epochs_to_run:
@@ -1101,7 +1160,8 @@ def main() -> None:
                 logger.info("  SKIP %s epoch %d (already in checkpoint)", symbol, epoch_num)
                 continue
 
-            result      = _run_symbol_epoch(symbol, epoch_num, start, end, ml_models, pm)
+            bundle = shared_bundles.get(symbol)
+            result = _run_symbol_epoch(symbol, epoch_num, start, end, ml_models, pm, bundle=bundle)
             result_meta = {k: v for k, v in result.items() if k != "trade_log"}
 
             logger.info(

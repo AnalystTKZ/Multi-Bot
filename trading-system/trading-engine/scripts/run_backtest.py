@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import argparse
 from array import array
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 import csv
 import gc
+import hashlib
 import json
 import logging
 import math
@@ -77,6 +80,14 @@ MIN_CONFIDENCE     = 0.70       # minimum signal confidence — PM R:R gate also
 MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
+ML_CACHE_DIR       = os.path.join(OUTPUT_DIR, "ml_cache")
+_BACKTEST_WARMUP = {
+    "5M": pd.Timedelta(days=7),
+    "15M": pd.Timedelta(days=14),
+    "1H": pd.Timedelta(days=60),
+    "4H": pd.Timedelta(days=180),
+    "1D": pd.Timedelta(days=400),
+}
 
 # PM settings object — mirrors what the live engine passes to PortfolioManager
 _PM_SETTINGS = SimpleNamespace(
@@ -100,6 +111,9 @@ TRADER_SYMBOLS = {
 TRADER_NAMES = {
     "ml_trader": "ML-Native Execution (GRU + EV)",
 }
+
+_HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
+_LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
 
 
 def _env_ml_enabled() -> bool:
@@ -128,6 +142,87 @@ def _filter_date_range(df: pd.DataFrame, start_ts: pd.Timestamp | None, end_ts: 
     if end_ts is not None:
         df = df.loc[df.index <= end_ts]
     return df
+
+
+def _start_with_warmup(start: str | None, timeframe: str) -> str | None:
+    start_ts = _utc_ts(start)
+    if start_ts is None:
+        return start
+    warmup = _BACKTEST_WARMUP.get(timeframe.upper())
+    if warmup is None:
+        return start
+    return (start_ts - warmup).strftime("%Y-%m-%d")
+
+
+def _weight_token(path_str: str | None) -> str:
+    if not path_str:
+        return "missing"
+    path = Path(path_str)
+    if not path.exists():
+        return "missing"
+    if path.is_file():
+        st = path.stat()
+        return f"{path.name}:{st.st_mtime_ns}:{st.st_size}"
+    mtimes = []
+    sizes = 0
+    for child in sorted(p for p in path.rglob("*") if p.is_file()):
+        st = child.stat()
+        mtimes.append(str(st.st_mtime_ns))
+        sizes += st.st_size
+    payload = "|".join(mtimes) if mtimes else "empty"
+    return f"{path.name}:{sizes}:{payload}"
+
+
+def _ml_cache_file(symbol: str, start: str, end: str, ml_models: dict) -> str:
+    tokens = [symbol, start or "", end or ""]
+    relevant = {"gru_lstm", "regime", "regime_htf", "regime_4h", "regime_ltf", "regime_1h"}
+    for name in sorted(k for k in (ml_models or {}).keys() if k in relevant):
+        model = ml_models[name]
+        tokens.append(f"{name}={_weight_token(getattr(model, 'weight_path', None))}")
+    digest = hashlib.sha1("||".join(tokens).encode("utf-8")).hexdigest()[:16]
+    os.makedirs(ML_CACHE_DIR, exist_ok=True)
+    return os.path.join(ML_CACHE_DIR, f"{symbol}_{start}_{end}_{digest}.npz")
+
+
+def _save_ml_cache(path: str, cache: dict[str, np.ndarray]) -> None:
+    tmp = f"{path}.tmp.npz"
+    np.savez_compressed(tmp, **cache)
+    os.replace(tmp, path)
+
+
+def _load_ml_cache(path: str, expected_len: int) -> dict[str, np.ndarray] | None:
+    if not os.path.exists(path):
+        return None
+    try:
+        with np.load(path, allow_pickle=False) as payload:
+            cache = {k: payload[k] for k in payload.files}
+        if not cache:
+            return None
+        for arr in cache.values():
+            if len(arr) != expected_len:
+                return None
+        return cache
+    except Exception as exc:
+        logger.warning("ML cache load failed %s: %s", path, exc)
+        return None
+
+
+def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
+    if not cache:
+        return {}
+    out: dict = {}
+    p_bull = float(cache["p_bull"][idx])
+    if not np.isnan(p_bull):
+        out["p_bull"] = p_bull
+        out["p_bear"] = float(cache["p_bear"][idx])
+        out["expected_variance"] = float(cache["expected_variance"][idx])
+    regime_id = int(cache["regime"][idx])
+    if regime_id >= 0:
+        out["regime"] = str(_HTF_REGIME_NAMES[regime_id])
+    regime_ltf_id = int(cache["regime_ltf"][idx])
+    if regime_ltf_id >= 0:
+        out["regime_ltf"] = str(_LTF_REGIME_NAMES[regime_ltf_id])
+    return out
 
 
 def _read_market_csv_chunked(
@@ -248,7 +343,7 @@ def _load_csv(symbol: str, timeframe: str = "15M", start: str | None = None, end
         return pd.DataFrame()
 
     try:
-        start_ts = _utc_ts(start)
+        start_ts = _utc_ts(_start_with_warmup(start, tf_upper))
         end_ts   = _utc_ts(end)
 
         # Push date range into the parquet read when both bounds are known.
@@ -717,7 +812,8 @@ def _precompute_ml_cache(
     htf: dict,
     ml_models: dict,
     batch_size: int = 512,
-) -> dict[int, dict]:
+    cache_file: str | None = None,
+) -> dict[str, np.ndarray]:
     """
     GPU-batched ML pre-computation for a full symbol DataFrame.
 
@@ -734,6 +830,12 @@ def _precompute_ml_cache(
     """
     if not ml_models:
         return {}
+
+    if cache_file:
+        cache = _load_ml_cache(cache_file, len(df))
+        if cache is not None:
+            logger.info("ML cache restored for %s from %s", symbol, os.path.basename(cache_file))
+            return cache
 
     gru_model    = ml_models.get("gru_lstm")
     regime_4h    = ml_models.get("regime_htf") or ml_models.get("regime_4h") or ml_models.get("regime")
@@ -757,7 +859,6 @@ def _precompute_ml_cache(
         # predict_batch (GPU/DataParallel) runs serially — one model at a time.
         from models.regime_classifier import RegimeClassifier as _RC
 
-        regime_preds: dict[int, str] = {}
         _regime_htf_series = None
         _regime_htf_conf   = None
         _regime_ltf_series = None
@@ -811,14 +912,13 @@ def _precompute_ml_cache(
                 c_arr = np.full(_n, np.nan, dtype=np.float32)
                 c_arr[row_idx] = conf
                 filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
-                preds = dict(enumerate(np.array(_classes)[filled]))
-                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, preds
+                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf
             except Exception as _e:
                 logger.error("ML cache: regime infer failed %s: %s", symbol, _e)
-                return None, None, {}
+                return None, None
 
         if _do_4h and _X_4h is not None:
-            _r4h, _c4h, _p4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
+            _r4h, _c4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
             del _X_4h
             if _r4h is not None:
                 if _df_src_4h is not df:
@@ -829,14 +929,10 @@ def _precompute_ml_cache(
                 else:
                     _regime_htf_series, _regime_htf_conf = _r4h, _c4h
                     logger.info("ML cache: HTF regime on 15M fallback for %s", symbol)
-                _htf_cls_arr = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"])
-                regime_preds = {i: str(v) for i, v in enumerate(
-                    _htf_cls_arr[np.clip(_regime_htf_series.values, 0, len(_htf_cls_arr) - 1)]
-                )}
             gc.collect()
 
         if _do_1h and _X_1h is not None:
-            _r1h, _c1h, _ = _infer_regime(regime_1h, _X_1h, _df_src_1h)
+            _r1h, _c1h = _infer_regime(regime_1h, _X_1h, _df_src_1h)
             del _X_1h
             if _r1h is not None:
                 if _df_src_1h is not df:
@@ -849,10 +945,10 @@ def _precompute_ml_cache(
             gc.collect()
 
         # Regime distribution diagnostic
-        if regime_preds:
+        if _regime_htf_series is not None:
             from collections import Counter
             logger.info("ML cache: 4H regime distribution %s: %s",
-                        symbol, dict(Counter(regime_preds.values())))
+                        symbol, dict(Counter(_HTF_REGIME_NAMES[np.clip(_regime_htf_series.values, 0, 2)])))
 
         # ── Build sequence features (with dual-regime context) ────────────────
         logger.info("ML cache: building sequence features for %s (%d bars)...", symbol, n)
@@ -872,7 +968,13 @@ def _precompute_ml_cache(
             raise
 
         # ── Batched GRU inference ──────────────────────────────────────────────
-        gru_preds: dict[int, dict] = {}
+        cache = {
+            "p_bull": np.full(n, np.nan, dtype=np.float32),
+            "p_bear": np.full(n, np.nan, dtype=np.float32),
+            "expected_variance": np.full(n, np.nan, dtype=np.float32),
+            "regime": np.full(n, -1, dtype=np.int8),
+            "regime_ltf": np.full(n, -1, dtype=np.int8),
+        }
         if gru_model and seq_arr is not None and gru_model.is_trained and gru_model._model is not None:
             try:
                 from models.gru_lstm_predictor import DEVICE, SEQUENCE_LENGTH as SEQ_LEN
@@ -917,19 +1019,11 @@ def _precompute_ml_cache(
                     # bar_idx for sequence i = i + SEQ_LEN - 1
                     bar_indices = np.arange(n_valid, dtype=np.int32) + (SEQ_LEN - 1)
 
-                    gru_preds = {
-                        int(bar_indices[i]): {
-                            "p_bull":              float(all_p_bull[i]),
-                            "p_bear":              float(p_bear_arr[i]),
-                            "entry_depth":         float(entry_depth[i]),
-                            "expected_move":       float(all_mag[i]),
-                            "expected_volatility": float(vol_arr[i]),
-                            "expected_variance":   float(var_vals[i]),
-                        }
-                        for i in range(n_valid)
-                    }
+                    cache["p_bull"][bar_indices] = all_p_bull
+                    cache["p_bear"][bar_indices] = p_bear_arr
+                    cache["expected_variance"][bar_indices] = var_vals.astype(np.float32, copy=False)
                     del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, entry_depth, vol_arr
-                    logger.info("ML cache: GRU batch inference done for %s (%d bars)", symbol, len(gru_preds))
+                    logger.info("ML cache: GRU batch inference done for %s (%d bars)", symbol, n_valid)
             except Exception as exc:
                 logger.error("ML cache: GRU batch failed for %s: %s", symbol, exc)
                 del seq_arr
@@ -939,35 +1033,22 @@ def _precompute_ml_cache(
                     del seq_arr  # ~(N×F) float32 — free before regime allocates X_all
 
         # ── Build LTF per-bar lookup (behaviour class name) ──────────────────
-        ltf_preds: dict[int, str] = {}
         if _regime_ltf_series is not None:
-            _ltf_cls_arr = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"])
-            ltf_preds = {i: str(v) for i, v in enumerate(
-                _ltf_cls_arr[np.clip(_regime_ltf_series.values, 0, len(_ltf_cls_arr) - 1)]
-            )}
+            cache["regime_ltf"] = np.clip(_regime_ltf_series.values, 0, 3).astype(np.int8, copy=False)
+        if _regime_htf_series is not None:
+            cache["regime"] = np.clip(_regime_htf_series.values, 0, 2).astype(np.int8, copy=False)
 
-        # ── Merge into combined per-bar cache ────────────────────────────────
-        cache: dict[int, dict] = {}
-        all_bar_indices = set(gru_preds.keys()) | set(regime_preds.keys())
-
-        for bar_i in all_bar_indices:
-            entry: dict = {}
-            if bar_i in gru_preds:
-                entry.update(gru_preds[bar_i])
-            if bar_i in regime_preds:
-                entry["regime"] = regime_preds[bar_i]        # HTF bias
-            if bar_i in ltf_preds:
-                entry["regime_ltf"] = ltf_preds[bar_i]       # LTF behaviour
-            cache[bar_i] = entry
-
+        n_gru = int(np.count_nonzero(~np.isnan(cache["p_bull"])))
+        n_htf = int(np.count_nonzero(cache["regime"] >= 0))
+        n_ltf = int(np.count_nonzero(cache["regime_ltf"] >= 0))
         logger.info("ML cache: %d bars cached for %s (gru=%d htf_regime=%d ltf_regime=%d)",
-                    len(cache), symbol, len(gru_preds), len(regime_preds), len(ltf_preds))
+                    n, symbol, n_gru, n_htf, n_ltf)
 
         # Diagnostic: sample GRU output distribution so 0-trade causes are visible
-        _sample_vals = [v for v in list(cache.values())[:5000] if "p_bull" in v]
-        if _sample_vals:
-            _pb = np.array([v["p_bull"] for v in _sample_vals])
-            _ev = np.array([v["expected_variance"] for v in _sample_vals])
+        _valid = ~np.isnan(cache["p_bull"])
+        if _valid.any():
+            _pb = cache["p_bull"][_valid][:5000]
+            _ev = cache["expected_variance"][_valid][:5000]
             logger.info(
                 "ML cache GRU sample %s: p_bull mean=%.3f std=%.3f "
                 "pct_above_55=%.1f%% | variance mean=%.3f pct_above_80=%.1f%%",
@@ -976,7 +1057,11 @@ def _precompute_ml_cache(
                 _ev.mean(), 100 * (_ev >= 0.80).mean(),
             )
 
-        del gru_preds, regime_preds
+        if cache_file:
+            try:
+                _save_ml_cache(cache_file, cache)
+            except Exception as exc:
+                logger.warning("ML cache save failed %s: %s", cache_file, exc)
         gc.collect()
         return cache
 
@@ -1182,6 +1267,8 @@ def _backtest_trader(
     # ── Load + filter all symbol dataframes ──────────────────────────────────
     symbol_dfs: dict[str, pd.DataFrame] = {}
     symbol_htf: dict[str, dict] = {}   # HTF context per symbol (1D + 4H)
+    symbol_start_idx: dict[str, int] = {}
+    start_ts = _utc_ts(start)
 
     for symbol in symbols:
         df = _load_csv(symbol, "15M", start=start, end=end)
@@ -1189,11 +1276,20 @@ def _backtest_trader(
             logger.warning("Skipping %s/%s — only %d bars", trader_id, symbol, len(df))
             continue
         df = _compute_indicators(df)
+        first_live_idx = int(df.index.searchsorted(start_ts, side="left")) if start_ts is not None else 0
+        if len(df) - first_live_idx < 200:
+            logger.warning(
+                "Skipping %s/%s — only %d bars inside requested window",
+                trader_id, symbol, max(0, len(df) - first_live_idx),
+            )
+            continue
         symbol_dfs[symbol] = df
         symbol_htf[symbol] = _load_htf_context(symbol, start, end)
-        logger.info("Loaded %s %s: %d bars (%s → %s) + 1D/4H context",
+        symbol_start_idx[symbol] = max(200, first_live_idx)
+        logger.info("Loaded %s %s: %d bars (%s → %s), tradable from idx=%d",
                     trader_id, symbol, len(df),
-                    df.index[0].date(), df.index[-1].date())
+                    df.index[0].date(), df.index[-1].date(),
+                    symbol_start_idx[symbol])
 
     if not symbol_dfs:
         return {"trades": 0, "win_rate": 0.0, "total_return": 0.0,
@@ -1209,11 +1305,13 @@ def _backtest_trader(
     # in parallel would peak at 8–12 GB on top of the already-loaded model weights
     # and training dataset — causing OOM (rc=-9). The inner 2-thread regime
     # feature-matrix parallelism inside _precompute_ml_cache is preserved.
-    symbol_ml_cache: dict[str, dict[int, dict]] = {}
+    symbol_ml_cache: dict[str, dict[str, np.ndarray]] = {}
+    _cache_workers = max(1, min(2, int(os.getenv("MAX_PARALLEL_CACHE_BUILDS", "2"))))
 
     def _build_cache_sym(sym):
+        cache_file = _ml_cache_file(sym, start, end, ml_models or {})
         return sym, _precompute_ml_cache(
-            symbol_dfs[sym], sym, symbol_htf.get(sym, {}), ml_models
+            symbol_dfs[sym], sym, symbol_htf.get(sym, {}), ml_models, cache_file=cache_file
         )
 
     if shared_ml_cache is not None:
@@ -1222,23 +1320,29 @@ def _backtest_trader(
         for sym in hits:
             symbol_ml_cache[sym] = shared_ml_cache[sym]
         if missing:
-            logger.info("%s: ML cache miss for %d symbols — building serially (RAM guard)", trader_id, len(missing))
-            for sym in missing:
+            logger.info("%s: ML cache miss for %d symbols — building with %d worker(s)", trader_id, len(missing), _cache_workers)
+            with ThreadPoolExecutor(max_workers=_cache_workers) as ex:
+                futures = {ex.submit(_build_cache_sym, sym): sym for sym in missing}
+                for fut in as_completed(futures):
+                    sym = futures[fut]
+                    try:
+                        _, c = fut.result()
+                        shared_ml_cache[sym] = c
+                        symbol_ml_cache[sym] = c
+                    except Exception as exc:
+                        logger.warning("ML cache build failed for %s: %s", sym, exc)
+    elif ml_models:
+        logger.info("%s: pre-computing ML inference cache for %d symbols with %d worker(s)...",
+                    trader_id, len(symbol_dfs), _cache_workers)
+        with ThreadPoolExecutor(max_workers=_cache_workers) as ex:
+            futures = {ex.submit(_build_cache_sym, sym): sym for sym in symbol_dfs}
+            for fut in as_completed(futures):
+                sym = futures[fut]
                 try:
-                    _, c = _build_cache_sym(sym)
-                    shared_ml_cache[sym] = c
+                    _, c = fut.result()
                     symbol_ml_cache[sym] = c
                 except Exception as exc:
                     logger.warning("ML cache build failed for %s: %s", sym, exc)
-    elif ml_models:
-        logger.info("%s: pre-computing ML inference cache for %d symbols (serial, RAM guard)...",
-                    trader_id, len(symbol_dfs))
-        for sym in symbol_dfs:
-            try:
-                _, c = _build_cache_sym(sym)
-                symbol_ml_cache[sym] = c
-            except Exception as exc:
-                logger.warning("ML cache build failed for %s: %s", sym, exc)
 
     # ── Pre-extract bar arrays as numpy (eliminates df.iloc[i] per bar) ─────────
     # ~10-20 µs per df.iloc[] call × 473k bars = 5-10 min saved in pure Python.
@@ -1266,7 +1370,7 @@ def _backtest_trader(
     # heapq.merge merges N already-sorted generators in O(N log K) time, K=11.
     def _sym_iter(sym: str, df: pd.DataFrame):
         ts_arr = _sym_timestamps[sym]
-        for idx in range(200, len(df)):
+        for idx in range(symbol_start_idx[sym], len(df)):
             yield ts_arr[idx], sym, idx
 
     bar_iter = heapq.merge(*[_sym_iter(s, d) for s, d in symbol_dfs.items()])
@@ -1289,7 +1393,7 @@ def _backtest_trader(
     # Used for soft exponential confidence penalty — not a hard cap.
     # DENSITY_LAMBDA env controls suppression strength (default 0.12).
     _DENSITY_WINDOW = 96
-    recent_trade_bars: dict[str, list] = {s: [] for s in symbol_dfs}
+    recent_trade_bars: dict[str, deque[int]] = {s: deque() for s in symbol_dfs}
 
     # Pre-instantiate QualityScorer helper (avoid per-signal construction cost)
     _qs_fe = None
@@ -1364,14 +1468,14 @@ def _backtest_trader(
             continue
 
         # ── Trade density: prune window, compute current count ───────────────
-        recent_trade_bars[symbol] = [
-            b for b in recent_trade_bars[symbol] if i - b < _DENSITY_WINDOW
-        ]
-        _density_count = len(recent_trade_bars[symbol])
+        _recent = recent_trade_bars[symbol]
+        while _recent and i - _recent[0] >= _DENSITY_WINDOW:
+            _recent.popleft()
+        _density_count = len(_recent)
 
         # ── ML inference — use pre-computed GPU cache, fall back to per-bar ────
         if symbol_ml_cache:
-            ml_preds = symbol_ml_cache.get(symbol, {}).get(i, {})
+            ml_preds = _ml_cache_entry(symbol_ml_cache.get(symbol), i)
             if not ml_preds and ml_models:
                 # Cache miss (bar too early for sequence window) — fall back
                 ml_preds = _run_bar_ml(ml_models, df, i, symbol=symbol,
