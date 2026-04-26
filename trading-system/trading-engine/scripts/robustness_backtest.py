@@ -1167,9 +1167,9 @@ def main() -> None:
             _save_checkpoint(completed)
 
             # Save full JSON (all completed results so far)
-            ts       = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            out_path = os.path.join(OUTPUT_DIR, "robustness_latest.json")
-            with open(out_path, "w") as f:
+            ts              = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            _latest_path    = os.path.join(OUTPUT_DIR, "robustness_latest.json")
+            with open(_latest_path, "w") as f:
                 json.dump({
                     "timestamp": ts,
                     "completed": len(completed),
@@ -1191,10 +1191,14 @@ def main() -> None:
         gc.collect()
 
     # Final timestamped archive copy
+    out_path = os.path.join(OUTPUT_DIR, "robustness_latest.json")
     ts       = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     arc_path = os.path.join(OUTPUT_DIR, f"robustness_{ts}.json")
-    shutil.copy2(out_path, arc_path)
-    logger.info("Final results → %s", arc_path)
+    if os.path.exists(out_path):
+        shutil.copy2(out_path, arc_path)
+        logger.info("Final results → %s", arc_path)
+    else:
+        logger.info("No new results written (all combinations were already checkpointed)")
     logger.info("Summary table → %s", SUMMARY_PATH)
 
     # Final push with the archived filename
