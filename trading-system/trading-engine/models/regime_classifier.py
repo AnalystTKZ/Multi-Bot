@@ -260,10 +260,14 @@ class RegimeClassifier(BaseModel):
 
     def predict_batch(self, X: np.ndarray, batch_size: int = 4096) -> tuple:
         """
-        GPU-batched inference on a pre-built feature matrix X (N, F_full or F_tf).
+        CPU inference on a pre-built feature matrix X (N, F_full or F_tf).
         If X has the full REGIME_FEATURES width, slices TF-specific columns first.
         Returns (labels: np.ndarray int32, confidences: np.ndarray float32).
-        DataParallel splits batches across both T4 GPUs automatically.
+
+        Small MLP (input→128→64→classes): CPU is faster than GPU for this because
+        the H2D transfer and kernel launch overhead dominates at these batch sizes.
+        GPU is reserved for the GRU which has large recurrent state and benefits
+        from CUDA parallelism.
         """
         _default_id = 2 if self._mode == "htf_bias" else 1  # BIAS_NEUTRAL or RANGING
         _default_conf = 1.0 / self._n_output_classes
@@ -275,17 +279,21 @@ class RegimeClassifier(BaseModel):
             # Slice to TF-specific columns if full matrix provided
             if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
                 X = X[:, self._col_idx]
-            self._model.eval()
+            # Unwrap DataParallel and move to CPU for inference — no kernel launch overhead
+            _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+            _raw.eval()
+            _cpu_m = _raw.to("cpu")
             all_labels = []
             all_conf   = []
             with torch.no_grad():
                 for s in range(0, len(X), batch_size):
-                    xb = torch.from_numpy(X[s: s + batch_size]).to(DEVICE)
-                    with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
-                        logits = self._model(xb).float()
-                    proba = torch.softmax(logits, dim=1).cpu().numpy()
+                    xb = torch.from_numpy(X[s: s + batch_size])  # stays on CPU
+                    logits = _cpu_m(xb).float()
+                    proba = torch.softmax(logits, dim=1).numpy()
                     all_labels.append(proba.argmax(axis=1).astype(np.int32))
                     all_conf.append(proba.max(axis=1).astype(np.float32))
+            # Move model back to training device so subsequent train() calls work
+            _raw.to(DEVICE)
             return np.concatenate(all_labels), np.concatenate(all_conf)
         except Exception as exc:
             logger.error("RegimeClassifier.predict_batch failed: %s", exc)

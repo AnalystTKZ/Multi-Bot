@@ -188,10 +188,10 @@ class QualityScorer(BaseModel):
 
     def predict_batch(self, feature_matrix: np.ndarray) -> tuple:
         """
-        Batch inference for multiple signals in one GPU forward pass.
+        Batch inference on CPU — small MLP (input→128→64→32→1) runs faster on CPU
+        than GPU due to H2D transfer overhead at the batch sizes used here.
         feature_matrix: (N, n_features) float32 array, columns in QUALITY_FEATURES order.
         Returns (ev_array, quality_score_array) each shape (N,) float32.
-        One GPU kernel launch instead of N — eliminates per-call launch overhead.
         """
         if not self.is_trained or self._model is None:
             raise ModelNotTrainedError("QualityScorer has no trained weights.")
@@ -200,15 +200,15 @@ class QualityScorer(BaseModel):
         import torch
         arr = np.asarray(feature_matrix, dtype=np.float32)
         arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-        x = torch.from_numpy(arr).to(DEVICE)
+        x = torch.from_numpy(arr)  # stays on CPU
 
-        _infer_m = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
-        _infer_m.eval()
+        _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+        _cpu_m = _raw.to("cpu").eval()
         with torch.no_grad():
-            with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
-                ev_raw = _infer_m(x)
-            ev_arr = ev_raw.float().squeeze(-1).cpu().numpy()
-            qs_arr = torch.sigmoid(ev_raw.float()).squeeze(-1).cpu().numpy()
+            ev_raw = _cpu_m(x)
+            ev_arr = ev_raw.float().squeeze(-1).numpy()
+            qs_arr = torch.sigmoid(ev_raw.float()).squeeze(-1).numpy()
+        _raw.to(DEVICE)  # move back so training still uses GPU
         return ev_arr.astype(np.float32), np.clip(qs_arr, 0.0, 1.0).astype(np.float32)
 
     # ── Labels ────────────────────────────────────────────────────────────────
