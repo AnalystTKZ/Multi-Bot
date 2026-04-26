@@ -1,0 +1,81 @@
+{
+  "timestamp": "2026-04-26T21:02:19.817976+00:00",
+  "traders": {
+    "all": {
+      "trader_id": "all",
+      "bins": [
+        {
+          "predicted_range": "0.55-0.60",
+          "actual_win_rate": 0.5709,
+          "count": 5504
+        },
+        {
+          "predicted_range": "0.60-0.65",
+          "actual_win_rate": 0.5678,
+          "count": 4674
+        },
+        {
+          "predicted_range": "0.65-0.70",
+          "actual_win_rate": 0.6082,
+          "count": 1100
+        },
+        {
+          "predicted_range": "0.70-0.75",
+          "actual_win_rate": 0.5258,
+          "count": 291
+        },
+        {
+          "predicted_range": "0.75-0.80",
+          "actual_win_rate": 0.6438,
+          "count": 73
+        },
+        {
+          "predicted_range": "0.80-0.90",
+          "actual_win_rate": 0.4,
+          "count": 15
+        }
+      ],
+      "monotonic": false,
+      "reliable": false,
+      "note": "Non-monotonic calibration: 2/5 pairs violated. Consider retraining QualityScorer."
+    },
+    "ml_trader": {
+      "trader_id": "ml_trader",
+      "bins": [
+        {
+          "predicted_range": "0.55-0.60",
+          "actual_win_rate": 0.5709,
+          "count": 5504
+        },
+        {
+          "predicted_range": "0.60-0.65",
+          "actual_win_rate": 0.5678,
+          "count": 4674
+        },
+        {
+          "predicted_range": "0.65-0.70",
+          "actual_win_rate": 0.6082,
+          "count": 1100
+        },
+        {
+          "predicted_range": "0.70-0.75",
+          "actual_win_rate": 0.5258,
+          "count": 291
+        },
+        {
+          "predicted_range": "0.75-0.80",
+          "actual_win_rate": 0.6438,
+          "count": 73
+        },
+        {
+          "predicted_range": "0.80-0.90",
+          "actual_win_rate": 0.4,
+          "count": 15
+        }
+      ],
+      "monotonic": false,
+      "reliable": false,
+      "note": "Non-monotonic calibration: 2/5 pairs violated. Consider retraining QualityScorer."
+    }
+  }
+}
