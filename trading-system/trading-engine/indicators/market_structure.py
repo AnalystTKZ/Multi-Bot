@@ -11,6 +11,278 @@ import numpy as np
 import pandas as pd
 from typing import Tuple
 
+try:
+    from numba import njit as _njit
+    _NUMBA = True
+except ImportError:
+    def _njit(fn=None, **kw):  # type: ignore[return]
+        return fn if fn is not None else (lambda f: f)
+    _NUMBA = False
+
+
+# ---------------------------------------------------------------------------
+# Numba-accelerated helpers (fall back to plain Python when numba absent)
+# ---------------------------------------------------------------------------
+
+@_njit(cache=True)
+def _cluster_zones_nb(levels: np.ndarray, merge_tol: float):
+    """
+    Greedy zone clustering.  Modifies levels in-place via output arrays.
+    Returns (zone_levels, zone_counts) as 1-D float64 arrays.
+    levels must be a 1-D float64 array with no NaNs.
+    """
+    max_zones = len(levels)
+    z_lvl = np.empty(max_zones, dtype=np.float64)
+    z_cnt = np.zeros(max_zones, dtype=np.int64)
+    nz = 0
+    for k in range(len(levels)):
+        lvl = levels[k]
+        placed = False
+        for j in range(nz):
+            if abs(lvl - z_lvl[j]) <= merge_tol:
+                z_lvl[j] = (z_lvl[j] * z_cnt[j] + lvl) / (z_cnt[j] + 1)
+                z_cnt[j] += 1
+                placed = True
+                break
+        if not placed:
+            z_lvl[nz] = lvl
+            z_cnt[nz] = 1
+            nz += 1
+    return z_lvl[:nz], z_cnt[:nz]
+
+
+@_njit(cache=True)
+def _sr_zones_loop(
+    n: int,
+    start0: int,
+    atr: np.ndarray,
+    close: np.ndarray,
+    swing_highs: np.ndarray,
+    swing_lows: np.ndarray,
+    lookback: int,
+    atr_merge_ratio: float,
+    nearest_resist: np.ndarray,
+    nearest_support: np.ndarray,
+    dist_resist: np.ndarray,
+    dist_support: np.ndarray,
+    in_supply: np.ndarray,
+    in_demand: np.ndarray,
+    resist_strength: np.ndarray,
+    support_strength: np.ndarray,
+):
+    for i in range(start0, n):
+        atr_i = atr[i]
+        if atr_i != atr_i or atr_i <= 0:
+            atr_i = 1e-5
+        merge_tol = atr_i * atr_merge_ratio
+        c = close[i]
+        start = i - lookback if i - lookback > 0 else 0
+
+        # collect valid swing highs / lows in window
+        raw_h = swing_highs[start:i]
+        raw_l = swing_lows[start:i]
+        nh = 0
+        nl = 0
+        for v in raw_h:
+            if v == v:  # not nan
+                nh += 1
+        for v in raw_l:
+            if v == v:
+                nl += 1
+        vh = np.empty(nh, dtype=np.float64)
+        vl = np.empty(nl, dtype=np.float64)
+        ki = 0
+        for v in raw_h:
+            if v == v:
+                vh[ki] = v
+                ki += 1
+        ki = 0
+        for v in raw_l:
+            if v == v:
+                vl[ki] = v
+                ki += 1
+
+        r_lvl, r_cnt = _cluster_zones_nb(vh, merge_tol)
+        s_lvl, s_cnt = _cluster_zones_nb(vl, merge_tol)
+
+        # nearest resistance above close
+        best_r = np.inf
+        best_rc = 1
+        for j in range(len(r_lvl)):
+            if r_lvl[j] > c and r_lvl[j] < best_r:
+                best_r = r_lvl[j]
+                best_rc = r_cnt[j]
+        if best_r < np.inf:
+            nearest_resist[i] = best_r
+            d = (best_r - c) / (atr_i + 1e-9)
+            dist_resist[i] = d if d < 10 else 10.0
+            resist_strength[i] = float(best_rc if best_rc < 5 else 5)
+            if (best_r - c) <= merge_tol:
+                in_supply[i] = 1.0
+
+        # nearest support below close
+        best_s = -np.inf
+        best_sc = 1
+        for j in range(len(s_lvl)):
+            if s_lvl[j] < c and s_lvl[j] > best_s:
+                best_s = s_lvl[j]
+                best_sc = s_cnt[j]
+        if best_s > -np.inf:
+            nearest_support[i] = best_s
+            d = (c - best_s) / (atr_i + 1e-9)
+            dist_support[i] = d if d < 10 else 10.0
+            support_strength[i] = float(best_sc if best_sc < 5 else 5)
+            if (c - best_s) <= merge_tol:
+                in_demand[i] = 1.0
+
+
+@_njit(cache=True)
+def _range_loop(
+    n: int,
+    start0: int,
+    atr: np.ndarray,
+    close: np.ndarray,
+    swing_highs: np.ndarray,
+    swing_lows: np.ndarray,
+    lookback: int,
+    min_width_atr: float,
+    min_touches: int,
+    boundary_atr: float,
+    range_valid: np.ndarray,
+    range_side: np.ndarray,   # int8: 0=none, 1=buy, -1=sell
+    range_support: np.ndarray,
+    range_resist: np.ndarray,
+    range_width_atr: np.ndarray,
+):
+    merge_tol_ratio = 0.5
+    for i in range(start0, n):
+        atr_i = atr[i]
+        if atr_i != atr_i or atr_i <= 1e-9:
+            continue
+        c = close[i]
+        start = i - lookback if i - lookback > 0 else 0
+        merge_tol = atr_i * merge_tol_ratio
+
+        raw_h = swing_highs[start:i]
+        raw_l = swing_lows[start:i]
+        nh = 0
+        nl = 0
+        for v in raw_h:
+            if v == v:
+                nh += 1
+        for v in raw_l:
+            if v == v:
+                nl += 1
+        if nh == 0 or nl == 0:
+            continue
+
+        vh = np.empty(nh, dtype=np.float64)
+        vl = np.empty(nl, dtype=np.float64)
+        ki = 0
+        for v in raw_h:
+            if v == v:
+                vh[ki] = v
+                ki += 1
+        ki = 0
+        for v in raw_l:
+            if v == v:
+                vl[ki] = v
+                ki += 1
+
+        r_lvl, r_cnt = _cluster_zones_nb(vh, merge_tol)
+        s_lvl, s_cnt = _cluster_zones_nb(vl, merge_tol)
+
+        # nearest qualified resistance above close
+        best_r = np.inf
+        for j in range(len(r_lvl)):
+            if r_lvl[j] > c and r_cnt[j] >= min_touches and r_lvl[j] < best_r:
+                best_r = r_lvl[j]
+        if best_r == np.inf:
+            continue
+
+        # nearest qualified support below close
+        best_s = -np.inf
+        for j in range(len(s_lvl)):
+            if s_lvl[j] < c and s_cnt[j] >= min_touches and s_lvl[j] > best_s:
+                best_s = s_lvl[j]
+        if best_s == -np.inf:
+            continue
+
+        width_atr = (best_r - best_s) / atr_i
+        if width_atr < min_width_atr:
+            continue
+
+        near_r = (best_r - c) <= boundary_atr * atr_i
+        near_s = (c - best_s) <= boundary_atr * atr_i
+        if not (near_r or near_s):
+            continue
+
+        range_valid[i] = 1
+        range_support[i] = best_s
+        range_resist[i] = best_r
+        range_width_atr[i] = width_atr
+        if near_s:
+            range_side[i] = 1    # buy
+        else:
+            range_side[i] = -1   # sell
+
+
+@_njit(cache=True)
+def _pullback_state_loop(
+    n: int,
+    start0: int,
+    atr: np.ndarray,
+    close: np.ndarray,
+    swing_high_arr: np.ndarray,
+    swing_low_arr: np.ndarray,
+    pullback_atr: float,
+    retest_atr: float,
+    pullback_valid: np.ndarray,
+    pullback_side: np.ndarray,    # int8: 0=none, 1=buy, -1=sell
+    pullback_level: np.ndarray,
+    pb_swing_high: np.ndarray,
+    pb_swing_low: np.ndarray,
+):
+    last_sh = np.nan
+    last_sl = np.nan
+    prev_sh = np.nan
+    prev_sl = np.nan
+    for i in range(start0, n):
+        sh = swing_high_arr[i]
+        sl = swing_low_arr[i]
+        if sh == sh:  # not nan
+            prev_sh = last_sh
+            last_sh = sh
+        if sl == sl:
+            prev_sl = last_sl
+            last_sl = sl
+
+        pb_swing_high[i] = last_sh
+        pb_swing_low[i] = last_sl
+
+        atr_i = atr[i]
+        if atr_i != atr_i or atr_i <= 1e-9:
+            continue
+        c = close[i]
+
+        lsh = last_sh; psh = prev_sh; lsl = last_sl; psl = prev_sl
+        if (lsh == lsh and psh == psh and lsl == lsl and psl == psl
+                and lsh > psh and lsl > psl
+                and c < lsh
+                and abs(c - lsl) <= pullback_atr * atr_i
+                and c > lsl - retest_atr * atr_i):
+            pullback_valid[i] = 1
+            pullback_side[i] = 1   # buy
+            pullback_level[i] = lsl
+        elif (lsl == lsl and psl == psl and lsh == lsh and psh == psh
+                and lsl < psl and lsh < psh
+                and c > lsl
+                and abs(c - lsh) <= pullback_atr * atr_i
+                and c < lsh + retest_atr * atr_i):
+            pullback_valid[i] = 1
+            pullback_side[i] = -1  # sell
+            pullback_level[i] = lsh
+
 
 def compute_ema(series: pd.Series, period: int) -> pd.Series:
     """Exponential moving average."""
@@ -296,8 +568,8 @@ def detect_order_blocks(df: pd.DataFrame) -> pd.DataFrame:
     impulse_up = (df["close"] - df["open"]) > atr * 1.0
     impulse_dn = (df["open"] - df["close"]) > atr * 1.0
     # OB is the bar *before* the impulse
-    impulse_up = impulse_up.shift(1).infer_objects(copy=False).fillna(False)
-    impulse_dn = impulse_dn.shift(1).infer_objects(copy=False).fillna(False)
+    impulse_up = impulse_up.shift(1, fill_value=False).astype(bool)
+    impulse_dn = impulse_dn.shift(1, fill_value=False).astype(bool)
 
     bearish_candle = df["close"] < df["open"]
     bullish_candle = df["close"] > df["open"]
@@ -353,74 +625,26 @@ def detect_sr_zones(
     swing_highs = np.where(high == roll_high, high, np.nan)
     swing_lows = np.where(low == roll_low, low, np.nan)
 
-    # Output arrays
-    nearest_resist = np.full(n, np.nan, dtype=np.float32)
-    nearest_support = np.full(n, np.nan, dtype=np.float32)
-    dist_resist = np.zeros(n, dtype=np.float32)
-    dist_support = np.zeros(n, dtype=np.float32)
-    in_supply = np.zeros(n, dtype=np.float32)
-    in_demand = np.zeros(n, dtype=np.float32)
-    resist_strength = np.zeros(n, dtype=np.float32)
-    support_strength = np.zeros(n, dtype=np.float32)
+    # Output arrays (float64 for numba; cast to float32 at assignment)
+    nearest_resist = np.full(n, np.nan, dtype=np.float64)
+    nearest_support = np.full(n, np.nan, dtype=np.float64)
+    dist_resist = np.zeros(n, dtype=np.float64)
+    dist_support = np.zeros(n, dtype=np.float64)
+    in_supply = np.zeros(n, dtype=np.float64)
+    in_demand = np.zeros(n, dtype=np.float64)
+    resist_strength = np.zeros(n, dtype=np.float64)
+    support_strength = np.zeros(n, dtype=np.float64)
 
-    for i in range(swing_n * 2, n):
-        start = max(0, i - lookback)
-        atr_i = atr[i] if not np.isnan(atr[i]) and atr[i] > 0 else 1e-5
-        merge_tol = atr_i * atr_merge_ratio
-        c = close[i]
-
-        # Collect raw swing levels in lookback window
-        raw_highs = swing_highs[start:i]
-        raw_lows = swing_lows[start:i]
-
-        valid_highs = raw_highs[~np.isnan(raw_highs)]
-        valid_lows = raw_lows[~np.isnan(raw_lows)]
-
-        # Cluster resistance levels
-        resist_zones: list[tuple[float, int]] = []  # (level, touch_count)
-        for lvl in valid_highs:
-            merged = False
-            for j, (z_lvl, z_cnt) in enumerate(resist_zones):
-                if abs(lvl - z_lvl) <= merge_tol:
-                    resist_zones[j] = ((z_lvl * z_cnt + lvl) / (z_cnt + 1), z_cnt + 1)
-                    merged = True
-                    break
-            if not merged:
-                resist_zones.append((float(lvl), 1))
-
-        # Cluster support levels
-        support_zones: list[tuple[float, int]] = []
-        for lvl in valid_lows:
-            merged = False
-            for j, (z_lvl, z_cnt) in enumerate(support_zones):
-                if abs(lvl - z_lvl) <= merge_tol:
-                    support_zones[j] = ((z_lvl * z_cnt + lvl) / (z_cnt + 1), z_cnt + 1)
-                    merged = True
-                    break
-            if not merged:
-                support_zones.append((float(lvl), 1))
-
-        # Find nearest resistance above close
-        above = [(lvl, cnt) for lvl, cnt in resist_zones if lvl > c]
-        if above:
-            nr_lvl, nr_cnt = min(above, key=lambda x: x[0])
-            nearest_resist[i] = nr_lvl
-            dist_resist[i] = float(np.clip((nr_lvl - c) / (atr_i + 1e-9), 0, 10))
-            resist_strength[i] = float(np.clip(nr_cnt, 1, 5))
-            # In supply zone if within 0.5 ATR of resistance
-            if (nr_lvl - c) <= merge_tol:
-                in_supply[i] = 1.0
-
-        # Find nearest support below close
-        below = [(lvl, cnt) for lvl, cnt in support_zones if lvl < c]
-        if below:
-            ns_lvl, ns_cnt = max(below, key=lambda x: x[0])
-            nearest_support[i] = ns_lvl
-            dist_support[i] = float(np.clip((c - ns_lvl) / (atr_i + 1e-9), 0, 10))
-            support_strength[i] = float(np.clip(ns_cnt, 1, 5))
-            # In demand zone if within 0.5 ATR of support
-            if (c - ns_lvl) <= merge_tol:
-                in_demand[i] = 1.0
+    _sr_zones_loop(
+        n, swing_n * 2,
+        atr.astype(np.float64), close.astype(np.float64),
+        swing_highs.astype(np.float64), swing_lows.astype(np.float64),
+        lookback, atr_merge_ratio,
+        nearest_resist, nearest_support,
+        dist_resist, dist_support,
+        in_supply, in_demand,
+        resist_strength, support_strength,
+    )
 
     result["sr_nearest_resist"]   = nearest_resist
     result["sr_nearest_support"]  = nearest_support
@@ -468,88 +692,43 @@ def detect_trending_pullback(
     high  = df["high"].to_numpy(dtype=np.float64)
     low   = df["low"].to_numpy(dtype=np.float64)
 
-    # Causal swing detection: swing high at i if it's the max in [i-swing_n, i-1]
-    # (no center=True — strictly causal; confirmed only after swing_n bars have passed)
-    swing_high_arr = np.full(n, np.nan, dtype=np.float64)
-    swing_low_arr  = np.full(n, np.nan, dtype=np.float64)
-    for i in range(swing_n * 2, n):
-        window_slice = slice(i - swing_n * 2, i)
-        mid = i - swing_n
-        if high[mid] == np.max(high[window_slice]):
-            swing_high_arr[i] = high[mid]
-        if low[mid] == np.min(low[window_slice]):
-            swing_low_arr[i] = low[mid]
+    # Causal swing detection: vectorized via rolling — swing high at mid of window
+    # confirmed only after swing_n bars have passed (no center lookahead).
+    _w = swing_n * 2
+    _high_s = pd.Series(high, dtype=np.float64)
+    _low_s  = pd.Series(low,  dtype=np.float64)
+    _roll_max = _high_s.rolling(_w).max().to_numpy()   # max of [i-_w+1 .. i]
+    _roll_min = _low_s.rolling(_w).min().to_numpy()
+    # mid bar = i - swing_n; confirmed at i = mid + swing_n
+    _mid_high = np.roll(high, swing_n)                 # high[i - swing_n]
+    _mid_low  = np.roll(low,  swing_n)
+    # mark positions where mid bar was the window max/min
+    swing_high_arr = np.where(_mid_high == _roll_max, _mid_high, np.nan).astype(np.float64)
+    swing_low_arr  = np.where(_mid_low  == _roll_min, _mid_low,  np.nan).astype(np.float64)
+    # first _w positions are unreliable
+    swing_high_arr[:_w] = np.nan
+    swing_low_arr[:_w]  = np.nan
 
-    pullback_valid = np.zeros(n, dtype=bool)
-    pullback_side  = np.full(n, "", dtype=object)
+    _pb_valid_nb = np.zeros(n, dtype=np.int8)
+    _pb_side_nb  = np.zeros(n, dtype=np.int8)
     pullback_level = np.full(n, np.nan, dtype=np.float64)
     pb_swing_high  = np.full(n, np.nan, dtype=np.float64)
     pb_swing_low   = np.full(n, np.nan, dtype=np.float64)
 
-    # Running confirmed swings (forward-filled, causal)
-    last_sh = np.nan   # last confirmed swing high
-    last_sl = np.nan   # last confirmed swing low
-    prev_sh = np.nan   # swing high before last_sh  (for HH check)
-    prev_sl = np.nan   # swing low before last_sl   (for LL check)
+    _pullback_state_loop(
+        n, _w,
+        atr, close,
+        swing_high_arr, swing_low_arr,
+        pullback_atr, retest_atr,
+        _pb_valid_nb, _pb_side_nb,
+        pullback_level, pb_swing_high, pb_swing_low,
+    )
 
-    for i in range(swing_n * 2, n):
-        # Update swing history
-        if not np.isnan(swing_high_arr[i]):
-            prev_sh = last_sh
-            last_sh = swing_high_arr[i]
-        if not np.isnan(swing_low_arr[i]):
-            prev_sl = last_sl
-            last_sl = swing_low_arr[i]
-
-        pb_swing_high[i] = last_sh
-        pb_swing_low[i]  = last_sl
-
-        atr_i = atr[i] if not np.isnan(atr[i]) and atr[i] > 1e-9 else np.nan
-        if np.isnan(atr_i):
-            continue
-
-        c = close[i]
-
-        # ── Uptrend pullback (buy): HH confirmed + HL forming ───────────────
-        # Uptrend: last_sh > prev_sh (Higher High made)
-        #          last_sl > prev_sl (Higher Low — uptrend structure intact)
-        # Entry: price has pulled back to within pullback_atr of last_sl (the HL)
-        if (
-            not np.isnan(last_sh)
-            and not np.isnan(prev_sh)
-            and not np.isnan(last_sl)
-            and not np.isnan(prev_sl)
-            and last_sh > prev_sh          # Higher High confirmed
-            and last_sl > prev_sl          # Higher Low confirmed
-            and c < last_sh                # price pulled back from HH (not chasing top)
-            and abs(c - last_sl) <= pullback_atr * atr_i   # within pullback zone of HL
-            and c > last_sl - retest_atr * atr_i           # not broken below HL (still valid)
-        ):
-            pullback_valid[i] = True
-            pullback_side[i]  = "buy"
-            pullback_level[i] = last_sl
-
-        # ── Downtrend pullback (sell): LL confirmed + LH forming ────────────
-        # Downtrend: last_sl < prev_sl (Lower Low made)
-        #            last_sh < prev_sh (Lower High — downtrend structure intact)
-        # Entry: price has pulled back up to within pullback_atr of last_sh (the LH)
-        elif (
-            not np.isnan(last_sl)
-            and not np.isnan(prev_sl)
-            and not np.isnan(last_sh)
-            and not np.isnan(prev_sh)
-            and last_sl < prev_sl          # Lower Low confirmed
-            and last_sh < prev_sh          # Lower High confirmed
-            and c > last_sl                # price pulled back from LL (not chasing bottom)
-            and abs(c - last_sh) <= pullback_atr * atr_i   # within pullback zone of LH
-            and c < last_sh + retest_atr * atr_i           # not broken above LH (still valid)
-        ):
-            pullback_valid[i] = True
-            pullback_side[i]  = "sell"
-            pullback_level[i] = last_sh
+    _side_map = {0: "", 1: "buy", -1: "sell"}
+    pullback_side = np.array([_side_map[int(v)] for v in _pb_side_nb], dtype=object)
 
     result = pd.DataFrame(index=df.index)
-    result["pullback_valid"]  = pullback_valid
+    result["pullback_valid"]  = _pb_valid_nb.astype(bool)
     result["pullback_side"]   = pullback_side
     result["pullback_level"]  = pullback_level
     result["pb_swing_high"]   = pb_swing_high
@@ -596,91 +775,26 @@ def detect_significant_range(
     swing_highs = np.where(high == roll_high, high, np.nan)
     swing_lows  = np.where(low  == roll_low,  low,  np.nan)
 
-    range_valid     = np.zeros(n, dtype=bool)
-    range_side_arr  = np.full(n, "", dtype=object)
-    range_support   = np.full(n, np.nan, dtype=np.float64)
-    range_resist    = np.full(n, np.nan, dtype=np.float64)
-    range_width_atr = np.zeros(n, dtype=np.float64)
+    _range_valid_nb  = np.zeros(n, dtype=np.int8)
+    _range_side_nb   = np.zeros(n, dtype=np.int8)
+    range_support    = np.full(n, np.nan, dtype=np.float64)
+    range_resist     = np.full(n, np.nan, dtype=np.float64)
+    range_width_atr  = np.zeros(n, dtype=np.float64)
 
-    for i in range(swing_n * 2, n):
-        atr_i = atr[i] if not np.isnan(atr[i]) and atr[i] > 1e-9 else np.nan
-        if np.isnan(atr_i):
-            continue
+    _range_loop(
+        n, swing_n * 2,
+        atr, close,
+        swing_highs.astype(np.float64), swing_lows.astype(np.float64),
+        lookback, min_width_atr, min_touches, boundary_atr,
+        _range_valid_nb, _range_side_nb,
+        range_support, range_resist, range_width_atr,
+    )
 
-        start = max(0, i - lookback)
-        c = close[i]
-
-        raw_highs = swing_highs[start:i]
-        raw_lows  = swing_lows[start:i]
-        vh = raw_highs[~np.isnan(raw_highs)]
-        vl = raw_lows[~np.isnan(raw_lows)]
-
-        if len(vh) == 0 or len(vl) == 0:
-            continue
-
-        merge_tol = atr_i * 0.5
-
-        # Cluster resistance levels
-        resist_zones: list[list] = []   # [level, touch_count]
-        for lvl in vh:
-            placed = False
-            for z in resist_zones:
-                if abs(lvl - z[0]) <= merge_tol:
-                    z[0] = (z[0] * z[1] + lvl) / (z[1] + 1)
-                    z[1] += 1
-                    placed = True
-                    break
-            if not placed:
-                resist_zones.append([float(lvl), 1])
-
-        # Cluster support levels
-        support_zones: list[list] = []
-        for lvl in vl:
-            placed = False
-            for z in support_zones:
-                if abs(lvl - z[0]) <= merge_tol:
-                    z[0] = (z[0] * z[1] + lvl) / (z[1] + 1)
-                    z[1] += 1
-                    placed = True
-                    break
-            if not placed:
-                support_zones.append([float(lvl), 1])
-
-        # Find nearest qualified resistance above close
-        above = [(z[0], z[1]) for z in resist_zones if z[0] > c and z[1] >= min_touches]
-        if not above:
-            continue
-        nr_lvl = min(above, key=lambda x: x[0])[0]
-
-        # Find nearest qualified support below close
-        below = [(z[0], z[1]) for z in support_zones if z[0] < c and z[1] >= min_touches]
-        if not below:
-            continue
-        ns_lvl = max(below, key=lambda x: x[0])[0]
-
-        # Condition 3: range must be wide enough
-        width_atr = (nr_lvl - ns_lvl) / atr_i
-        if width_atr < min_width_atr:
-            continue
-
-        # Condition 4: price must be near a boundary (not in the middle)
-        near_resist  = (nr_lvl - c) <= boundary_atr * atr_i
-        near_support = (c - ns_lvl) <= boundary_atr * atr_i
-
-        if not (near_resist or near_support):
-            continue
-
-        range_valid[i]     = True
-        range_support[i]   = ns_lvl
-        range_resist[i]    = nr_lvl
-        range_width_atr[i] = width_atr
-        if near_support:
-            range_side_arr[i] = "buy"
-        else:
-            range_side_arr[i] = "sell"
+    _side_map = {0: "", 1: "buy", -1: "sell"}
+    range_side_arr = np.array([_side_map[int(v)] for v in _range_side_nb], dtype=object)
 
     result = pd.DataFrame(index=df.index)
-    result["range_valid"]     = range_valid
+    result["range_valid"]     = _range_valid_nb.astype(bool)
     result["range_side"]      = range_side_arr
     result["range_support"]   = range_support
     result["range_resist"]    = range_resist
@@ -783,3 +897,25 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     out[float_cols] = out[float_cols].astype("float32")
 
     return out
+
+
+def _warmup_numba() -> None:
+    """Pre-compile numba JIT functions with a tiny synthetic dataframe."""
+    if not _NUMBA:
+        return
+    _n = 30
+    _rng = np.random.default_rng(0)
+    _df = pd.DataFrame({
+        "open":   _rng.uniform(1.0, 1.1, _n),
+        "high":   _rng.uniform(1.1, 1.2, _n),
+        "low":    _rng.uniform(0.9, 1.0, _n),
+        "close":  _rng.uniform(1.0, 1.1, _n),
+        "volume": _rng.uniform(100, 1000, _n),
+    })
+    detect_sr_zones(_df)
+    detect_significant_range(_df)
+    detect_trending_pullback(_df)
+
+
+# Trigger JIT compilation at import time (pays ~2s once per process).
+_warmup_numba()

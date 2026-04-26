@@ -142,7 +142,7 @@ def _gru_artifact_exists() -> bool:
 
 
 def _regime_artifact_exists() -> bool:
-    return _path_has_artifact(os.path.join(WEIGHTS_DIR, "regime_classifier.pkl"))
+    return _htf_regime_artifact_exists() and _ltf_regime_artifact_exists()
 
 
 def _htf_regime_artifact_exists() -> bool:
@@ -1182,8 +1182,17 @@ def validate_only() -> dict:
 
     try:
         from models.regime_classifier import RegimeClassifier
-        rc = RegimeClassifier()
-        results["regime"] = {"is_trained": rc.is_trained}
+        rc_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
+        rc_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
+        results["regime_htf"] = {"is_trained": rc_htf.is_trained}
+        results["regime_ltf"] = {"is_trained": rc_ltf.is_trained}
+        results["regime"] = {
+            "is_trained": bool(rc_htf.is_trained and rc_ltf.is_trained),
+            "components": {
+                "htf": bool(rc_htf.is_trained),
+                "ltf": bool(rc_ltf.is_trained),
+            },
+        }
     except Exception as exc:
         results["regime"] = {"error": str(exc)}
 

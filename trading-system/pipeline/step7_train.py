@@ -301,25 +301,33 @@ def collect_model_artifacts():
         logger.warning("Canonical weights dir not found: %s", weights_dir)
         return
 
-    found, missing = [], []
+    found, missing_required, missing_deferred = [], [], []
     checks = {
-        "gru_lstm":             weights_dir / "gru_lstm" / "model.pt",
-        "regime_classifier":    weights_dir / "regime_classifier.pkl",
-        "quality_scorer":       weights_dir / "quality_scorer.pkl",
-        "rl_ppo":               weights_dir / "rl_ppo" / "model.zip",
+        "gru_lstm":       (weights_dir / "gru_lstm" / "model.pt", True),
+        "regime_htf":     (weights_dir / "regime_htf.pkl", True),
+        "regime_ltf":     (weights_dir / "regime_ltf.pkl", True),
+        "quality_scorer": (weights_dir / "quality_scorer.pkl", False),
+        "rl_ppo":         (weights_dir / "rl_ppo" / "model.zip", False),
     }
-    for name, path in checks.items():
+    for name, (path, required_now) in checks.items():
         if path.exists():
             found.append(name)
             logger.info("  [OK] %s → %s", name, path)
         else:
-            missing.append(name)
-            logger.warning("  [MISSING] %s → %s", name, path)
+            if required_now:
+                missing_required.append(name)
+                logger.warning("  [MISSING] %s → %s", name, path)
+            else:
+                missing_deferred.append(name)
+                logger.info("  [DEFERRED] %s → %s (expected after Round 1)", name, path)
 
-    if missing:
-        logger.warning("Missing weights: %s — run retrain_incremental.py for each", missing)
+    if missing_required:
+        logger.warning("Missing required weights: %s — run retrain_incremental.py for each", missing_required)
     else:
-        logger.info("All weights present in canonical location: %s", weights_dir)
+        logger.info("All Step 7a weights present in canonical location: %s", weights_dir)
+
+    if missing_deferred:
+        logger.info("Deferred until post-Round-1 journal retrain: %s", missing_deferred)
 
 
 def collect_metrics():

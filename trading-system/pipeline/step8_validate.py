@@ -112,9 +112,9 @@ def validate_regime_classifier(df_test: pd.DataFrame) -> dict:
         from models.regime_classifier import RegimeClassifier
         from indicators.market_structure import compute_all
 
-        model = RegimeClassifier()
+        model = RegimeClassifier(timeframe="4H", mode="htf_bias")
         if not model.is_trained:
-            return {"status": "untrained"}
+            return {"status": "untrained", "component": "regime_htf"}
 
         df = compute_all(df_test.copy())
         # Sample 1000 bars

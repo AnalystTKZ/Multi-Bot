@@ -391,10 +391,7 @@ def _load_csv(symbol: str, timeframe: str = "15M", start: str | None = None, end
         ohlcv = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
         df = df[ohlcv].dropna(subset=["open", "high", "low", "close"])
 
-        logger.info("Loaded parquet %s/%s: %d bars (%s → %s)",
-                    symbol, tf_upper, len(df),
-                    df.index.min().date() if len(df) else "?",
-                    df.index.max().date() if len(df) else "?")
+        logger.debug("Loaded parquet %s/%s: %d bars", symbol, tf_upper, len(df))
         return df
     except Exception as exc:
         logger.error("Failed to load parquet %s/%s: %s", symbol, tf_upper, exc)
@@ -427,8 +424,14 @@ def _load_htf_context(symbol: str, start: str, end: str) -> dict:
     for MTF feature computation (regime adx/ema_stack/atr/bb per TF, GRU cross-TF features).
 
     All filtered to [start, end] and indexed by UTC timestamp for asof lookup.
+
+    5M uses a lightweight indicator set (RSI + EMA + ATR only) — compute_all on
+    700k 5M bars × 11 symbols × BOS/sweep/range indicators is the single biggest
+    backtest bottleneck. The only 5M features consumed downstream are mtf_5m_rsi
+    and mtf_5m_ema21_dist, which need only RSI-14, EMA-21, and ATR-14.
     """
     import time as _time
+    from indicators.market_structure import compute_atr, compute_ema, compute_rsi, compute_adx
     out = {}
     for tf in ("5M", "1H", "4H", "1D"):
         df = _load_csv(symbol, tf, start=start, end=end)
@@ -436,13 +439,71 @@ def _load_htf_context(symbol: str, start: str, end: str) -> dict:
             out[tf] = pd.DataFrame()
             continue
         _t = _time.perf_counter()
-        df = _compute_indicators(df)
-        logger.info("  HTF %s/%s: indicators %.1fs (%d bars)", symbol, tf, _time.perf_counter() - _t, len(df))
-        # Pre-compute 1H EMA21 slope: positive = rising, negative = falling
+        if tf == "5M":
+            # Lightweight: only what _build_sequence_df and _build_feature_matrix
+            # read from the 5M frame. Skipping compute_all (BOS, sweeps, order blocks,
+            # S/R zones, range detection, pullback detection) saves ~30–60s per symbol
+            # on 700k-bar 5M frames × 11 symbols = the dominant backtest bottleneck.
+            from indicators.market_structure import (
+                compute_bollinger_bands, compute_ema_stack_score,
+            )
+            df = df.copy()
+            df["atr_14"]   = compute_atr(df, 14)
+            df["ema_21"]   = compute_ema(df["close"], 21)
+            df["rsi_14"]   = compute_rsi(df["close"], 14)
+            df["adx_14"]   = compute_adx(df, 14)
+            df["ema_stack"] = compute_ema_stack_score(df)
+            _bu, _bm, _bl  = compute_bollinger_bands(df["close"])
+            df["bb_width"]  = (_bu - _bl) / (_bm + 1e-9)
+        else:
+            df = _compute_indicators(df)
+        logger.debug("  HTF %s/%s: indicators %.1fs (%d bars)", symbol, tf, _time.perf_counter() - _t, len(df))
         if tf == "1H" and "ema_21" in df.columns:
-            df["ema_21_slope"] = df["ema_21"].diff(3)   # change over 3 bars (3H)
+            df["ema_21_slope"] = df["ema_21"].diff(3)
         out[tf] = df
     return out
+
+
+def _prepare_symbol_context(
+    trader_id: str,
+    symbol: str,
+    start: str,
+    end: str,
+    start_ts: pd.Timestamp | None,
+) -> tuple[str, pd.DataFrame | None, dict | None, int | None]:
+    import time as _time
+
+    _t_sym = _time.perf_counter()
+    df = _load_csv(symbol, "15M", start=start, end=end)
+    if len(df) < 200:
+        logger.warning("Skipping %s/%s — only %d bars", trader_id, symbol, len(df))
+        return symbol, None, None, None
+
+    _t_ind = _time.perf_counter()
+    df = _compute_indicators(df)
+
+    first_live_idx = int(df.index.searchsorted(start_ts, side="left")) if start_ts is not None else 0
+    if len(df) - first_live_idx < 200:
+        logger.warning(
+            "Skipping %s/%s — only %d bars inside requested window",
+            trader_id, symbol, max(0, len(df) - first_live_idx),
+        )
+        return symbol, None, None, None
+
+    _t_htf = _time.perf_counter()
+    htf = _load_htf_context(symbol, start, end)
+
+    start_idx = max(200, first_live_idx)
+    logger.info(
+        "  %s DONE: %.1fs total | %d bars (%s → %s) tradable from idx=%d",
+        symbol,
+        _time.perf_counter() - _t_sym,
+        len(df),
+        df.index[0].date(),
+        df.index[-1].date(),
+        start_idx,
+    )
+    return symbol, df, htf, start_idx
 
 
 def _build_htf_aligned(base_index: pd.DatetimeIndex, htf: dict) -> dict:
@@ -853,8 +914,7 @@ def _precompute_ml_cache(
     if cache_file:
         cache = _load_ml_cache(cache_file, len(df))
         if cache is not None:
-            logger.info("ML cache restored for %s from %s (%.1fs)",
-                        symbol, os.path.basename(cache_file), _time.perf_counter() - _t0_cache)
+            logger.debug("ML cache restored for %s (%.1fs)", symbol, _time.perf_counter() - _t0_cache)
             return cache
 
     gru_model    = ml_models.get("gru_lstm")
@@ -899,8 +959,6 @@ def _precompute_ml_cache(
             if _do_4h:
                 _t_fm = _time.perf_counter()
                 _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
-                logger.info("ML cache [%s]: 4H feature matrix %.1fs (%d bars)",
-                            symbol, _time.perf_counter() - _t_fm, len(_df_src_4h))
         except Exception as _exc:
             logger.error("ML cache: regime 4H feature build failed %s: %s", symbol, _exc)
         try:
@@ -911,8 +969,6 @@ def _precompute_ml_cache(
                 else:
                     _t_fm = _time.perf_counter()
                     _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
-                    logger.info("ML cache [%s]: 1H feature matrix %.1fs (%d bars)",
-                                symbol, _time.perf_counter() - _t_fm, len(_df_src_1h))
         except Exception as _exc:
             logger.error("ML cache: regime 1H feature build failed %s: %s", symbol, _exc)
 
@@ -946,43 +1002,30 @@ def _precompute_ml_cache(
         if _do_4h and _X_4h is not None:
             _t_ri = _time.perf_counter()
             _r4h, _c4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
-            logger.info("ML cache [%s]: HTF regime infer %.1fs", symbol, _time.perf_counter() - _t_ri)
             del _X_4h
             if _r4h is not None:
                 if _df_src_4h is not df:
                     _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
                     _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
-                    logger.info("ML cache: HTF regime done %s (%d 4H bars → %d 15M bars)",
-                                symbol, len(_df_src_4h), n)
                 else:
                     _regime_htf_series, _regime_htf_conf = _r4h, _c4h
-                    logger.info("ML cache: HTF regime on 15M fallback for %s", symbol)
             gc.collect()
 
         if _do_1h and _X_1h is not None:
             _t_ri = _time.perf_counter()
             _r1h, _c1h = _infer_regime(regime_1h, _X_1h, _df_src_1h)
-            logger.info("ML cache [%s]: LTF regime infer %.1fs", symbol, _time.perf_counter() - _t_ri)
             del _X_1h
             if _r1h is not None:
                 if _df_src_1h is not df:
                     _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
                     _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
-                    logger.info("ML cache: LTF regime done %s (%d 1H bars → %d 15M bars)",
-                                symbol, len(_df_src_1h), n)
                 else:
                     _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
             gc.collect()
 
-        # Regime distribution diagnostic
-        if _regime_htf_series is not None:
-            from collections import Counter
-            logger.info("ML cache: 4H regime distribution %s: %s",
-                        symbol, dict(Counter(_HTF_REGIME_NAMES[np.clip(_regime_htf_series.values, 0, 2)])))
 
         # ── Build sequence features (with dual-regime context) ────────────────
         _t_sf = _time.perf_counter()
-        logger.info("ML cache: building sequence features for %s (%d bars)...", symbol, n)
         try:
             feat_df = fe._build_sequence_df(
                 df, htf, symbol=symbol,
@@ -994,7 +1037,6 @@ def _precompute_ml_cache(
             seq_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
             seq_arr = np.nan_to_num(seq_arr, nan=0.0, posinf=0.0, neginf=0.0)
             del feat_df
-            logger.info("ML cache [%s]: sequence features %.1fs", symbol, _time.perf_counter() - _t_sf)
         except Exception as exc:
             logger.error("ML cache: sequence feature build failed for %s: %s", symbol, exc)
             raise
@@ -1056,8 +1098,6 @@ def _precompute_ml_cache(
                     cache["p_bear"][bar_indices] = p_bear_arr
                     cache["expected_variance"][bar_indices] = var_vals.astype(np.float32, copy=False)
                     del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, entry_depth, vol_arr
-                    logger.info("ML cache [%s]: GRU batch inference %.1fs (%d bars)",
-                                symbol, _time.perf_counter() - _t_gru, n_valid)
             except Exception as exc:
                 logger.error("ML cache: GRU batch failed for %s: %s", symbol, exc)
                 del seq_arr
@@ -1077,19 +1117,6 @@ def _precompute_ml_cache(
         n_ltf = int(np.count_nonzero(cache["regime_ltf"] >= 0))
         logger.info("ML cache [%s]: DONE %.1fs — %d bars (gru=%d htf=%d ltf=%d)",
                     symbol, _time.perf_counter() - _t0_cache, n, n_gru, n_htf, n_ltf)
-
-        # Diagnostic: sample GRU output distribution so 0-trade causes are visible
-        _valid = ~np.isnan(cache["p_bull"])
-        if _valid.any():
-            _pb = cache["p_bull"][_valid][:5000]
-            _ev = cache["expected_variance"][_valid][:5000]
-            logger.info(
-                "ML cache GRU sample %s: p_bull mean=%.3f std=%.3f "
-                "pct_above_55=%.1f%% | variance mean=%.3f pct_above_80=%.1f%%",
-                symbol, _pb.mean(), _pb.std(),
-                100 * (_pb >= 0.55).mean(),
-                _ev.mean(), 100 * (_ev >= 0.80).mean(),
-            )
 
         if cache_file:
             try:
@@ -1307,31 +1334,41 @@ def _backtest_trader(
 
     _t_load_all = _time.perf_counter()
     logger.info("%s: loading %d symbols (15M + HTF indicators)...", trader_id, len(symbols))
-    for symbol in symbols:
-        _t_sym = _time.perf_counter()
-        df = _load_csv(symbol, "15M", start=start, end=end)
-        if len(df) < 200:
-            logger.warning("Skipping %s/%s — only %d bars", trader_id, symbol, len(df))
-            continue
-        _t_ind = _time.perf_counter()
-        df = _compute_indicators(df)
-        logger.info("  %s 15M indicators: %.1fs (%d bars)", symbol, _time.perf_counter() - _t_ind, len(df))
-        first_live_idx = int(df.index.searchsorted(start_ts, side="left")) if start_ts is not None else 0
-        if len(df) - first_live_idx < 200:
-            logger.warning(
-                "Skipping %s/%s — only %d bars inside requested window",
-                trader_id, symbol, max(0, len(df) - first_live_idx),
-            )
-            continue
-        symbol_dfs[symbol] = df
-        _t_htf = _time.perf_counter()
-        symbol_htf[symbol] = _load_htf_context(symbol, start, end)
-        logger.info("  %s HTF context: %.1fs", symbol, _time.perf_counter() - _t_htf)
-        symbol_start_idx[symbol] = max(200, first_live_idx)
-        logger.info("  %s DONE: %.1fs total | %d bars (%s → %s) tradable from idx=%d",
-                    symbol, _time.perf_counter() - _t_sym,
-                    len(df), df.index[0].date(), df.index[-1].date(),
-                    symbol_start_idx[symbol])
+    _load_workers = max(1, min(len(symbols), 4, int(os.getenv("MAX_PARALLEL_SYMBOL_LOADS", "2"))))
+    if _load_workers == 1:
+        for symbol in symbols:
+            _, df, htf, start_idx = _prepare_symbol_context(trader_id, symbol, start, end, start_ts)
+            if df is None or htf is None or start_idx is None:
+                continue
+            symbol_dfs[symbol] = df
+            symbol_htf[symbol] = htf
+            symbol_start_idx[symbol] = start_idx
+    else:
+        logger.info("%s: symbol prep running with %d worker(s)", trader_id, _load_workers)
+        prepared: dict[str, tuple[pd.DataFrame, dict, int]] = {}
+        with ThreadPoolExecutor(max_workers=_load_workers) as ex:
+            futures = {
+                ex.submit(_prepare_symbol_context, trader_id, symbol, start, end, start_ts): symbol
+                for symbol in symbols
+            }
+            for fut in as_completed(futures):
+                symbol = futures[fut]
+                try:
+                    _, df, htf, start_idx = fut.result()
+                except Exception as exc:
+                    logger.warning("Skipping %s/%s — prep failed: %s", trader_id, symbol, exc)
+                    continue
+                if df is None or htf is None or start_idx is None:
+                    continue
+                prepared[symbol] = (df, htf, start_idx)
+        for symbol in symbols:
+            payload = prepared.get(symbol)
+            if payload is None:
+                continue
+            df, htf, start_idx = payload
+            symbol_dfs[symbol] = df
+            symbol_htf[symbol] = htf
+            symbol_start_idx[symbol] = start_idx
     logger.info("%s: all symbols loaded in %.1fs", trader_id, _time.perf_counter() - _t_load_all)
 
     if not symbol_dfs:
@@ -1367,7 +1404,6 @@ def _backtest_trader(
         for sym in hits:
             symbol_ml_cache[sym] = shared_ml_cache[sym]
         if missing:
-            logger.info("%s: ML cache miss for %d symbols — building with %d worker(s)", trader_id, len(missing), _cache_workers)
             with ThreadPoolExecutor(max_workers=_cache_workers) as ex:
                 futures = {ex.submit(_build_cache_sym, sym): sym for sym in missing}
                 for fut in as_completed(futures):
@@ -1379,8 +1415,7 @@ def _backtest_trader(
                     except Exception as exc:
                         logger.warning("ML cache build failed for %s: %s", sym, exc)
     elif ml_models:
-        logger.info("%s: pre-computing ML inference cache for %d symbols with %d worker(s)...",
-                    trader_id, len(symbol_dfs), _cache_workers)
+        logger.info("%s: building ML cache for %d symbols...", trader_id, len(symbol_dfs))
         with ThreadPoolExecutor(max_workers=_cache_workers) as ex:
             futures = {ex.submit(_build_cache_sym, sym): sym for sym in symbol_dfs}
             for fut in as_completed(futures):
@@ -1454,7 +1489,6 @@ def _backtest_trader(
             # Single-sample GPU forward pass costs ~500 µs of kernel launch overhead.
             # CPU copy of the 20→128→64→32→1 MLP runs in ~3–5 µs — 100× faster.
             _qs_infer = _qs_model.get_cpu_inference_fn()
-            logger.info("QualityScorer: using CPU inference path for backtest loop (fast single-sample)")
         except Exception as _e:
             logger.warning("QualityScorer CPU path unavailable (%s) — falling back to GPU predict()", _e)
             _qs_infer = None
@@ -1481,7 +1515,7 @@ def _backtest_trader(
             "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0}
     _loop_t0 = _time.perf_counter()
     _loop_last_log = _loop_t0
-    _LOOP_LOG_INTERVAL = 50_000  # log progress every 50k bars
+    _LOOP_LOG_INTERVAL = 200_000  # log progress every 200k bars
 
     for ts_ns, symbol, i in bar_iter:
         if halted:
@@ -1839,7 +1873,7 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
     if n_gpu > 0:
         gpu_id = worker_idx % n_gpu
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        logger.info("Worker %d pinned to GPU %d", worker_idx, gpu_id)
+        logger.debug("Worker %d pinned to GPU %d", worker_idx, gpu_id)
 
     # Each worker loads its own model copies — avoids pickling GPU tensors
     worker_ml_models: dict = {}
@@ -1849,9 +1883,15 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
             from models.regime_classifier import RegimeClassifier
             from models.quality_scorer import QualityScorer
             from models.gru_lstm_predictor import GRULSTMPredictor
-            r = RegimeClassifier()
-            if _model_ready(r):
-                worker_ml_models["regime"] = r
+            r_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
+            if _model_ready(r_htf):
+                worker_ml_models["regime_htf"] = r_htf
+                worker_ml_models["regime_4h"] = r_htf
+                worker_ml_models["regime"] = r_htf
+            r_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
+            if _model_ready(r_ltf):
+                worker_ml_models["regime_ltf"] = r_ltf
+                worker_ml_models["regime_1h"] = r_ltf
             q = QualityScorer()
             if _model_ready(q):
                 worker_ml_models["quality"] = q
@@ -1962,49 +2002,42 @@ def main():
 
         try:
             from models.regime_classifier import RegimeClassifier
-            # Load HTF bias classifier (regime_htf.pkl) — 3-class BIAS_UP/DOWN/NEUTRAL
             regime_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
             if _model_ready(regime_htf):
                 ml_models["regime_htf"] = regime_htf
-                ml_models["regime_4h"] = regime_htf   # legacy alias
-                logger.info("  [OK] RegimeClassifier[HTF bias 3-class] loaded")
+                ml_models["regime_4h"] = regime_htf
             else:
-                logger.warning("  [SKIP] RegimeClassifier[HTF] unavailable (weights missing)")
-            # Load LTF behaviour classifier (regime_ltf.pkl) — 4-class TRENDING/RANGING/CONSOLIDATING/VOLATILE
+                logger.warning("RegimeClassifier[HTF] unavailable (weights missing)")
             regime_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
             if _model_ready(regime_ltf):
                 ml_models["regime_ltf"] = regime_ltf
-                ml_models["regime_1h"] = regime_ltf   # legacy alias
-                logger.info("  [OK] RegimeClassifier[LTF behaviour 4-class] loaded")
+                ml_models["regime_1h"] = regime_ltf
             else:
-                logger.warning("  [SKIP] RegimeClassifier[LTF] unavailable (weights missing)")
-            # Legacy key for backwards compat (points to HTF)
+                logger.warning("RegimeClassifier[LTF] unavailable (weights missing)")
             if "regime_htf" in ml_models:
                 ml_models["regime"] = ml_models["regime_htf"]
         except Exception as exc:
-            logger.warning("  [SKIP] RegimeClassifier load failed: %s", exc)
+            logger.warning("RegimeClassifier load failed: %s", exc)
 
         try:
             from models.quality_scorer import QualityScorer
             qs = QualityScorer()
             if _model_ready(qs):
                 ml_models["quality"] = qs
-                logger.info("  [OK] QualityScorer loaded")
             else:
-                logger.warning("  [SKIP] QualityScorer unavailable (weights missing or load failed)")
+                logger.warning("QualityScorer unavailable (weights missing or load failed)")
         except Exception as exc:
-            logger.warning("  [SKIP] QualityScorer load failed: %s", exc)
+            logger.warning("QualityScorer load failed: %s", exc)
 
         try:
             from models.gru_lstm_predictor import GRULSTMPredictor
             gru = GRULSTMPredictor()
             if _model_ready(gru):
                 ml_models["gru_lstm"] = gru
-                logger.info("  [OK] GRU-LSTM loaded")
             else:
-                logger.warning("  [SKIP] GRU-LSTM unavailable (weights missing or load failed)")
+                logger.warning("GRU-LSTM unavailable (weights missing or load failed)")
         except Exception as exc:
-            logger.warning("  [SKIP] GRU-LSTM load failed: %s", exc)
+            logger.warning("GRU-LSTM load failed: %s", exc)
 
         if not ml_models:
             raise RuntimeError(
