@@ -828,13 +828,17 @@ def _precompute_ml_cache(
     Speedup on T4: ~40–80× vs per-bar inference for a 50k-bar symbol.
     Falls back to empty dict (triggering per-bar inference) on any error.
     """
+    import time as _time
+    _t0_cache = _time.perf_counter()
+
     if not ml_models:
         return {}
 
     if cache_file:
         cache = _load_ml_cache(cache_file, len(df))
         if cache is not None:
-            logger.info("ML cache restored for %s from %s", symbol, os.path.basename(cache_file))
+            logger.info("ML cache restored for %s from %s (%.1fs)",
+                        symbol, os.path.basename(cache_file), _time.perf_counter() - _t0_cache)
             return cache
 
     gru_model    = ml_models.get("gru_lstm")
@@ -877,7 +881,10 @@ def _precompute_ml_cache(
         _X_4h = _X_1h = None
         try:
             if _do_4h:
+                _t_fm = _time.perf_counter()
                 _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
+                logger.info("ML cache [%s]: 4H feature matrix %.1fs (%d bars)",
+                            symbol, _time.perf_counter() - _t_fm, len(_df_src_4h))
         except Exception as _exc:
             logger.error("ML cache: regime 4H feature build failed %s: %s", symbol, _exc)
         try:
@@ -886,7 +893,10 @@ def _precompute_ml_cache(
                 if _do_4h and _df_src_1h is _df_src_4h and _X_4h is not None:
                     _X_1h = _X_4h
                 else:
+                    _t_fm = _time.perf_counter()
                     _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
+                    logger.info("ML cache [%s]: 1H feature matrix %.1fs (%d bars)",
+                                symbol, _time.perf_counter() - _t_fm, len(_df_src_1h))
         except Exception as _exc:
             logger.error("ML cache: regime 1H feature build failed %s: %s", symbol, _exc)
 
@@ -918,7 +928,9 @@ def _precompute_ml_cache(
                 return None, None
 
         if _do_4h and _X_4h is not None:
+            _t_ri = _time.perf_counter()
             _r4h, _c4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
+            logger.info("ML cache [%s]: HTF regime infer %.1fs", symbol, _time.perf_counter() - _t_ri)
             del _X_4h
             if _r4h is not None:
                 if _df_src_4h is not df:
@@ -932,7 +944,9 @@ def _precompute_ml_cache(
             gc.collect()
 
         if _do_1h and _X_1h is not None:
+            _t_ri = _time.perf_counter()
             _r1h, _c1h = _infer_regime(regime_1h, _X_1h, _df_src_1h)
+            logger.info("ML cache [%s]: LTF regime infer %.1fs", symbol, _time.perf_counter() - _t_ri)
             del _X_1h
             if _r1h is not None:
                 if _df_src_1h is not df:
@@ -951,6 +965,7 @@ def _precompute_ml_cache(
                         symbol, dict(Counter(_HTF_REGIME_NAMES[np.clip(_regime_htf_series.values, 0, 2)])))
 
         # ── Build sequence features (with dual-regime context) ────────────────
+        _t_sf = _time.perf_counter()
         logger.info("ML cache: building sequence features for %s (%d bars)...", symbol, n)
         try:
             feat_df = fe._build_sequence_df(
@@ -963,11 +978,13 @@ def _precompute_ml_cache(
             seq_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
             seq_arr = np.nan_to_num(seq_arr, nan=0.0, posinf=0.0, neginf=0.0)
             del feat_df
+            logger.info("ML cache [%s]: sequence features %.1fs", symbol, _time.perf_counter() - _t_sf)
         except Exception as exc:
             logger.error("ML cache: sequence feature build failed for %s: %s", symbol, exc)
             raise
 
         # ── Batched GRU inference ──────────────────────────────────────────────
+        _t_gru = _time.perf_counter()
         cache = {
             "p_bull": np.full(n, np.nan, dtype=np.float32),
             "p_bear": np.full(n, np.nan, dtype=np.float32),
@@ -1023,7 +1040,8 @@ def _precompute_ml_cache(
                     cache["p_bear"][bar_indices] = p_bear_arr
                     cache["expected_variance"][bar_indices] = var_vals.astype(np.float32, copy=False)
                     del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, entry_depth, vol_arr
-                    logger.info("ML cache: GRU batch inference done for %s (%d bars)", symbol, n_valid)
+                    logger.info("ML cache [%s]: GRU batch inference %.1fs (%d bars)",
+                                symbol, _time.perf_counter() - _t_gru, n_valid)
             except Exception as exc:
                 logger.error("ML cache: GRU batch failed for %s: %s", symbol, exc)
                 del seq_arr
@@ -1041,8 +1059,8 @@ def _precompute_ml_cache(
         n_gru = int(np.count_nonzero(~np.isnan(cache["p_bull"])))
         n_htf = int(np.count_nonzero(cache["regime"] >= 0))
         n_ltf = int(np.count_nonzero(cache["regime_ltf"] >= 0))
-        logger.info("ML cache: %d bars cached for %s (gru=%d htf_regime=%d ltf_regime=%d)",
-                    n, symbol, n_gru, n_htf, n_ltf)
+        logger.info("ML cache [%s]: DONE %.1fs — %d bars (gru=%d htf=%d ltf=%d)",
+                    symbol, _time.perf_counter() - _t0_cache, n, n_gru, n_htf, n_ltf)
 
         # Diagnostic: sample GRU output distribution so 0-trade causes are visible
         _valid = ~np.isnan(cache["p_bull"])
@@ -1306,7 +1324,9 @@ def _backtest_trader(
     # and training dataset — causing OOM (rc=-9). The inner 2-thread regime
     # feature-matrix parallelism inside _precompute_ml_cache is preserved.
     symbol_ml_cache: dict[str, dict[str, np.ndarray]] = {}
-    _cache_workers = max(1, min(2, int(os.getenv("MAX_PARALLEL_CACHE_BUILDS", "2"))))
+    # 4 CPUs available; BLAS/numpy threads already capped at 1–4 per worker via env vars.
+    # 2 was conservative to avoid OOM, but with OMP/MKL capped each worker stays ~2–3 GB.
+    _cache_workers = max(1, min(4, int(os.getenv("MAX_PARALLEL_CACHE_BUILDS", "4"))))
 
     def _build_cache_sym(sym):
         cache_file = _ml_cache_file(sym, start, end, ml_models or {})
@@ -1396,11 +1416,20 @@ def _backtest_trader(
     recent_trade_bars: dict[str, deque[int]] = {s: deque() for s in symbol_dfs}
 
     # Pre-instantiate QualityScorer helper (avoid per-signal construction cost)
-    _qs_fe = None
+    _qs_fe    = None
     _qs_model = (ml_models or {}).get("quality") if ml_models else None
+    _qs_infer = None  # fast CPU inference fn: (feat_array) -> (ev, quality_score)
     if _qs_model is not None:
         from services.feature_engine import FeatureEngine, QUALITY_FEATURES
         _qs_fe = FeatureEngine()
+        try:
+            # Single-sample GPU forward pass costs ~500 µs of kernel launch overhead.
+            # CPU copy of the 20→128→64→32→1 MLP runs in ~3–5 µs — 100× faster.
+            _qs_infer = _qs_model.get_cpu_inference_fn()
+            logger.info("QualityScorer: using CPU inference path for backtest loop (fast single-sample)")
+        except Exception as _e:
+            logger.warning("QualityScorer CPU path unavailable (%s) — falling back to GPU predict()", _e)
+            _qs_infer = None
 
     # Hoist env-var reads outside the 473k-bar loop — os.getenv does a dict lookup
     # + string compare on every call; at 473k bars this adds measurable overhead.
@@ -1418,15 +1447,30 @@ def _backtest_trader(
     _cfg_rr_default       = float(os.getenv("RR_DEFAULT",                "2.0"))
 
     # ── Main loop ─────────────────────────────────────────────────────────────
+    import time as _time
     halted = False  # portfolio drawdown halt
     _dbg = {"total": 0, "dd_halt": 0, "daily": 0, "session": 0,
             "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0}
+    _loop_t0 = _time.perf_counter()
+    _loop_last_log = _loop_t0
+    _LOOP_LOG_INTERVAL = 50_000  # log progress every 50k bars
 
     for ts_ns, symbol, i in bar_iter:
         if halted:
             break
 
         _dbg["total"] += 1
+        if _dbg["total"] % _LOOP_LOG_INTERVAL == 0:
+            _now = _time.perf_counter()
+            _rate = _LOOP_LOG_INTERVAL / max(0.01, _now - _loop_last_log)
+            logger.info(
+                "%s loop progress: %d bars | %.0f bars/s | trades=%d | "
+                "session_skip=%d quality_block=%d no_signal=%d",
+                trader_id, _dbg["total"], _rate,
+                len(trades),
+                _dbg["session"], _dbg["quality_block"], _dbg["no_signal"],
+            )
+            _loop_last_log = _now
         df  = symbol_dfs[symbol]
         dt  = pd.Timestamp(ts_ns, tz="UTC")
 
@@ -1573,12 +1617,16 @@ def _backtest_trader(
             _qs_preds.setdefault("regime_duration", float(bar.get("regime_duration", 0.5)))
             _qs_preds.setdefault("vol_slope", float(bar.get("vol_slope_seq", 0.0)))
             _qs_preds.setdefault("volume_ratio", float(bar.get("volume_ratio", 1.0)))
-            _qs_feats  = _qs_fe.get_quality_features(_sig_ctx, _qs_preds, bar)
-            _qs_dict   = dict(zip(QUALITY_FEATURES, _qs_feats))
-            _qs_result = _qs_model.predict(_qs_dict)
-            _ev = float(_qs_result["ev"])
+            _qs_feats = _qs_fe.get_quality_features(_sig_ctx, _qs_preds, bar)
+            if _qs_infer is not None:
+                # CPU path: ~3–5 µs vs ~500 µs GPU kernel launch for batch=1
+                _ev, _qs = _qs_infer(_qs_feats)
+            else:
+                _qs_dict   = dict(zip(QUALITY_FEATURES, _qs_feats))
+                _qs_result = _qs_model.predict(_qs_dict)
+                _ev, _qs   = float(_qs_result["ev"]), float(_qs_result["quality_score"])
             ml_preds["ev"]            = _ev
-            ml_preds["quality_score"] = float(_qs_result["quality_score"])
+            ml_preds["quality_score"] = _qs
             # Block trades where predicted EV < threshold. 0.0 = only take trades the
             # model believes are positive EV. Set MIN_EV_THRESHOLD env var to override.
             # Previously defaulted to -1.0 (never blocks) — raised to 0.0 so the quality
@@ -1658,6 +1706,13 @@ def _backtest_trader(
         })
 
     # ─── Metrics ────────────────────────────────────────────────────────────
+    _loop_elapsed = _time.perf_counter() - _loop_t0
+    _total_bars = _dbg["total"]
+    logger.info(
+        "%s loop COMPLETE: %.1fs | %d bars | %.0f bars/s | %d trades",
+        trader_id, _loop_elapsed, _total_bars,
+        _total_bars / max(0.01, _loop_elapsed), len(trades),
+    )
     logger.info(
         "%s diagnostics — bars=%d session_skip=%d daily_skip=%d cooldown=%d "
         "density_suppressed=%d quality_blocked=%d no_signal=%d pm_reject=%d",

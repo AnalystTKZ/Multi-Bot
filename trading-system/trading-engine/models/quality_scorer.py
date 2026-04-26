@@ -156,6 +156,61 @@ class QualityScorer(BaseModel):
             logger.error("QualityScorer.predict failed: %s", exc)
             raise
 
+    def get_cpu_inference_fn(self):
+        """
+        Returns a fast CPU inference callable for single-sample use in tight loops.
+        Avoids GPU kernel launch overhead (~500 µs) for batch=1 forward passes.
+        The 20→128→64→32→1 MLP runs in ~3–5 µs on CPU vs ~500 µs GPU launch overhead.
+
+        Usage:
+            infer = qs_model.get_cpu_inference_fn()
+            ev, qs = infer(feat_array_20)   # feat_array_20: shape (20,) float32
+        """
+        import torch
+        if not self.is_trained or self._model is None:
+            raise ModelNotTrainedError("QualityScorer has no trained weights.")
+        _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+        _cpu_m = _raw.to("cpu").eval()
+        # Move back to GPU so training/batch inference still works
+        _raw.to(DEVICE)
+
+        def _infer(feat: np.ndarray) -> tuple:
+            arr = np.asarray(feat, dtype=np.float32).reshape(1, -1)
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            x = torch.from_numpy(arr)
+            with torch.no_grad():
+                ev_raw = _cpu_m(x)
+            ev = float(ev_raw.float().item())
+            qs = float(torch.sigmoid(ev_raw.float()).item())
+            return ev, float(np.clip(qs, 0.0, 1.0))
+
+        return _infer
+
+    def predict_batch(self, feature_matrix: np.ndarray) -> tuple:
+        """
+        Batch inference for multiple signals in one GPU forward pass.
+        feature_matrix: (N, n_features) float32 array, columns in QUALITY_FEATURES order.
+        Returns (ev_array, quality_score_array) each shape (N,) float32.
+        One GPU kernel launch instead of N — eliminates per-call launch overhead.
+        """
+        if not self.is_trained or self._model is None:
+            raise ModelNotTrainedError("QualityScorer has no trained weights.")
+        self.reload_if_updated()
+
+        import torch
+        arr = np.asarray(feature_matrix, dtype=np.float32)
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        x = torch.from_numpy(arr).to(DEVICE)
+
+        _infer_m = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+        _infer_m.eval()
+        with torch.no_grad():
+            with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
+                ev_raw = _infer_m(x)
+            ev_arr = ev_raw.float().squeeze(-1).cpu().numpy()
+            qs_arr = torch.sigmoid(ev_raw.float()).squeeze(-1).cpu().numpy()
+        return ev_arr.astype(np.float32), np.clip(qs_arr, 0.0, 1.0).astype(np.float32)
+
     # ── Labels ────────────────────────────────────────────────────────────────
 
     @staticmethod
