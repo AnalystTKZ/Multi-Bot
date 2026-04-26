@@ -36,12 +36,26 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("pipeline")
-
 BASE = Path(__file__).resolve().parent.parent
 PIPELINE_DIR = BASE / "pipeline"
 ENGINE_DIR   = BASE / "trading-engine"
+
+# ─── Pipeline log file (captures both pipeline and step subprocess output) ────
+_LOG_DIR  = BASE / "ml_training" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_RUN_TS   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+_LOG_FILE = _LOG_DIR / f"pipeline_{_RUN_TS}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(str(_LOG_FILE), mode="a", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("pipeline")
+logger.info("Pipeline log: %s", _LOG_FILE)
 
 # ─── Memory limit (4 GB virtual) ─────────────────────────────────────────────
 # Applied per subprocess — prevents OOM kills on constrained hardware.
@@ -214,7 +228,7 @@ def _done_summary(step_num: int) -> str:
 # ─── Step runner ──────────────────────────────────────────────────────────────
 
 def _build_env() -> dict:
-    """Build subprocess environment with correct PYTHONPATH."""
+    """Build subprocess environment with correct PYTHONPATH and CPU caps."""
     env = os.environ.copy()
     parts = [
         str(BASE),
@@ -226,14 +240,18 @@ def _build_env() -> dict:
         parts.append(existing)
     env["PYTHONPATH"] = os.pathsep.join(parts)
     env["PYTHONUNBUFFERED"] = "1"
-    # Conservative thread caps to reduce memory spikes in BLAS/numexpr/arrow
-    env.setdefault("OMP_NUM_THREADS", "1")
-    env.setdefault("OPENBLAS_NUM_THREADS", "1")
-    env.setdefault("MKL_NUM_THREADS", "1")
-    env.setdefault("NUMEXPR_NUM_THREADS", "1")
-    env.setdefault("VECLIB_MAXIMUM_THREADS", "1")
-    env.setdefault("ARROW_NUM_THREADS", "1")
-    env.setdefault("RAYON_NUM_THREADS", "1")
+    # Use all 4 available CPUs for numpy/BLAS/numexpr and torch.
+    # Previously set to 1 to guard against memory spikes, but that left 3 CPUs
+    # idle during feature engineering, GMM fitting, and regime dataset builds.
+    _n = "4"
+    env["OMP_NUM_THREADS"]          = _n
+    env["OPENBLAS_NUM_THREADS"]     = _n
+    env["MKL_NUM_THREADS"]          = _n
+    env["NUMEXPR_NUM_THREADS"]      = _n
+    env["VECLIB_MAXIMUM_THREADS"]   = _n
+    env["ARROW_NUM_THREADS"]        = _n
+    env["RAYON_NUM_THREADS"]        = _n
+    env.setdefault("RETRAIN_CPU_WORKERS", _n)
     return env
 
 
@@ -330,12 +348,19 @@ def run_step(step_num: int, force: bool = False) -> bool:
 
     t0 = time.time()
     try:
-        result = subprocess.run(
-            [sys.executable, str(script_path)],
-            cwd=str(BASE),
-            env=_build_env(),
-            check=False,
-        )
+        # Tee subprocess output to the pipeline log file so every step's
+        # timing/progress lines are captured alongside the pipeline log.
+        with open(str(_LOG_FILE), "a", encoding="utf-8") as _lf:
+            _lf.write(f"\n{'─'*64}\n  STEP {step_num} subprocess output\n{'─'*64}\n")
+            _lf.flush()
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                cwd=str(BASE),
+                env=_build_env(),
+                check=False,
+                stdout=_lf,
+                stderr=_lf,
+            )
         elapsed = time.time() - t0
 
         # GC after child exits to reclaim any shared pages

@@ -541,6 +541,8 @@ def retrain_gru(dry_run: bool = False) -> dict:
     one combined dataset — keeps GPU fed continuously, avoids 44 save/reload cycles.
     Locally: falls back to per-symbol loop to keep RAM usage low.
     """
+    import time as _time
+    _t0_gru = _time.perf_counter()
     logger.info("=== GRU-LSTM retrain (timeframes: %s) ===", GRU_TIMEFRAMES)
     from models.gru_lstm_predictor import GRULSTMPredictor
 
@@ -550,7 +552,9 @@ def retrain_gru(dry_run: bool = False) -> dict:
     samples_total = 0
 
     if not dry_run:
+        _t_macro = _time.perf_counter()
         _update_macro_correlations(symbols)
+        logger.info("GRU phase macro_correlations: %.1fs", _time.perf_counter() - _t_macro)
 
     # On Kaggle use combined multi-symbol training (30GB RAM available)
     if _ENV["on_kaggle"] and not dry_run:
@@ -609,6 +613,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
                     logger.info("Deleted stale GRU weights (%s) — full retrain from scratch", _stale_pt)
                 backup_done = True
 
+            _t_sym = _time.perf_counter()
             history = model.train(
                 df_train,
                 labels_train,
@@ -617,6 +622,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
                 symbol=sym,
                 df_htf=htf_train,
             )
+            logger.info("GRU phase train %s/%s: %.1fs", sym, tf, _time.perf_counter() - _t_sym)
             if history.get("error"):
                 logger.error("GRU-LSTM train failed on %s/%s: %s", sym, tf, history["error"])
                 log_retrain("gru_lstm", {
@@ -654,6 +660,8 @@ def retrain_gru(dry_run: bool = False) -> dict:
             del df, labels, df_train, labels_train
             import gc; gc.collect()
 
+    logger.info("GRU retrain total: %.1fs (%d combos, %d samples)",
+                _time.perf_counter() - _t0_gru, trained, samples_total)
     if dry_run:
         return {"dry_run": True, "combos": trained, "samples": samples_total}
     if trained == 0:
@@ -807,6 +815,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
     Both classifiers share the same REGIME_FEATURES contract (same feature matrix),
     so the same _build_feature_matrix() call produces valid input for both.
     """
+    import time as _time
+    _t0_regime = _time.perf_counter()
     logger.info("=== RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===")
     from models.regime_classifier import RegimeClassifier as _RC
     import gc as _gc
@@ -814,7 +824,9 @@ def retrain_regime(dry_run: bool = False) -> dict:
     symbols = _get_symbols("RETRAIN_SYMBOLS_REGIME", MAJOR_SYMBOLS)
 
     if not dry_run:
+        _t_macro = _time.perf_counter()
         _update_macro_correlations(symbols)
+        logger.info("Regime phase macro_correlations: %.1fs", _time.perf_counter() - _t_macro)
 
     # Fit per-group GMMs on 4H data for HTF bias — separate GMM for LTF on 1H data.
     logger.info("Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...")
@@ -829,22 +841,30 @@ def retrain_regime(dry_run: bool = False) -> dict:
             group_dfs_1h[_group_for_symbol(sym)].append(df_1h)
 
     group_gmms_htf: dict = {}
+    _t_gmm_htf = _time.perf_counter()
     for grp, dfs in group_dfs_4h.items():
         if dfs:
+            _t_grp = _time.perf_counter()
             gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="4H", mode="htf_bias")
             group_gmms_htf[grp] = (gmm, scaler, cluster_labels)
-            logger.info("Regime HTF GMM '%s' fitted on %d 4H dfs (3-class bias)", grp, len(dfs))
+            logger.info("Regime HTF GMM '%s' fitted on %d 4H dfs (3-class bias) in %.1fs",
+                        grp, len(dfs), _time.perf_counter() - _t_grp)
         else:
             logger.warning("Regime: no 4H data for group '%s'", grp)
+    logger.info("Regime phase GMM HTF total: %.1fs", _time.perf_counter() - _t_gmm_htf)
 
     group_gmms_ltf: dict = {}
+    _t_gmm_ltf = _time.perf_counter()
     for grp, dfs in group_dfs_1h.items():
         if dfs:
+            _t_grp = _time.perf_counter()
             gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="1H", mode="ltf_behaviour")
             group_gmms_ltf[grp] = (gmm, scaler, cluster_labels)
-            logger.info("Regime LTF GMM '%s' fitted on %d 1H dfs (4-class behaviour)", grp, len(dfs))
+            logger.info("Regime LTF GMM '%s' fitted on %d 1H dfs (4-class behaviour) in %.1fs",
+                        grp, len(dfs), _time.perf_counter() - _t_grp)
         else:
             logger.warning("Regime LTF: no 1H data for group '%s'", grp)
+    logger.info("Regime phase GMM LTF total: %.1fs", _time.perf_counter() - _t_gmm_ltf)
 
     # For backward compat, pass htf GMMs to _build_regime_dataset (which uses group_gmms)
     group_gmms = group_gmms_htf
@@ -856,15 +876,19 @@ def retrain_regime(dry_run: bool = False) -> dict:
 
     # ── HTF bias classifier (3-class) ────────────────────────────────────────
     logger.info("Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...")
+    _t_htf_ds = _time.perf_counter()
     X_4h, y_4h, sw_4h, n_4h = _build_regime_dataset(
         symbols, source_tf="4H", label_tf="4H",
         group_gmms=group_gmms_htf, dry_run=dry_run, mode="htf_bias",
     )
+    logger.info("Regime phase HTF dataset build: %.1fs (%d samples)", _time.perf_counter() - _t_htf_ds, n_4h)
     total_samples += n_4h
     if not dry_run and X_4h is not None:
         _backup_weights(os.path.join(WEIGHTS_DIR, "regime_htf.pkl"))
         model_htf = _RC(timeframe="4H", mode="htf_bias")
+        _t_htf_train = _time.perf_counter()
         res_4h = model_htf.train_on_arrays(X_4h, y_4h, sample_weight=sw_4h)
+        logger.info("Regime phase HTF train: %.1fs", _time.perf_counter() - _t_htf_train)
         del X_4h, y_4h, sw_4h; _gc.collect()
         if res_4h.get("error"):
             logger.error("Regime HTF training failed: %s", res_4h["error"])
@@ -879,15 +903,19 @@ def retrain_regime(dry_run: bool = False) -> dict:
 
     # ── LTF behaviour classifier (4-class) ───────────────────────────────────
     logger.info("Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...")
+    _t_ltf_ds = _time.perf_counter()
     X_1h, y_1h, sw_1h, n_1h = _build_regime_dataset(
         symbols, source_tf="1H", label_tf="1H",  # labels sourced from 1H directly (ltf_behaviour mode)
         group_gmms=group_gmms_ltf, dry_run=dry_run, mode="ltf_behaviour",
     )
+    logger.info("Regime phase LTF dataset build: %.1fs (%d samples)", _time.perf_counter() - _t_ltf_ds, n_1h)
     total_samples += n_1h
     if not dry_run and X_1h is not None:
         _backup_weights(os.path.join(WEIGHTS_DIR, "regime_ltf.pkl"))
         model_ltf = _RC(timeframe="1H", mode="ltf_behaviour")
+        _t_ltf_train = _time.perf_counter()
         res_1h = model_ltf.train_on_arrays(X_1h, y_1h, sample_weight=sw_1h)
+        logger.info("Regime phase LTF train: %.1fs", _time.perf_counter() - _t_ltf_train)
         del X_1h, y_1h, sw_1h; _gc.collect()
         if res_1h.get("error"):
             logger.error("Regime LTF training failed: %s", res_1h["error"])
@@ -900,6 +928,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
         if not _ltf_regime_artifact_exists():
             logger.error("Regime LTF weights were not created at regime_ltf.pkl")
 
+    logger.info("Regime retrain total: %.1fs (%d samples)", _time.perf_counter() - _t0_regime, total_samples)
     if dry_run:
         return {"dry_run": True, "samples": total_samples}  # n_4h + n_1h already accumulated
 
@@ -916,6 +945,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
 
 def retrain_quality(dry_run: bool = False) -> dict:
     """XGBoost quality scorer: load journal, TP1/SL labels, retrain."""
+    import time as _time
+    _t0 = _time.perf_counter()
     logger.info("=== QualityScorer retrain ===")
     from models.quality_scorer import QualityScorer
 
@@ -923,7 +954,11 @@ def retrain_quality(dry_run: bool = False) -> dict:
         return {"error": f"Journal not found: {JOURNAL_PATH}"}
 
     model = QualityScorer()
+    _t_labels = _time.perf_counter()
     labeled_df = model.create_labels(JOURNAL_PATH)
+    logger.info("Quality phase label creation: %.1fs (%d trades)",
+                _time.perf_counter() - _t_labels,
+                len(labeled_df) if labeled_df is not None else 0)
     if labeled_df is None or len(labeled_df) < 20:
         return {"error": f"Only {len(labeled_df) if labeled_df is not None else 0} labeled trades — need ≥20"}
 
@@ -932,7 +967,10 @@ def retrain_quality(dry_run: bool = False) -> dict:
         return {"dry_run": True, "samples": len(labeled_df)}
 
     _backup_weights(os.path.join(WEIGHTS_DIR, "quality_scorer.pkl"))
+    _t_train = _time.perf_counter()
     result = model.train(JOURNAL_PATH)
+    logger.info("Quality phase train: %.1fs | total: %.1fs",
+                _time.perf_counter() - _t_train, _time.perf_counter() - _t0)
     if result.get("error"):
         return result
     if not _quality_artifact_exists():
@@ -942,6 +980,8 @@ def retrain_quality(dry_run: bool = False) -> dict:
 
 def retrain_rl(dry_run: bool = False) -> dict:
     """PPO RL: retrain from journal episodes."""
+    import time as _time
+    _t0 = _time.perf_counter()
     logger.info("=== RLAgent (PPO) retrain ===")
     from models.rl_agent import RLAgent
 
@@ -955,7 +995,13 @@ def retrain_rl(dry_run: bool = False) -> dict:
 
     _backup_weights(os.path.join(WEIGHTS_DIR, "rl_ppo"))
     agent = RLAgent()
+    _t_ep = _time.perf_counter()
+    episodes = agent._load_journal_episodes(JOURNAL_PATH)
+    logger.info("RL phase episode loading: %.1fs (%d episodes)", _time.perf_counter() - _t_ep, len(episodes))
+    _t_train = _time.perf_counter()
     result = agent.retrain_from_journal(JOURNAL_PATH, n_epochs=10)
+    logger.info("RL phase PPO train: %.1fs | total: %.1fs",
+                _time.perf_counter() - _t_train, _time.perf_counter() - _t0)
     if result.get("error"):
         return result
     if not _rl_artifact_exists():
@@ -993,6 +1039,8 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
         from models.regime_classifier import RegimeClassifier as _RC
         from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_FEATURES, REGIME_4H_FEATURES
 
+        import time as _time
+        _t0_vs = _time.perf_counter()
         logger.info("=== VectorStore: building similarity indices (parallel feature build) ===")
         store = VectorStore()
         gru_model = GRULSTMPredictor()
@@ -1065,6 +1113,7 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
             return result
 
         # Phase 1: parallel CPU feature build across all symbols
+        _t_p1 = _time.perf_counter()
         sym_results = {}
         with ThreadPoolExecutor(max_workers=_n_workers) as pool:
             futures = {pool.submit(_build_sym_vectors, sym): sym for sym in symbols}
@@ -1076,8 +1125,11 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
                         sym_results[sym] = r
                 except Exception as exc:
                     logger.warning("VectorStore feature build failed for %s: %s", sym, exc)
+        logger.info("VectorStore phase 1 (parallel feature build, %d workers): %.1fs for %d symbols",
+                    _n_workers, _time.perf_counter() - _t_p1, len(sym_results))
 
         # Phase 2: serial GPU add_batch (FAISS GPU index is not thread-safe)
+        _t_p2 = _time.perf_counter()
         for sym in symbols:
             r = sym_results.get(sym)
             if r is None:
@@ -1109,8 +1161,10 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
 
             gc.collect()
 
+        logger.info("VectorStore phase 2 (serial GPU add): %.1fs", _time.perf_counter() - _t_p2)
         store.save()
-        logger.info("VectorStore saved: %s", store.sizes())
+        logger.info("VectorStore saved: %s | total indexing: %.1fs",
+                    store.sizes(), _time.perf_counter() - _t0_vs)
 
     except Exception as exc:
         logger.error("_index_embeddings_post_train failed (non-fatal): %s", exc)
@@ -1176,6 +1230,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Validate without saving")
     args = parser.parse_args()
 
+    import time as _time
+    _t0_main = _time.perf_counter()
+
     dry = args.dry_run
     model = args.model
     any_failure = False
@@ -1227,7 +1284,7 @@ def main():
         for k, v in results.items():
             logger.info("  %s: %s", k, v)
 
-    logger.info("Retrain complete.")
+    logger.info("Retrain complete. Total wall-clock: %.1fs", _time.perf_counter() - _t0_main)
     if any_failure:
         sys.exit(1)
 
