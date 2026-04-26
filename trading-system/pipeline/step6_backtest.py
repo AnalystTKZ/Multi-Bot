@@ -40,7 +40,7 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("step6_backtest")
 
-# Use env_config so paths resolve to the remote clone on Kaggle when present.
+# Use env_config so paths resolve correctly on Kaggle vs local.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from env_config import get_env
 _ENV = get_env()

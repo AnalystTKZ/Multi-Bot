@@ -16,7 +16,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("step7b_train")
 
-# Use env_config so outputs go to the remote clone on Kaggle when present.
+# Use env_config so paths resolve correctly on Kaggle vs local.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from env_config import get_env
 _ENV = get_env()

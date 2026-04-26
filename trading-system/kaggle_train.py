@@ -366,23 +366,17 @@ if not github_token:
 elif not push_script.exists():
     print(f"\nWARNING: step8 script not found at {push_script} — skipping GitHub push")
 else:
-    remote_clone = Path("/kaggle/working/remote/Multi-Bot")
-    if env["on_kaggle"] and not remote_clone.exists():
-        print(f"\nWARNING: remote clone not found at {remote_clone}")
-        print("  Cell 0 should have run: git clone https://...@github.com/AnalystTKZ/Multi-Bot.git /kaggle/working/remote/Multi-Bot")
-        print("  Skipping GitHub push.")
+    print("\n=== STEP 8: Pushing outputs to GitHub ===")
+    result = subprocess.run(
+        [sys.executable, str(push_script)],
+        cwd=str(env["base"]),
+        env={
+            **os.environ,
+            "GITHUB_TOKEN": github_token,
+            "PYTHONPATH": f"{env['base']}:{env['base'] / 'trading-engine'}",
+        },
+    )
+    if result.returncode != 0:
+        print("WARNING: GitHub push failed (non-fatal — weights still saved locally)")
     else:
-        print("\n=== STEP 8: Pushing outputs to GitHub ===")
-        result = subprocess.run(
-            [sys.executable, str(push_script)],
-            cwd=str(env["base"]),
-            env={
-                **os.environ,
-                "GITHUB_TOKEN": github_token,
-                "PYTHONPATH": f"{env['base']}:{env['base'] / 'trading-engine'}",
-            },
-        )
-        if result.returncode != 0:
-            print("WARNING: GitHub push failed (non-fatal — weights still saved locally)")
-        else:
-            print("=== GitHub push complete ===")
+        print("=== GitHub push complete ===")

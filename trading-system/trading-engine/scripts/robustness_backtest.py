@@ -111,29 +111,17 @@ except Exception:
     _ENV = None
 
 if _ENV is not None:
-    DATA_DIR = str(_ENV["processed"] / "histdata")
-    # OUTPUT_DIR writes into the remote git clone when present — push is then a
-    # simple git-add with no intermediate copy step.
-    _engine_out = _ENV["engine"]  # → remote clone or working copy
-    OUTPUT_DIR  = str(_engine_out / "backtest_results")
-    _REPO_ROOT  = (Path("/kaggle/working/remote/Multi-Bot")
-                   if _ENV.get("on_kaggle") else Path(_ENGINE_DIR).parent.parent)
+    DATA_DIR   = str(_ENV["processed"] / "histdata")
+    OUTPUT_DIR = str(_ENV["engine"] / "backtest_results")
+    _REPO_ROOT = _ENV["repo"]
 else:
-    # Fallback if env_config import fails
-    _ON_KAGGLE = os.path.exists("/kaggle/input")
-    if _ON_KAGGLE:
-        _KAGGLE_INPUT = Path("/kaggle/input")
-        _dataset_candidates = [
-            p.parent for p in _KAGGLE_INPUT.rglob("processed_data") if p.is_dir()
-        ]
-        _DATASET_ROOT = (_dataset_candidates[0]
-                         if _dataset_candidates
-                         else Path("/kaggle/working/Multi-Bot/trading-system"))
-        DATA_DIR  = str(_DATASET_ROOT / "processed_data" / "histdata")
-        _REPO_ROOT = Path("/kaggle/working/remote/Multi-Bot")
-    else:
-        DATA_DIR  = os.path.join(_ENGINE_DIR, "..", "processed_data", "histdata")
-        _REPO_ROOT = Path(_ENGINE_DIR).parent.parent
+    # Fallback if env_config import fails — derive from this file's location
+    _engine_path = Path(_ENGINE_DIR).resolve()
+    _REPO_ROOT   = next(
+        (p for p in [_engine_path, *_engine_path.parents] if (p / ".git").exists()),
+        _engine_path.parent.parent,
+    )
+    DATA_DIR   = os.path.join(_ENGINE_DIR, "..", "..", "processed_data", "histdata")
     OUTPUT_DIR = os.path.join(_ENGINE_DIR, "backtest_results")
 
 CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "robustness_checkpoint.json")

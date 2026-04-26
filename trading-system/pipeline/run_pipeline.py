@@ -237,6 +237,70 @@ def _build_env() -> dict:
     return env
 
 
+def push_weights_to_github() -> bool:
+    """
+    Commit all new/changed weight files and push to origin/main.
+
+    Both locally and on Kaggle the repo root is BASE.parent (Multi-Bot/).
+    Stages only trading-engine/weights/ (vector_store/ is gitignored).
+    Safe to call from any environment — skips cleanly when:
+      - not inside a git repo
+      - no remote named 'origin' is configured
+      - nothing changed (clean working tree for weights)
+    Returns True if the push succeeded or was a no-op, False on error.
+    """
+    repo_root   = _ENV["repo"]
+    weights_rel = str((ENGINE_DIR / "weights").relative_to(repo_root))
+
+    def _git(*args, check=True):
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+
+    # Verify we're in a git repo with a push-capable remote
+    try:
+        _git("rev-parse", "--git-dir")
+    except subprocess.CalledProcessError:
+        logger.warning("push_weights: not a git repo at %s — skipping push", repo_root)
+        return True
+
+    remote_check = _git("remote", "get-url", "origin", check=False)
+    if remote_check.returncode != 0:
+        logger.warning("push_weights: no 'origin' remote — skipping push")
+        return True
+
+    logger.info("push_weights: staging %s ...", weights_rel)
+    _git("add", weights_rel)
+
+    # Check if there's actually anything to commit
+    status = _git("status", "--porcelain", weights_rel)
+    if not status.stdout.strip():
+        logger.info("push_weights: no weight changes to commit — skipping push")
+        return True
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    commit_msg = f"weights: post-training update {timestamp}"
+    try:
+        _git("commit", "-m", commit_msg)
+        logger.info("push_weights: committed — '%s'", commit_msg)
+    except subprocess.CalledProcessError as exc:
+        logger.error("push_weights: commit failed:\n%s", exc.stderr)
+        return False
+
+    logger.info("push_weights: pushing to origin/main ...")
+    push = _git("push", "origin", "main", check=False)
+    if push.returncode == 0:
+        logger.info("push_weights: pushed successfully")
+        return True
+
+    logger.error("push_weights: push failed (rc=%d):\n%s", push.returncode, push.stderr)
+    return False
+
+
 def run_step(step_num: int, force: bool = False) -> bool:
     """
     Run a single pipeline step as a subprocess.
@@ -376,6 +440,11 @@ Note: outputs are cleaned by default; pass --no-clean to keep prior outputs.
         if not success and args.stop_on_failure:
             logger.error("--stop-on-failure: aborting pipeline at step %d", step_num)
             break
+
+        # After training completes, push weights to GitHub before backtest starts.
+        # This preserves the trained weights even if the backtest or later steps fail.
+        if step_num == 7 and success and 8 in steps_to_run:
+            push_weights_to_github()
 
         # Brief pause between steps to let OS reclaim memory from previous subprocess
         time.sleep(0.5)
