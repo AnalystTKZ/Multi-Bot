@@ -63,7 +63,7 @@ try:
         _torch.backends.cudnn.benchmark        = True
         _torch.backends.cuda.matmul.allow_tf32 = True
         _torch.backends.cudnn.allow_tf32       = True
-    _n_cpu = int(os.getenv("ROBUSTNESS_CPU_WORKERS", "4"))
+    _n_cpu = int(os.getenv("ROBUSTNESS_CPU_WORKERS", "1"))
     _torch.set_num_threads(_n_cpu)
     _torch.set_num_interop_threads(max(1, _n_cpu // 2))
 except Exception:
@@ -771,10 +771,12 @@ def _simulate_trade(
 
 def _run_symbol_epoch(
     symbol: str, epoch_num: int, start: str, end: str,
-    ml_models: dict, pm,
+    ml_models: dict,
     bundle: dict | None = None,
 ) -> dict:
     logger.info("=== %s Epoch %d (%s → %s) ===", symbol, epoch_num, start, end)
+    from monitors.portfolio_manager import PortfolioManager
+    pm = PortfolioManager(_PM_SETTINGS)
 
     try:
         if bundle is None:
@@ -1137,8 +1139,7 @@ def main() -> None:
         logger.warning("No ML models loaded — backtest will produce 0 signals")
 
     try:
-        from monitors.portfolio_manager import PortfolioManager
-        pm = PortfolioManager(_PM_SETTINGS)
+        from monitors.portfolio_manager import PortfolioManager  # noqa: F401
         logger.info("[OK] PortfolioManager loaded")
     except Exception as exc:
         logger.error("PortfolioManager failed: %s", exc)
@@ -1147,11 +1148,26 @@ def main() -> None:
     shared_bundles: dict[str, dict] = {}
     overall_start = min(EPOCHS[e][0] for e in epochs_to_run)
     overall_end = max(EPOCHS[e][1] for e in epochs_to_run)
-    for symbol in symbols_to_run:
-        try:
-            shared_bundles[symbol] = _prepare_symbol_bundle(symbol, overall_start, overall_end, ml_models)
-        except Exception as exc:
-            logger.error("Shared bundle prep failed for %s: %s", symbol, exc)
+    _prep_workers = max(1, min(len(symbols_to_run), 4, int(os.getenv("ROBUSTNESS_PARALLEL_SYMBOL_PREP", "4"))))
+    if _prep_workers == 1:
+        for symbol in symbols_to_run:
+            try:
+                shared_bundles[symbol] = _prepare_symbol_bundle(symbol, overall_start, overall_end, ml_models)
+            except Exception as exc:
+                logger.error("Shared bundle prep failed for %s: %s", symbol, exc)
+    else:
+        logger.info("Preparing %d robustness symbol bundles with %d worker(s)", len(symbols_to_run), _prep_workers)
+        with ThreadPoolExecutor(max_workers=_prep_workers) as ex:
+            futures = {
+                ex.submit(_prepare_symbol_bundle, symbol, overall_start, overall_end, ml_models): symbol
+                for symbol in symbols_to_run
+            }
+            for fut in as_completed(futures):
+                symbol = futures[fut]
+                try:
+                    shared_bundles[symbol] = fut.result()
+                except Exception as exc:
+                    logger.error("Shared bundle prep failed for %s: %s", symbol, exc)
 
     all_results: list[dict] = list(completed.values())  # seed with prior results
 
@@ -1167,7 +1183,7 @@ def main() -> None:
                 continue
 
             bundle = shared_bundles.get(symbol)
-            result = _run_symbol_epoch(symbol, epoch_num, start, end, ml_models, pm, bundle=bundle)
+            result = _run_symbol_epoch(symbol, epoch_num, start, end, ml_models, bundle=bundle)
             result_meta = {k: v for k, v in result.items() if k != "trade_log"}
 
             logger.info(

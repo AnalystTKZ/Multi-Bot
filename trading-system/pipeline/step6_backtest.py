@@ -65,7 +65,9 @@ def _build_env() -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ENGINE_DIR)
     env["PYTHONUNBUFFERED"] = "1"
-    _n = "4"
+    # We parallelize by symbol at the script level, so cap inner BLAS/OpenMP
+    # libraries to 1 thread to avoid 4 workers x 4 library threads oversubscription.
+    _n = "1"
     env["OMP_NUM_THREADS"]          = _n
     env["OPENBLAS_NUM_THREADS"]     = _n
     env["MKL_NUM_THREADS"]          = _n
@@ -74,7 +76,8 @@ def _build_env() -> dict:
     env["ARROW_NUM_THREADS"]        = _n
     env["RAYON_NUM_THREADS"]        = _n
     env.setdefault("RETRAIN_CPU_WORKERS", _n)
-    env.setdefault("MAX_PARALLEL_CACHE_BUILDS", _n)
+    env.setdefault("MAX_PARALLEL_SYMBOL_LOADS", "4")
+    env.setdefault("MAX_PARALLEL_CACHE_BUILDS", "4")
     return env
 
 

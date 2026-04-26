@@ -82,7 +82,7 @@ try:
         _bt_torch.backends.cudnn.benchmark        = True
         _bt_torch.backends.cuda.matmul.allow_tf32 = True
         _bt_torch.backends.cudnn.allow_tf32        = True
-    _bt_n_cpu = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
+    _bt_n_cpu = int(os.getenv("RETRAIN_CPU_WORKERS", "1"))
     _bt_torch.set_num_threads(_bt_n_cpu)
     _bt_torch.set_num_interop_threads(max(1, _bt_n_cpu // 2))
 except Exception:
@@ -1349,7 +1349,7 @@ def _backtest_trader(
 
     _t_load_all = _time.perf_counter()
     logger.info("%s: loading %d symbols (15M + HTF indicators)...", trader_id, len(symbols))
-    _load_workers = max(1, min(len(symbols), 4, int(os.getenv("MAX_PARALLEL_SYMBOL_LOADS", "2"))))
+    _load_workers = max(1, min(len(symbols), 4, int(os.getenv("MAX_PARALLEL_SYMBOL_LOADS", "4"))))
     if _load_workers == 1:
         for symbol in symbols:
             _, df, htf, start_idx = _prepare_symbol_context(trader_id, symbol, start, end, start_ts)
