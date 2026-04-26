@@ -65,9 +65,16 @@ def _build_env() -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ENGINE_DIR)
     env["PYTHONUNBUFFERED"] = "1"
-    env.setdefault("OMP_NUM_THREADS", "1")
-    env.setdefault("OPENBLAS_NUM_THREADS", "1")
-    env.setdefault("MKL_NUM_THREADS", "1")
+    _n = "4"
+    env["OMP_NUM_THREADS"]          = _n
+    env["OPENBLAS_NUM_THREADS"]     = _n
+    env["MKL_NUM_THREADS"]          = _n
+    env["NUMEXPR_NUM_THREADS"]      = _n
+    env["VECLIB_MAXIMUM_THREADS"]   = _n
+    env["ARROW_NUM_THREADS"]        = _n
+    env["RAYON_NUM_THREADS"]        = _n
+    env.setdefault("RETRAIN_CPU_WORKERS", _n)
+    env.setdefault("MAX_PARALLEL_CACHE_BUILDS", _n)
     return env
 
 

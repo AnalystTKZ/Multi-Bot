@@ -904,11 +904,11 @@ class RegimeClassifier(BaseModel):
         try:
             _atr_feat = compute_atr(df, 14)
             _atr_hist_window = 14 * 3  # 42 bars — matches _hist = n_bar * 3
-            _atr_pctile = _atr_feat.rolling(_atr_hist_window, min_periods=14).apply(
-                lambda x: float(np.searchsorted(np.sort(x[:-1]), x[-1])) / max(len(x) - 1, 1)
-                if len(x) > 1 else 0.5, raw=True
-            ).clip(0.0, 1.0).fillna(0.5)
-            X[:, 36] = _atr_pctile.values.astype(np.float32)
+            from services.feature_engine import _vec_atr_pctile
+            X[:, 36] = _vec_atr_pctile(
+                _atr_feat.to_numpy(dtype=np.float64),
+                window=_atr_hist_window, min_periods=14,
+            )
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: atr_pctile failed: {exc}") from exc
 
@@ -926,11 +926,12 @@ class RegimeClassifier(BaseModel):
             _eff_ratio = (_net_move / (_abs_moves + 1e-9)).clip(0, 1)
             X[:, 45] = np.nan_to_num(_eff_ratio.values.astype(np.float32), nan=0.5)
 
-            _autocorr = pd.Series(_log_ret).rolling(_n_bar, min_periods=max(4, _n_bar // 2)).apply(
-                lambda x: float(pd.Series(x).autocorr(lag=1)) if len(x) > 3 else 0.0,
-                raw=False
-            ).fillna(0.0).clip(-1.0, 1.0)
-            X[:, 46] = _autocorr.values.astype(np.float32)
+            from services.feature_engine import _vec_autocorr
+            _autocorr_arr = _vec_autocorr(
+                np.nan_to_num(np.asarray(_log_ret, dtype=np.float64), nan=0.0),
+                window=_n_bar,
+            )
+            X[:, 46] = _autocorr_arr
 
             _hi_n    = df["high"].rolling(_n_bar, min_periods=_n_bar).max()
             _lo_n    = df["low"].rolling(_n_bar, min_periods=_n_bar).min()
