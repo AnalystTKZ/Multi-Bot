@@ -165,6 +165,26 @@ def _utc_ts(value: str | None) -> pd.Timestamp | None:
     return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
 
 
+def _coerce_utc_datetime(values) -> pd.DatetimeIndex:
+    """Coerce timestamp-like values, including epoch seconds/ms/us/ns, to UTC."""
+    s = pd.Series(values)
+    if pd.api.types.is_numeric_dtype(s):
+        nums = pd.to_numeric(s, errors="coerce")
+        finite = nums[np.isfinite(nums)]
+        if not finite.empty:
+            mag = float(finite.abs().median())
+            if mag >= 1e17:
+                unit = "ns"
+            elif mag >= 1e14:
+                unit = "us"
+            elif mag >= 1e11:
+                unit = "ms"
+            else:
+                unit = "s"
+            return pd.to_datetime(nums, unit=unit, utc=True, errors="coerce")
+    return pd.to_datetime(values, utc=True, errors="coerce")
+
+
 def _filter_date_range(df: pd.DataFrame, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> pd.DataFrame:
     if start_ts is not None:
         df = df.loc[df.index >= start_ts]
@@ -400,11 +420,11 @@ def _load_csv(symbol: str, timeframe: str = "15M", start: str | None = None, end
         if not isinstance(df.index, pd.DatetimeIndex):
             for _ts_col in ("index", "__index_level_0__", "timestamp", "datetime", "date", "time"):
                 if _ts_col in df.columns:
-                    df.index = pd.to_datetime(df[_ts_col], utc=True, errors="coerce")
+                    df.index = _coerce_utc_datetime(df[_ts_col])
                     df = df.drop(columns=[_ts_col])
                     break
         if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
+            df.index = _coerce_utc_datetime(df.index)
         elif df.index.tz is None:
             df.index = df.index.tz_localize("UTC")
         df = df[df.index.notna()].sort_index()
@@ -2162,8 +2182,11 @@ def main():
     try:
         from services.candidate_logger import CandidateLogger
         from services.quant_analytics import EVFilter
-        _bt_candidate_logger = CandidateLogger(csv_path="logs/backtest_candidate_log.csv")
-        _bt_ev_filter = EVFilter(candidate_log_path="logs/backtest_candidate_log.csv")
+        _bt_candidate_log_path = "logs/backtest_candidate_log.csv"
+        if os.path.exists(_bt_candidate_log_path):
+            os.remove(_bt_candidate_log_path)
+        _bt_candidate_logger = CandidateLogger(csv_path=_bt_candidate_log_path)
+        _bt_ev_filter = EVFilter(candidate_log_path=_bt_candidate_log_path)
         logger.info("CandidateLogger and EVFilter initialised for backtest")
     except Exception as _e:
         _bt_candidate_logger = None
@@ -2195,11 +2218,17 @@ def main():
                         "rr_ratio":   tr.get("rr_ratio", 1.5),
                         "confidence": tr.get("confidence", 0.7),
                         "p_win":      tr.get("confidence", 0.7),
+                        "p_bull":     tr.get("p_bull", ""),
+                        "p_bear":     tr.get("p_bear", ""),
+                        "ev":         tr.get("ev", tr.get("quality_score", "")),
+                        "regime":     tr.get("regime", ""),
+                        "adx":        tr.get("adx", ""),
+                        "atr":        tr.get("atr", ""),
                     },
                     executed=True,
                 )
                 tp_hit = tr.get("tp1_hit", False) or tr.get("exit_reason", "") == "tp2"
-                sl_hit = tr.get("exit_reason", "") == "sl"
+                sl_hit = str(tr.get("exit_reason", "")).startswith("sl")
                 _bt_candidate_logger.mark_outcome(
                     candidate_id=cid,
                     tp_hit=bool(tp_hit),

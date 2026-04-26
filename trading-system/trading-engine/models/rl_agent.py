@@ -99,7 +99,8 @@ class RLAgent(BaseModel):
     @property
     def is_trained(self) -> bool:
         return os.path.exists(os.path.join(MODEL_DIR, "policy.pkl")) or \
-               os.path.exists(os.path.join(MODEL_DIR, "model"))
+               os.path.exists(os.path.join(MODEL_DIR, "model")) or \
+               os.path.exists(os.path.join(MODEL_DIR, "model.zip"))
 
     def record_outcome(self, trade_result: dict) -> None:
         """

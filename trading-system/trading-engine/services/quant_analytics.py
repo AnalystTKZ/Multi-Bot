@@ -335,19 +335,26 @@ class ConfidenceCalibrator:
                 result["reliable"] = True   # assume OK when data sparse
                 return result
 
-            # Check monotonicity
+            # Check monotonicity. Keep the strict flag literal; use reliability
+            # separately for the looser "few violations" operational threshold.
             non_monotonic_pairs = sum(
                 1 for i in range(len(win_rates)-1) if win_rates[i+1] < win_rates[i] - 0.03
             )
             total_pairs = len(win_rates) - 1
-            monotonic = non_monotonic_pairs <= total_pairs * 0.3  # allow 30% violations
+            monotonic = non_monotonic_pairs == 0
+            reliable = non_monotonic_pairs <= total_pairs * 0.3  # allow 30% violations
 
             result["monotonic"] = monotonic
-            result["reliable"] = monotonic
-            if not monotonic:
+            result["reliable"] = reliable
+            if not reliable:
                 result["note"] = (
                     f"Non-monotonic calibration: {non_monotonic_pairs}/{total_pairs} pairs violated. "
                     "Consider retraining QualityScorer."
+                )
+            elif not monotonic:
+                result["note"] = (
+                    f"Calibration usable but not strictly monotonic: "
+                    f"{non_monotonic_pairs}/{total_pairs} pairs violated."
                 )
             else:
                 result["note"] = "Calibration OK — p_win correlates with actual win rate."
