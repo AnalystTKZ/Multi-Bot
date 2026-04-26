@@ -56,6 +56,8 @@ import pandas as pd
 _BT_LOG_DIR = os.path.join(_ENGINE_DIR, "logs")
 os.makedirs(_BT_LOG_DIR, exist_ok=True)
 _BT_LOG_FILE = os.path.join(_BT_LOG_DIR, f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log")
+_CONSOLE_VERBOSE = str(os.getenv("BACKTEST_CONSOLE_VERBOSE", "0")).lower() in ("1", "true", "yes", "on")
+_CONSOLE_LEVEL = logging.INFO if _CONSOLE_VERBOSE else logging.WARNING
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,6 +67,11 @@ logging.basicConfig(
         logging.FileHandler(_BT_LOG_FILE, mode="a", encoding="utf-8"),
     ],
 )
+for _handler in logging.getLogger().handlers:
+    if isinstance(_handler, logging.StreamHandler) and not isinstance(_handler, logging.FileHandler):
+        _handler.setLevel(_CONSOLE_LEVEL)
+    elif isinstance(_handler, logging.FileHandler):
+        _handler.setLevel(logging.INFO)
 logger = logging.getLogger("backtest")
 logger.info("Backtest log: %s", _BT_LOG_FILE)
 

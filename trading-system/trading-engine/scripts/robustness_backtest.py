@@ -69,10 +69,28 @@ try:
 except Exception:
     pass
 
+_ROBUSTNESS_LOG_DIR = os.path.join(_ENGINE_DIR, "logs")
+os.makedirs(_ROBUSTNESS_LOG_DIR, exist_ok=True)
+_ROBUSTNESS_LOG_FILE = os.path.join(
+    _ROBUSTNESS_LOG_DIR,
+    f"robustness_backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log",
+)
+_CONSOLE_VERBOSE = str(os.getenv("BACKTEST_CONSOLE_VERBOSE", "0")).lower() in ("1", "true", "yes", "on")
+_CONSOLE_LEVEL = logging.INFO if _CONSOLE_VERBOSE else logging.WARNING
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler(_ROBUSTNESS_LOG_FILE, mode="a", encoding="utf-8"),
+    ],
 )
+for _handler in logging.getLogger().handlers:
+    if isinstance(_handler, logging.StreamHandler) and not isinstance(_handler, logging.FileHandler):
+        _handler.setLevel(_CONSOLE_LEVEL)
+    elif isinstance(_handler, logging.FileHandler):
+        _handler.setLevel(logging.INFO)
 logger = logging.getLogger("robustness_bt")
 
 # ─── Config (mirrors run_backtest.py exactly) ─────────────────────────────────
@@ -1038,7 +1056,6 @@ def _print_summary(all_results: list[dict]) -> str:
         )
     lines += ["=" * 100, ""]
     text = "\n".join(lines)
-    print(text)
     return text
 
 
@@ -1106,6 +1123,7 @@ def main() -> None:
     epochs_to_run  = [args.epoch]  if args.epoch  else list(EPOCHS.keys())
     symbols_to_run = [args.symbol] if args.symbol else ROBUSTNESS_SYMBOLS
 
+    logger.info("Robustness log: %s", _ROBUSTNESS_LOG_FILE)
     logger.info("Robustness backtest starting")
     logger.info("  Symbols : %s", symbols_to_run)
     logger.info("  Epochs  : %s", epochs_to_run)
@@ -1200,6 +1218,10 @@ def main() -> None:
     else:
         logger.info("No new results written (all combinations were already checkpointed)")
     logger.info("Summary table → %s", SUMMARY_PATH)
+
+    final_summary_meta = [{k: v for k, v in r.items() if k != "trade_log"} for r in all_results]
+    if final_summary_meta:
+        print(_print_summary(final_summary_meta))
 
     # Final push with the archived filename
     _push_checkpoint_to_github("FINAL")
