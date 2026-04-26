@@ -606,10 +606,24 @@ class GRULSTMPredictor(BaseModel):
 
                 for seg in group:
                     try:
+                        def _series_or_none(*values):
+                            for value in values:
+                                if value is not None:
+                                    return value
+                            return None
+
                         feat_df = fe._build_sequence_df(
                             seg["df"], seg.get("df_htf"),
                             symbol=seg.get("symbol"),
-                            regime_series=seg.get("regime_series"),
+                            regime_4h_series=_series_or_none(
+                                seg.get("regime_htf_series"),
+                                seg.get("regime_4h_series"),
+                                seg.get("regime_series"),
+                            ),
+                            regime_1h_series=_series_or_none(
+                                seg.get("regime_ltf_series"),
+                                seg.get("regime_1h_series"),
+                            ),
                         )
                         feat_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
                         feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)
@@ -768,6 +782,7 @@ class GRULSTMPredictor(BaseModel):
                     # while allowing gradual adaptation to new data distribution.
                     _train_lr = 3e-5
                     _patience = 12  # longer patience: cosine decay needs more epochs to converge
+                    _min_epochs_before_stop = 8
                     optimiser = torch.optim.AdamW(
                         self._model.parameters(), lr=_train_lr, weight_decay=1e-3
                     )
@@ -781,8 +796,14 @@ class GRULSTMPredictor(BaseModel):
                     )
                 else:
                     # Cold-start: OneCycleLR with standard LR — good for random init.
+                    # Do not allow early stopping during the OneCycle warmup/peak LR
+                    # phase. The first pass can look flat around BCE~=0.69 until the
+                    # LR starts decaying; stopping there leaves p_bull clustered near
+                    # 0.5, which makes validation/test backtests reject every bar at
+                    # the direction gate.
                     _train_lr = 3e-4
-                    _patience = 5
+                    _patience = 18
+                    _min_epochs_before_stop = max(15, int(epochs * 0.45))
                     optimiser = torch.optim.AdamW(
                         self._model.parameters(), lr=_train_lr, weight_decay=1e-3
                     )
@@ -792,8 +813,8 @@ class GRULSTMPredictor(BaseModel):
                     )
                     logger.info(
                         "train_multi TF=%s: cold-start — "
-                        "using OneCycleLR (max_lr=%.0e, patience=%d)",
-                        tf, _train_lr, _patience,
+                        "using OneCycleLR (max_lr=%.0e, patience=%d, min_epochs=%d)",
+                        tf, _train_lr, _patience, _min_epochs_before_stop,
                     )
 
                 # pos_weight from training direction labels
@@ -894,7 +915,7 @@ class GRULSTMPredictor(BaseModel):
                         logger.info("train_multi TF=%s: new best val=%.4f — saved", tf, best_val)
                     else:
                         no_improve += 1
-                        if no_improve >= patience:
+                        if no_improve >= patience and (epoch + 1) >= _min_epochs_before_stop:
                             logger.info("train_multi TF=%s early stop at epoch %d", tf, epoch + 1)
                             break
 

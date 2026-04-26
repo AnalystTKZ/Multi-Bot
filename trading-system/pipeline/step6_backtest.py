@@ -255,11 +255,11 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                      "rr_ratio,confidence,pnl,commission\n")
 
         for tr in trade_log:
-            trader  = tr.get("trader_id", "trader_1")
+            trader  = tr.get("trader", tr.get("trader_id", "ml_trader"))
             symbol  = tr.get("symbol", "EURUSD")
             side    = tr.get("side", "buy")
             entry   = float(tr.get("entry", 1.0))
-            sl      = float(tr.get("sl", entry * 0.999))
+            sl      = float(tr.get("stop_loss", tr.get("sl", entry * 0.999)))
             tp      = float(tr.get("tp1", entry * 1.002))
             size    = float(tr.get("size", 0.1))
             pnl     = float(tr.get("pnl", 0.0))
@@ -282,7 +282,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "TRENDING": 0.0, "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATING": 2.0,
             }
             _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
-            trader_idx = int(trader.split("_")[1]) - 1 if "_" in trader else 0  # 0-4
+            trader_idx = int(trader.split("_")[1]) - 1 if trader.startswith("trader_") else 0  # 0-4
 
             state_vec = [0.0] * 43
             # [0-5] ML predictions
@@ -359,7 +359,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "source":          f"backtest_round_{round_num}",
                 "correlation_id":  f"bt_r{round_num}_{written:06d}",
                 "state_at_entry":  state_vec,
-                "rl_action":       int(trader.split("_")[1]) if "_" in trader else 1,
+                "rl_action":       int(trader.split("_")[1]) if trader.startswith("trader_") else 1,
                 "ml_model_scores": {
                     "p_bull":              float(tr.get("p_bull", 0.5)),
                     "p_bear":              float(tr.get("p_bear", 0.5)),

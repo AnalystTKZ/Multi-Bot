@@ -1190,6 +1190,15 @@ def _precompute_ml_cache(
         n_ltf = int(np.count_nonzero(cache["regime_ltf"] >= 0))
         logger.info("ML cache [%s]: DONE %.1fs — %d bars (gru=%d htf=%d ltf=%d)",
                     symbol, _time.perf_counter() - _t0_cache, n, n_gru, n_htf, n_ltf)
+        valid_p = cache["p_bull"][~np.isnan(cache["p_bull"])]
+        if valid_p.size:
+            dir_conf = np.maximum(valid_p, 1.0 - valid_p)
+            q50, q90, q99 = np.quantile(dir_conf, [0.50, 0.90, 0.99])
+            logger.info(
+                "ML cache [%s]: GRU direction confidence q50=%.3f q90=%.3f q99=%.3f max=%.3f pass@0.58=%.1f%%",
+                symbol, q50, q90, q99, float(dir_conf.max()),
+                100.0 * float(np.mean(dir_conf >= 0.58)),
+            )
 
         if cache_file:
             try:
@@ -1852,7 +1861,7 @@ def _backtest_trader(
             # RL state fields — used by step6_backtest to build state_at_entry
             "p_bull":       float((ml_preds or meta).get("p_bull", 0.5)),
             "p_bear":       float((ml_preds or meta).get("p_bear", 0.5)),
-            "quality_score": float((ml_preds or meta).get("ev", 0.0)),
+            "quality_score": float((ml_preds or meta).get("quality_score", 0.0)),
             "ev":           float((ml_preds or meta).get("ev", 0.0)),
             "expected_variance": float((ml_preds or meta).get("expected_variance", 0.0)),
             "regime":       str(ml_preds.get("regime") or meta.get("regime", "RANGING")),

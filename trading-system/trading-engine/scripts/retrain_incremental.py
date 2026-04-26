@@ -83,6 +83,21 @@ WEIGHTS_DIR     = str(_ENV["weights"])
 BACKUP_DIR      = str(_ENV["weights"] / "backups")
 MAX_BACKUPS = 5
 MONTHS_OF_DATA = int(os.getenv("RETRAIN_MONTHS", "0"))  # 0 = use all available data
+RETRAIN_DATA_SPLIT = os.getenv("RETRAIN_DATA_SPLIT", "train").strip().lower()
+if RETRAIN_DATA_SPLIT not in {"train", "val", "test", "all"}:
+    logger.warning("Invalid RETRAIN_DATA_SPLIT=%r; falling back to 'train'", RETRAIN_DATA_SPLIT)
+    RETRAIN_DATA_SPLIT = "train"
+_ALLOW_NONTRAIN_RETRAIN = os.getenv("ALLOW_NONTRAIN_RETRAIN", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+if RETRAIN_DATA_SPLIT != "train" and not _ALLOW_NONTRAIN_RETRAIN:
+    logger.warning(
+        "RETRAIN_DATA_SPLIT=%s requested without ALLOW_NONTRAIN_RETRAIN=1; "
+        "forcing 'train' to preserve validation/test splits.",
+        RETRAIN_DATA_SPLIT,
+    )
+    RETRAIN_DATA_SPLIT = "train"
+logger.info("Retrain data split: %s", RETRAIN_DATA_SPLIT)
 GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "50"))
 # 1024 per GPU × 2 GPUs (DataParallel) = 2048 effective batch; grad_accum×4 = 8192 logical.
 # Overrideable via env var for memory-constrained runs.
@@ -262,7 +277,7 @@ def _load_split_boundaries() -> dict:
     """
     Load train/val/test date boundaries from ml_training/datasets/split_summary.json.
     Returns dict with keys 'train_end', 'val_end' as UTC Timestamps, or empty dict
-    if the file doesn't exist (falls back to full-data training).
+    if the file doesn't exist.
     """
     global _SPLIT_BOUNDARIES
     if _SPLIT_BOUNDARIES is not None:
@@ -448,11 +463,11 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         _sym_regime_ltf: "pd.Series | None" = None
         try:
             from models.regime_classifier import RegimeClassifier as _RC_sym
-            _df4h_sym = _load_ohlcv(sym, "4H", split="train")
+            _df4h_sym = _load_ohlcv(sym, "4H", split=RETRAIN_DATA_SPLIT)
             if _df4h_sym is not None and len(_df4h_sym) > 50:
                 _sym_regime_htf = _RC_sym.create_rule_labels(
                     _df4h_sym, timeframe="4H", mode="htf_bias")
-            _df1h_sym = _load_ohlcv(sym, "1H", split="train")
+            _df1h_sym = _load_ohlcv(sym, "1H", split=RETRAIN_DATA_SPLIT)
             if _df1h_sym is not None and len(_df1h_sym) > 50:
                 _sym_regime_ltf = _RC_sym.create_rule_labels(
                     _df1h_sym, timeframe="1H", mode="ltf_behaviour")
@@ -460,7 +475,7 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
             logger.debug("GRU multi: rule regime labels for %s failed (%s)", sym, _e)
 
         for tf in GRU_TIMEFRAMES:
-            df = _load_ohlcv(sym, tf, split="train")
+            df = _load_ohlcv(sym, tf, split=RETRAIN_DATA_SPLIT)
             if df is None or len(df) <= 200:
                 continue
 
@@ -486,10 +501,10 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
                 htf_train[tf] = df_train
 
             # Forward-fill both 4H and 1H regime labels to training TF index
-            def _ffill_regime(s, end_ts, target_idx):
+            def _ffill_regime(s, end_ts, target_idx, default_label: int):
                 if s is None:
                     return None
-                return s[s.index <= end_ts].reindex(target_idx, method="ffill").fillna(2).astype(int)
+                return s[s.index <= end_ts].reindex(target_idx, method="ffill").fillna(default_label).astype(int)
 
             segments.append({
                 "df": df_train,
@@ -498,12 +513,12 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
                 "symbol": sym,
                 "timeframe": tf,
                 # Canonical new names
-                "regime_htf_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index),
-                "regime_ltf_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index),
+                "regime_htf_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index, 2),
+                "regime_ltf_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index, 1),
                 # Legacy compat aliases (some callers may check these keys)
-                "regime_series":    _ffill_regime(_sym_regime_htf, end_ts, df_train.index),
-                "regime_4h_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index),
-                "regime_1h_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index),
+                "regime_series":    _ffill_regime(_sym_regime_htf, end_ts, df_train.index, 2),
+                "regime_4h_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index, 2),
+                "regime_1h_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index, 1),
             })
             samples_total += len(df_train)
 
@@ -567,7 +582,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
         all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("5M", "1H", "4H", "1D")}
 
         for tf in GRU_TIMEFRAMES:
-            df = _load_ohlcv(sym, tf, split="train")
+            df = _load_ohlcv(sym, tf, split=RETRAIN_DATA_SPLIT)
             if df is None or len(df) <= 200:
                 logger.warning("GRU: skipping %s/%s (insufficient data)", sym, tf)
                 continue
@@ -696,7 +711,7 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
     # Cache label_tf dfs per symbol
     _label_cache: dict = {}
     for sym in symbols:
-        df_l = _load_ohlcv(sym, label_tf, split="train")
+        df_l = _load_ohlcv(sym, label_tf, split=RETRAIN_DATA_SPLIT)
         if df_l is not None and len(df_l) > 50:
             _label_cache[sym] = df_l
 
@@ -707,7 +722,7 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         gmm_grp, scaler_grp, cl_grp = group_gmms.get(grp, (None, None, None))
         df_label_sym = _label_cache.get(sym)
 
-        df = _load_ohlcv(sym, source_tf, split="train")
+        df = _load_ohlcv(sym, source_tf, split=RETRAIN_DATA_SPLIT)
         if df is None or len(df) <= 200:
             logger.warning("Regime[%s mode=%s]: skipping %s (insufficient data)", source_tf, mode, sym)
             continue
@@ -785,7 +800,7 @@ def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str) 
     try:
         from models.regime_classifier import RegimeClassifier as _RC_diag
         _diag_sym = symbols[-1] if symbols else None
-        _diag_df  = _load_ohlcv(_diag_sym, source_tf, split="train") if _diag_sym else None
+        _diag_df  = _load_ohlcv(_diag_sym, source_tf, split=RETRAIN_DATA_SPLIT) if _diag_sym else None
         if _diag_df is None or len(_diag_df) < 200:
             return
         _mode = "htf_bias" if str(source_tf).upper() == "4H" else "ltf_behaviour"
@@ -866,10 +881,10 @@ def retrain_regime(dry_run: bool = False) -> dict:
     group_dfs_4h: dict = {"dollar": [], "cross": [], "gold": []}
     group_dfs_1h: dict = {"dollar": [], "cross": [], "gold": []}
     for sym in symbols:
-        df_4h = _load_ohlcv(sym, "4H", split="train")
+        df_4h = _load_ohlcv(sym, "4H", split=RETRAIN_DATA_SPLIT)
         if df_4h is not None and len(df_4h) > 200:
             group_dfs_4h[_group_for_symbol(sym)].append(df_4h)
-        df_1h = _load_ohlcv(sym, "1H", split="train")
+        df_1h = _load_ohlcv(sym, "1H", split=RETRAIN_DATA_SPLIT)
         if df_1h is not None and len(df_1h) > 200:
             group_dfs_1h[_group_for_symbol(sym)].append(df_1h)
 
@@ -1095,7 +1110,7 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
             """CPU-only: load data + build all three feature arrays for one symbol.
             Returns (sym, tp_vecs, tp_metas, ms_vecs, ms_metas, emb_seqs, emb_metas_idx, df_index)
             or raises on failure."""
-            df = _load_ohlcv(sym, "15M", split="train")
+            df = _load_ohlcv(sym, "15M", split=RETRAIN_DATA_SPLIT)
             if df is None or len(df) < 200:
                 return None
 
