@@ -185,17 +185,22 @@ def _journal_count() -> int:
 
 
 def _copy_bt_result(src_label: str, dest_name: str) -> None:
-    """Copy the latest backtest JSON to a named round file in backtesting/results/."""
+    """Save the latest parsed step6 summary to a named round summary file."""
     import shutil
-    engine_bt = env["base"] / "trading-engine" / "backtest_results"
-    if not engine_bt.exists():
-        return
-    jsons = sorted(engine_bt.glob("backtest_*.json"))
-    if not jsons:
-        return
     dest = env["base"] / "backtesting" / "results" / dest_name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(jsons[-1], dest)
+
+    latest_summary = env["base"] / "backtesting" / "results" / "latest_summary.json"
+    if latest_summary.exists():
+        shutil.copy2(latest_summary, dest)
+    else:
+        engine_bt = env["base"] / "trading-engine" / "backtest_results"
+        if not engine_bt.exists():
+            return
+        jsons = sorted(engine_bt.glob("backtest_*.json"))
+        if not jsons:
+            return
+        shutil.copy2(jsons[-1], dest)
     print(f"  Saved {src_label} result → {dest.name}")
 
 

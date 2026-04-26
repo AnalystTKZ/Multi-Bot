@@ -83,6 +83,10 @@ def _build_env() -> dict:
     # training impossible. Keep the raw signal path measurable; evaluate strict
     # daily risk separately by setting BACKTEST_ENFORCE_DAILY_HALT=1.
     env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "0")
+    # Keep sample-generation backtests on fixed initial-capital sizing. Otherwise
+    # thousands of accepted trades compound position size exponentially and make
+    # total_return unreadable even when WR/PF/Sharpe are ordinary.
+    env.setdefault("BACKTEST_COMPOUND_EQUITY", "0")
     return env
 
 

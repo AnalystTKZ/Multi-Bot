@@ -432,11 +432,11 @@ class QualityScorer(BaseModel):
             else:
                 logger.info("QualityScorer: warm start from existing weights")
 
+            tr_ds    = TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(y_tr))
+            va_ds    = TensorDataset(torch.from_numpy(X_va), torch.from_numpy(y_va))
             _pin     = DEVICE.type == "cuda"
             _workers = 2 if DEVICE.type == "cuda" else 0
             _bs      = min(512, len(tr_ds)) if DEVICE.type == "cuda" else min(256, len(tr_ds))
-            tr_ds    = TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(y_tr))
-            va_ds    = TensorDataset(torch.from_numpy(X_va), torch.from_numpy(y_va))
             tr_dl    = DataLoader(tr_ds, batch_size=_bs, shuffle=True,
                                   num_workers=_workers, pin_memory=_pin,
                                   persistent_workers=(_workers > 0))

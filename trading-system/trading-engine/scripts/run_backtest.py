@@ -97,6 +97,9 @@ SLIPPAGE_PCT       = 0.0002
 _ENFORCE_DAILY_HALT = str(os.getenv("BACKTEST_ENFORCE_DAILY_HALT", "1")).lower() in (
     "1", "true", "yes", "on",
 )
+_COMPOUND_EQUITY = str(os.getenv("BACKTEST_COMPOUND_EQUITY", "1")).lower() in (
+    "1", "true", "yes", "on",
+)
 _CONFIGURED_MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.02"))
 MAX_DAILY_LOSS_PCT = _CONFIGURED_MAX_DAILY_LOSS_PCT if _ENFORCE_DAILY_HALT else 1.0
 MAX_DRAWDOWN_PCT   = 0.20       # 20% portfolio halt
@@ -394,6 +397,12 @@ def _load_csv(symbol: str, timeframe: str = "15M", start: str | None = None, end
         else:
             df = pd.read_parquet(parquet_path)
 
+        if not isinstance(df.index, pd.DatetimeIndex):
+            for _ts_col in ("index", "__index_level_0__", "timestamp", "datetime", "date", "time"):
+                if _ts_col in df.columns:
+                    df.index = pd.to_datetime(df[_ts_col], utc=True, errors="coerce")
+                    df = df.drop(columns=[_ts_col])
+                    break
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
         elif df.index.tz is None:
@@ -1723,13 +1732,14 @@ def _backtest_trader(
         atr = float(bar.get("atr_14", entry_raw * 0.001))
 
         # ── Position enrichment: PM gates or temporary raw-signal bypass ──────
+        sizing_equity = equity if _COMPOUND_EQUITY else INITIAL_CAPITAL
         if _PM_DISABLED:
-            enriched = _enrich_signal_no_pm(raw_signal, equity, atr)
+            enriched = _enrich_signal_no_pm(raw_signal, sizing_equity, atr)
             if enriched is None:
                 _dbg["pm_reject"] += 1
                 continue
         else:
-            portfolio_state = {"equity": equity, "open_positions_detail": []}
+            portfolio_state = {"equity": sizing_equity, "open_positions_detail": []}
             enriched = pm.enrich_signal(raw_signal, portfolio_state, atr=atr)
             if enriched is None:
                 _dbg["pm_reject"] += 1
@@ -1858,11 +1868,11 @@ def _backtest_trader(
     logger.info(
         "%s diagnostics — bars=%d session_skip=%d daily_skip=%d cooldown=%d "
         "density_suppressed=%d quality_blocked=%d no_signal=%d pm_reject=%d "
-        "daily_halt_events=%d daily_halt_dates=%d enforce_daily_halt=%s",
+        "daily_halt_events=%d daily_halt_dates=%d enforce_daily_halt=%s compound_equity=%s",
         trader_id, _dbg["total"], _dbg["session"], _dbg["daily"],
         _dbg["cooldown"], _dbg["density"], _dbg["quality_block"],
         _dbg["no_signal"], _dbg["pm_reject"], _dbg["daily_halt_events"],
-        len(_daily_halt_dates), _ENFORCE_DAILY_HALT,
+        len(_daily_halt_dates), _ENFORCE_DAILY_HALT, _COMPOUND_EQUITY,
     )
     if _signal_reasons:
         logger.info("%s no_signal reasons — %s", trader_id, dict(sorted(
@@ -1886,6 +1896,7 @@ def _backtest_trader(
                 "no_signal_reasons": dict(_signal_reasons),
                 "daily_halt_dates": sorted(_daily_halt_dates),
                 "enforce_daily_halt": _ENFORCE_DAILY_HALT,
+                "compound_equity": _COMPOUND_EQUITY,
             },
         }
 
@@ -1943,6 +1954,7 @@ def _backtest_trader(
             "no_signal_reasons": dict(_signal_reasons),
             "daily_halt_dates": sorted(_daily_halt_dates),
             "enforce_daily_halt": _ENFORCE_DAILY_HALT,
+            "compound_equity": _COMPOUND_EQUITY,
         },
     }
 
