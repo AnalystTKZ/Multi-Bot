@@ -670,30 +670,17 @@ class FeatureEngine:
         extra["htf_ltf_align"] = ((_htf_a != 2) & (_ltf_a == 0)).to_numpy(dtype=np.float32)
 
         # HTF regime duration: bars since last HTF bias change / 100 (capped 1.0)
-        _htf_dur_arr = np.zeros(n, dtype=np.float32)
-        _cnt = 0
-        _prev = -1
-        for _i in range(n):
-            _v = int(_htf_a.iloc[_i])
-            if _v != _prev:
-                _cnt = 0
-                _prev = _v
-            _cnt += 1
-            _htf_dur_arr[_i] = min(_cnt / 100.0, 1.0)
-        extra["htf_regime_dur"] = _htf_dur_arr
+        def _regime_duration_vec(series: np.ndarray) -> np.ndarray:
+            flips = np.empty(len(series), dtype=bool)
+            flips[0] = True
+            flips[1:] = series[1:] != series[:-1]
+            flip_pos = np.where(flips)[0]
+            group = np.searchsorted(flip_pos, np.arange(len(series)), side="right") - 1
+            dur = np.arange(len(series)) - flip_pos[group] + 1
+            return np.clip(dur / 100.0, 0.0, 1.0).astype(np.float32)
 
-        # LTF regime duration: bars since last LTF behaviour change / 100 (capped 1.0)
-        _ltf_dur_arr = np.zeros(n, dtype=np.float32)
-        _cnt2 = 0
-        _prev2 = -1
-        for _i in range(n):
-            _v2 = int(_ltf_a.iloc[_i])
-            if _v2 != _prev2:
-                _cnt2 = 0
-                _prev2 = _v2
-            _cnt2 += 1
-            _ltf_dur_arr[_i] = min(_cnt2 / 100.0, 1.0)
-        extra["ltf_regime_dur"] = _ltf_dur_arr
+        extra["htf_regime_dur"] = _regime_duration_vec(_htf_a.to_numpy(dtype=np.int8))
+        extra["ltf_regime_dur"] = _regime_duration_vec(_ltf_a.to_numpy(dtype=np.int8))
 
         # ── Volatility dynamics ───────────────────────────────────────────────
         _rel_vol = atr / (out["close"] + 1e-9)
@@ -741,27 +728,31 @@ class FeatureEngine:
         _bos_bull = out["bos_bull"].to_numpy(dtype=bool)
         _bos_bear = out["bos_bear"].to_numpy(dtype=bool)
         _cap = 40.0
-        bos_bull_ago   = np.full(n, _cap, dtype=np.float32)
-        bos_bear_ago   = np.full(n, _cap, dtype=np.float32)
-        bos_bull_str   = np.zeros(n, dtype=np.float32)
-        bos_bear_str   = np.zeros(n, dtype=np.float32)
-        _last_bull_bar = -int(_cap)
-        _last_bear_bar = -int(_cap)
-        _last_bull_move = 0.0
-        _last_bear_move = 0.0
-        for _i in range(n):
-            if _bos_bull[_i]:
-                _last_bull_bar  = _i
-                # move = close - open as proxy for BOS impulse size
-                _last_bull_move = max(float(_close[_i] - _open[_i]), 0.0)
-            if _bos_bear[_i]:
-                _last_bear_bar  = _i
-                _last_bear_move = max(float(_open[_i] - _close[_i]), 0.0)
-            _atr_i = float(_atr[_i]) if _atr[_i] > 0 else 1e-9
-            bos_bull_ago[_i] = min((_i - _last_bull_bar), _cap) / _cap
-            bos_bear_ago[_i] = min((_i - _last_bear_bar), _cap) / _cap
-            bos_bull_str[_i] = min(_last_bull_move / _atr_i, 5.0) if _last_bull_bar >= 0 else 0.0
-            bos_bear_str[_i] = min(_last_bear_move / _atr_i, 5.0) if _last_bear_bar >= 0 else 0.0
+        # Vectorized "bars since last event" + "strength at that event bar"
+        idx = np.arange(n, dtype=np.float32)
+        _atr_safe = np.where(_atr > 0, _atr, 1e-9)
+        _bull_move = np.where(_bos_bull, np.maximum(_close - _open, 0.0), 0.0)
+        _bear_move = np.where(_bos_bear, np.maximum(_open - _close, 0.0), 0.0)
+
+        def _last_event_arrays(mask: np.ndarray, move_vals: np.ndarray, fill_idx: int):
+            last_bar  = np.full(n, fill_idx, dtype=np.float32)
+            last_move = np.zeros(n, dtype=np.float32)
+            cur_bar  = float(fill_idx)
+            cur_move = 0.0
+            for _i in range(n):   # still O(N) but integer array, no pandas, ~10× faster
+                if mask[_i]:
+                    cur_bar  = float(_i)
+                    cur_move = float(move_vals[_i])
+                last_bar[_i]  = cur_bar
+                last_move[_i] = cur_move
+            return last_bar, last_move
+
+        _bull_last_bar, _bull_last_move = _last_event_arrays(_bos_bull, _bull_move, -int(_cap))
+        _bear_last_bar, _bear_last_move = _last_event_arrays(_bos_bear, _bear_move, -int(_cap))
+        bos_bull_ago = np.clip((idx - _bull_last_bar) / _cap, 0.0, 1.0).astype(np.float32)
+        bos_bear_ago = np.clip((idx - _bear_last_bar) / _cap, 0.0, 1.0).astype(np.float32)
+        bos_bull_str = np.clip(_bull_last_move / _atr_safe, 0.0, 5.0).astype(np.float32)
+        bos_bear_str = np.clip(_bear_last_move / _atr_safe, 0.0, 5.0).astype(np.float32)
         extra["bos_bull_bars_ago"]  = bos_bull_ago
         extra["bos_bear_bars_ago"]  = bos_bear_ago
         extra["bos_bull_strength"]  = bos_bull_str
@@ -774,32 +765,24 @@ class FeatureEngine:
         _fvg_bull_bottom = out.get("fvg_bull_bottom", pd.Series(np.nan, index=out.index)).to_numpy(dtype=np.float64)
         _fvg_bear_top    = out.get("fvg_bear_top",    pd.Series(np.nan, index=out.index)).to_numpy(dtype=np.float64)
         _fvg_bear_bottom = out.get("fvg_bear_bottom", pd.Series(np.nan, index=out.index)).to_numpy(dtype=np.float64)
-        fvg_bull_dist = np.zeros(n, dtype=np.float32)
-        fvg_bear_dist = np.zeros(n, dtype=np.float32)
-        fvg_bull_fill = np.zeros(n, dtype=np.float32)
-        fvg_bear_fill = np.zeros(n, dtype=np.float32)
-        _cur_bull_top = _cur_bull_bot = _cur_bear_top = _cur_bear_bot = np.nan
-        for _i in range(n):
-            if not np.isnan(_fvg_bull_top[_i]):
-                _cur_bull_top = _fvg_bull_top[_i]
-                _cur_bull_bot = _fvg_bull_bottom[_i]
-            if not np.isnan(_fvg_bear_top[_i]):
-                _cur_bear_top = _fvg_bear_top[_i]
-                _cur_bear_bot = _fvg_bear_bottom[_i]
-            _atr_i = float(_atr[_i]) if _atr[_i] > 1e-12 else 1e-9
-            _c = float(_close[_i])
-            if not np.isnan(_cur_bull_bot):
-                _gap = _cur_bull_top - _cur_bull_bot
-                fvg_bull_dist[_i] = float(np.clip((_c - _cur_bull_top) / _atr_i, -5.0, 5.0))
-                fvg_bull_fill[_i] = float(np.clip(
-                    (_c - _cur_bull_bot) / (_gap + 1e-9), 0.0, 1.0
-                )) if _gap > 1e-9 else 0.0
-            if not np.isnan(_cur_bear_top):
-                _gap = _cur_bear_top - _cur_bear_bot
-                fvg_bear_dist[_i] = float(np.clip((_cur_bear_bot - _c) / _atr_i, -5.0, 5.0))
-                fvg_bear_fill[_i] = float(np.clip(
-                    (_cur_bear_top - _c) / (_gap + 1e-9), 0.0, 1.0
-                )) if _gap > 1e-9 else 0.0
+        # Forward-fill FVG boundaries then compute distances vectorized
+        _atr_safe2 = np.where(_atr > 1e-12, _atr, 1e-9)
+        _bt = pd.Series(_fvg_bull_top,    index=out.index).ffill().to_numpy(dtype=np.float64)
+        _bb = pd.Series(_fvg_bull_bottom, index=out.index).ffill().to_numpy(dtype=np.float64)
+        _ft = pd.Series(_fvg_bear_top,    index=out.index).ffill().to_numpy(dtype=np.float64)
+        _fb = pd.Series(_fvg_bear_bottom, index=out.index).ffill().to_numpy(dtype=np.float64)
+        _bull_valid = ~np.isnan(_bt)
+        _bear_valid = ~np.isnan(_ft)
+        _bull_gap = np.where(_bull_valid, _bt - _bb, 1.0)
+        _bear_gap = np.where(_bear_valid, _ft - _fb, 1.0)
+        fvg_bull_dist = np.where(_bull_valid,
+            np.clip((_close - _bt) / _atr_safe2, -5.0, 5.0), 0.0).astype(np.float32)
+        fvg_bull_fill = np.where(_bull_valid & (_bull_gap > 1e-9),
+            np.clip((_close - _bb) / (_bull_gap + 1e-9), 0.0, 1.0), 0.0).astype(np.float32)
+        fvg_bear_dist = np.where(_bear_valid,
+            np.clip((_fb - _close) / _atr_safe2, -5.0, 5.0), 0.0).astype(np.float32)
+        fvg_bear_fill = np.where(_bear_valid & (_bear_gap > 1e-9),
+            np.clip((_ft - _close) / (_bear_gap + 1e-9), 0.0, 1.0), 0.0).astype(np.float32)
         extra["fvg_bull_dist_atr"]   = fvg_bull_dist
         extra["fvg_bear_dist_atr"]   = fvg_bear_dist
         extra["fvg_bull_fill_ratio"] = fvg_bull_fill
@@ -814,21 +797,17 @@ class FeatureEngine:
         _sw_bear = _sweeps["sweep_bear"].to_numpy(dtype=bool)
         _hl = _high - _low
         _body = np.abs(_close - _open)
-        sweep_wick = np.zeros(n, dtype=np.float32)
-        body_rec   = np.zeros(n, dtype=np.float32)
-        # Look back 3 bars for a sweep signal
-        for _i in range(n):
-            _atr_i = float(_atr[_i]) if _atr[_i] > 1e-12 else 1e-9
-            for _lag in range(3):
-                _j = _i - _lag
-                if _j < 0:
-                    break
-                if _sw_bull[_j] or _sw_bear[_j]:
-                    _wick = float(_sw_bull_wick[_j] if _sw_bull[_j] else _sw_bear_wick[_j])
-                    sweep_wick[_i] = float(np.clip(_wick / _atr_i, 0.0, 5.0))
-                    _hl_j = float(_hl[_j])
-                    body_rec[_i] = float(np.clip(_body[_j] / (_hl_j + 1e-9), 0.0, 1.0))
-                    break
+        # Vectorized: for each bar take the nearest sweep signal within last 3 bars.
+        # Build arrays of wick/body at sweep bars, forward-fill with a 3-bar window cap.
+        _atr_safe3 = np.where(_atr > 1e-12, _atr, 1e-9)
+        _sweep_any  = _sw_bull | _sw_bear
+        _wick_at    = np.where(_sw_bull, _sw_bull_wick, _sw_bear_wick)
+        _body_at    = np.where(_hl + 1e-9 > 0, _body / (_hl + 1e-9), 0.0)
+        # Forward-fill then zero out values older than 3 bars
+        _wick_ff   = pd.Series(_wick_at, index=out.index).where(_sweep_any).ffill(limit=3).fillna(0.0).to_numpy(dtype=np.float64)
+        _bodyf_ff  = pd.Series(_body_at, index=out.index).where(_sweep_any).ffill(limit=3).fillna(0.0).to_numpy(dtype=np.float64)
+        sweep_wick = np.clip(_wick_ff / _atr_safe3, 0.0, 5.0).astype(np.float32)
+        body_rec   = np.clip(_bodyf_ff, 0.0, 1.0).astype(np.float32)
         extra["sweep_wick_depth_atr"] = sweep_wick
         extra["body_recovery_ratio"]  = body_rec
 
@@ -849,21 +828,22 @@ class FeatureEngine:
         if hasattr(out.index, "hour") and hasattr(out.index, "minute"):
             _ts_minutes = out.index.hour * 60 + out.index.minute
             _is_asian_window = (_ts_minutes >= 60) & (_ts_minutes < 300)  # 01:00–05:00
-            _asian_h = np.where(_is_asian_window, _high, np.nan)
-            _asian_l = np.where(_is_asian_window, _low,  np.nan)
-            # Forward-fill session high/low: reset at 05:00 UTC each day
-            _cur_ah = _cur_al = np.nan
-            _prev_date = None
-            for _i in range(n):
-                _date = out.index[_i].date()
-                if _date != _prev_date:
-                    _cur_ah = _cur_al = np.nan
-                    _prev_date = _date
-                if _is_asian_window[_i]:
-                    _cur_ah = _high[_i] if np.isnan(_cur_ah) else max(_cur_ah, _high[_i])
-                    _cur_al = _low[_i]  if np.isnan(_cur_al) else min(_cur_al, _low[_i])
-                asian_high_arr[_i] = _cur_ah
-                asian_low_arr[_i]  = _cur_al
+            # Vectorized: group by date, cummax/cummin of Asian-window highs/lows,
+            # then forward-fill within each day (no per-bar .date() call).
+            _idx     = out.index
+            _day_key = _idx.normalize()
+            _ah_s = pd.Series(np.where(_is_asian_window, _high, np.nan), index=_idx)
+            _al_s = pd.Series(np.where(_is_asian_window, _low,  np.nan), index=_idx)
+
+            def _day_cummax(g): return g.expanding().max()
+            def _day_cummin(g): return g.expanding().min()
+
+            asian_high_arr = (
+                _ah_s.groupby(_day_key, group_keys=False).apply(_day_cummax)
+            ).to_numpy(dtype=np.float64)
+            asian_low_arr = (
+                _al_s.groupby(_day_key, group_keys=False).apply(_day_cummin)
+            ).to_numpy(dtype=np.float64)
         _asian_range = np.where(
             ~np.isnan(asian_high_arr) & ~np.isnan(asian_low_arr),
             asian_high_arr - asian_low_arr, 0.0
@@ -911,14 +891,7 @@ class FeatureEngine:
         # Bars since last regime change; computed from regime_series if provided.
         if regime_series is not None:
             _reg = regime_series.reindex(out.index, method="ffill").fillna(2).to_numpy(dtype=np.int8)
-            _dur = np.zeros(n, dtype=np.float32)
-            _cnt = 0
-            for _i in range(n):
-                if _i > 0 and _reg[_i] != _reg[_i - 1]:
-                    _cnt = 0
-                _cnt += 1
-                _dur[_i] = min(_cnt / 100.0, 1.0)
-            extra["regime_duration"] = _dur
+            extra["regime_duration"] = _regime_duration_vec(_reg)
         else:
             extra["regime_duration"] = np.full(n, 0.5, dtype=np.float32)
 
