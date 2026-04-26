@@ -17,10 +17,12 @@ Output: float EV ∈ [-2, +5] approximately. Callers also receive quality_score 
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
 import pickle
+import threading
 from typing import Dict
 
 import numpy as np
@@ -108,6 +110,7 @@ class QualityScorer(BaseModel):
         self._model        = None
         self._n_features   = N_FEATURES
         self._feature_order = None
+        self._inference_lock = threading.RLock()
         os.makedirs(os.path.join(_MODEL_ROOT, "weights"), exist_ok=True)
         if self.is_trained:
             try:
@@ -169,10 +172,10 @@ class QualityScorer(BaseModel):
         import torch
         if not self.is_trained or self._model is None:
             raise ModelNotTrainedError("QualityScorer has no trained weights.")
-        _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
-        _cpu_m = _raw.to("cpu").eval()
-        # Move back to GPU so training/batch inference still works
-        _raw.to(DEVICE)
+        self.reload_if_updated()
+        with self._inference_lock:
+            _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+            _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
 
         def _infer(feat: np.ndarray) -> tuple:
             arr = np.asarray(feat, dtype=np.float32).reshape(1, -1)
@@ -202,14 +205,14 @@ class QualityScorer(BaseModel):
         arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
         x = torch.from_numpy(arr)  # stays on CPU
 
-        _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
-        _cpu_m = _raw.to("cpu").eval()
-        with torch.no_grad():
-            ev_raw = _cpu_m(x)
-            ev_arr = ev_raw.float().squeeze(-1).numpy()
-            qs_arr = torch.sigmoid(ev_raw.float()).squeeze(-1).numpy()
-        _raw.to(DEVICE)  # move back so training still uses GPU
-        return ev_arr.astype(np.float32), np.clip(qs_arr, 0.0, 1.0).astype(np.float32)
+        with self._inference_lock:
+            _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+            _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
+            with torch.no_grad():
+                ev_raw = _cpu_m(x)
+                ev_arr = ev_raw.float().squeeze(-1).numpy()
+                qs_arr = torch.sigmoid(ev_raw.float()).squeeze(-1).numpy()
+            return ev_arr.astype(np.float32), np.clip(qs_arr, 0.0, 1.0).astype(np.float32)
 
     # ── Labels ────────────────────────────────────────────────────────────────
 

@@ -14,9 +14,11 @@ DataParallel across both T4 GPUs during training and batch inference.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import pickle
+import threading
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -163,6 +165,7 @@ class RegimeClassifier(BaseModel):
         super().__init__()
         self._model = None
         self._hysteresis_buffer: List[int] = []
+        self._inference_lock = threading.RLock()
         self._timeframe = timeframe.upper() if timeframe else None
 
         # Determine mode: explicit > inferred from timeframe > default ltf_behaviour
@@ -276,25 +279,24 @@ class RegimeClassifier(BaseModel):
             return np.full(n, _default_id, dtype=np.int32), np.full(n, _default_conf, dtype=np.float32)
         try:
             import torch
-            # Slice to TF-specific columns if full matrix provided
-            if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
-                X = X[:, self._col_idx]
-            # Unwrap DataParallel and move to CPU for inference — no kernel launch overhead
-            _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
-            _raw.eval()
-            _cpu_m = _raw.to("cpu")
-            all_labels = []
-            all_conf   = []
-            with torch.no_grad():
-                for s in range(0, len(X), batch_size):
-                    xb = torch.from_numpy(X[s: s + batch_size])  # stays on CPU
-                    logits = _cpu_m(xb).float()
-                    proba = torch.softmax(logits, dim=1).numpy()
-                    all_labels.append(proba.argmax(axis=1).astype(np.int32))
-                    all_conf.append(proba.max(axis=1).astype(np.float32))
-            # Move model back to training device so subsequent train() calls work
-            _raw.to(DEVICE)
-            return np.concatenate(all_labels), np.concatenate(all_conf)
+            self.reload_if_updated()
+            with self._inference_lock:
+                # Slice to TF-specific columns if full matrix provided
+                if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
+                    X = X[:, self._col_idx]
+                # Clone to CPU for inference — never mutate the live shared model.
+                _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+                _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
+                all_labels = []
+                all_conf   = []
+                with torch.no_grad():
+                    for s in range(0, len(X), batch_size):
+                        xb = torch.from_numpy(X[s: s + batch_size])  # stays on CPU
+                        logits = _cpu_m(xb).float()
+                        proba = torch.softmax(logits, dim=1).numpy()
+                        all_labels.append(proba.argmax(axis=1).astype(np.int32))
+                        all_conf.append(proba.max(axis=1).astype(np.float32))
+                return np.concatenate(all_labels), np.concatenate(all_conf)
         except Exception as exc:
             logger.error("RegimeClassifier.predict_batch failed: %s", exc)
             n = len(X)
