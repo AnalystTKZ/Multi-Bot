@@ -387,48 +387,6 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
     return written
 
 
-# ─── Retrain runner ───────────────────────────────────────────────────────────
-
-def run_retrain(round_num: int) -> dict:
-    """Retrain all models using the accumulated journal. Returns retrain results."""
-    script = ENGINE_DIR / "scripts" / "retrain_incremental.py"
-    if not script.exists():
-        return {"error": f"retrain script not found: {script}"}
-
-    # GRU excluded: trained on 7.4M sequences — fine-tuning on ~3k trades causes catastrophic forgetting.
-    # Regime and quality warm-start from existing weights (low LR), building on what was learned
-    # from 7 years of data rather than re-initialising from scratch each round.
-    results = {}
-    for model in ["regime", "quality", "rl"]:
-        logger.info("Round %d — retraining %s...", round_num, model)
-        cmd = [sys.executable, str(script), "--model", model]
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(ENGINE_DIR),
-                env=_build_env(),
-                stdout=None,   # inherit
-                stderr=None,   # inherit — retrain logs visible immediately
-                timeout=7200,
-            )
-            if proc.returncode != 0:
-                logger.error("Retrain %s failed (rc=%d)", model, proc.returncode)
-                results[model] = {"error": f"exit {proc.returncode}"}
-            else:
-                logger.info("Retrain %s: OK", model)
-                results[model] = {"success": True}
-        except subprocess.TimeoutExpired:
-            logger.error("Retrain %s timed out", model)
-            results[model] = {"error": "timeout"}
-        except Exception as exc:
-            logger.error("Retrain %s exception: %s", model, exc)
-            results[model] = {"error": str(exc)}
-        finally:
-            gc.collect()
-
-    return results
-
-
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -436,145 +394,84 @@ def main():
     if not bt_window:
         logger.error("BT_WINDOW env var not set — must be one of: round1, round2, round3")
         sys.exit(1)
-    logger.info("=== STEP 6: BACKTEST + REINFORCED TRAINING (%d rounds, window=%s) ===",
-                N_ROUNDS, bt_window)
+    logger.info("=== STEP 6: BACKTEST (%s) ===", bt_window)
 
     bt_start, bt_end = _resolve_bt_window(bt_window)
+    round_num_map = {"round1": 1, "round2": 2, "round3": 3}
+    round_num = round_num_map[bt_window]
 
     # Clear journal before round 1 so we accumulate only backtest-sourced trades
-    if JOURNAL_PATH.exists():
+    if bt_window == "round1" and JOURNAL_PATH.exists():
         JOURNAL_PATH.unlink()
         logger.info("Cleared existing journal for fresh reinforced training run")
-    if JOURNAL_CSV.exists():
+    if bt_window == "round1" and JOURNAL_CSV.exists():
         JOURNAL_CSV.unlink()
 
-    round_metrics: list[dict] = []
+    sep = "=" * 64
+    logger.info("%s\n  ROUND %d / %d\n%s", sep, round_num, N_ROUNDS, sep)
 
-    for round_num in range(1, N_ROUNDS + 1):
-        sep = "=" * 64
-        logger.info("%s\n  ROUND %d / %d\n%s", sep, round_num, N_ROUNDS, sep)
+    bt_result = run_backtest(bt_start, bt_end, round_num)
+    if bt_result.get("error"):
+        logger.error("Round %d backtest failed: %s", round_num, bt_result["error"])
+        with open(BT_LOGS / f"backtest_r{round_num}_error.log", "w") as f:
+            f.write(str(bt_result))
+        sys.exit(1)
 
-        # ── 1. Backtest ───────────────────────────────────────────────────────
-        bt_result = run_backtest(bt_start, bt_end, round_num)
-        if bt_result.get("error"):
-            logger.error("Round %d backtest failed — stopping reinforcement loop: %s",
-                         round_num, bt_result["error"])
-            with open(BT_LOGS / f"backtest_r{round_num}_error.log", "w") as f:
-                f.write(str(bt_result))
-            break
+    latest_json = _latest_backtest_json()
+    if latest_json is None:
+        logger.error("Round %d: no backtest JSON found", round_num)
+        sys.exit(1)
 
-        latest_json = _latest_backtest_json()
-        if latest_json is None:
-            logger.error("Round %d: no backtest JSON found", round_num)
-            break
+    round_json = BT_RESULTS / f"backtest_round_{round_num}.json"
+    shutil.copy2(latest_json, round_json)
 
-        # Copy to named round file
-        round_json = BT_RESULTS / f"backtest_round_{round_num}.json"
-        shutil.copy2(latest_json, round_json)
+    summary = _summarise(round_json)
+    summary["round"] = round_num
+    summary["bt_window"] = bt_window
+    summary["bt_start"] = bt_start
+    summary["bt_end"] = bt_end
 
-        summary = _summarise(round_json)
-        summary["round"] = round_num
-        round_metrics.append(summary)
-
+    logger.info(
+        "Round %d backtest — %d trades | avg WR=%.1f%% | avg PF=%.2f | avg Sharpe=%.2f",
+        round_num,
+        summary["total_trades"],
+        summary["avg_win_rate"] * 100,
+        summary["avg_profit_factor"],
+        summary["avg_sharpe"],
+    )
+    for tid, m in summary["traders"].items():
         logger.info(
-            "Round %d backtest — %d trades | avg WR=%.1f%% | avg PF=%.2f | avg Sharpe=%.2f",
-            round_num,
-            summary["total_trades"],
-            summary["avg_win_rate"] * 100,
-            summary["avg_profit_factor"],
-            summary["avg_sharpe"],
+            "  %s: %d trades | WR=%.1f%% | PF=%.2f | Return=%.1f%% | DD=%.1f%% | Sharpe=%.2f",
+            tid, m["trades"], m["win_rate"]*100, m["profit_factor"],
+            m["total_return"]*100, m["max_drawdown"]*100, m["sharpe"],
         )
-        for tid, m in summary["traders"].items():
-            logger.info(
-                "  %s: %d trades | WR=%.1f%% | PF=%.2f | Return=%.1f%% | DD=%.1f%% | Sharpe=%.2f",
-                tid, m["trades"], m["win_rate"]*100, m["profit_factor"],
-                m["total_return"]*100, m["max_drawdown"]*100, m["sharpe"],
-            )
 
-        # ── 1b. Run diagnostics on this round's backtest ──────────────────────
-        try:
-            _diag_script = ENGINE_DIR / "scripts" / "analyze_backtest.py"
-            subprocess.run(
-                [sys.executable, str(_diag_script), "--file", str(round_json)],
-                cwd=str(ENGINE_DIR),
-                timeout=120,
-            )
-        except Exception as _de:
-            logger.warning("Round %d diagnostics failed (non-fatal): %s", round_num, _de)
+    try:
+        _diag_script = ENGINE_DIR / "scripts" / "analyze_backtest.py"
+        subprocess.run(
+            [sys.executable, str(_diag_script), "--file", str(round_json)],
+            cwd=str(ENGINE_DIR),
+            timeout=120,
+        )
+    except Exception as _de:
+        logger.warning("Round %d diagnostics failed (non-fatal): %s", round_num, _de)
 
-        # ── 2. Convert trade log → journal ────────────────────────────────────
-        n_written = trade_log_to_journal(round_json, round_num)
-        if n_written == 0:
-            logger.warning("Round %d: no trades to journal — skipping retrain", round_num)
-            continue
+    n_written = trade_log_to_journal(round_json, round_num)
+    if n_written == 0:
+        logger.warning("Round %d: no trades to journal", round_num)
 
-        # ── 3. Retrain on accumulated journal ─────────────────────────────────
-        if round_num < N_ROUNDS:
-            # Retrain before next round so the next backtest uses improved models
-            retrain_result = run_retrain(round_num)
-            any_failed = any(r.get("error") for r in retrain_result.values())
-            if any_failed:
-                logger.warning("Round %d: some models failed to retrain — continuing anyway", round_num)
-        else:
-            # Final round: still retrain so weights are ready for live trading
-            logger.info("Round %d (final): retraining after last backtest...", round_num)
-            retrain_result = run_retrain(round_num)
+    with open(BT_RESULTS / "latest_summary.json", "w") as f:
+        json.dump(summary, f, indent=2, default=str)
 
-    # ── Save improvement log ──────────────────────────────────────────────────
-    if round_metrics:
-        improvement_log = {
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "n_rounds": len(round_metrics),
-            "bt_start": bt_start,
-            "bt_end": bt_end,
-            "rounds": round_metrics,
-        }
-
-        # Compute metric deltas round-over-round
-        if len(round_metrics) > 1:
-            improvement_log["improvement"] = {
-                "win_rate_delta":      round(round_metrics[-1]["avg_win_rate"]      - round_metrics[0]["avg_win_rate"],      4),
-                "profit_factor_delta": round(round_metrics[-1]["avg_profit_factor"] - round_metrics[0]["avg_profit_factor"], 3),
-                "sharpe_delta":        round(round_metrics[-1]["avg_sharpe"]        - round_metrics[0]["avg_sharpe"],        3),
-            }
-            imp = improvement_log["improvement"]
-            logger.info(
-                "Improvement round 1 → %d: WR %+.1f%% | PF %+.3f | Sharpe %+.3f",
-                len(round_metrics),
-                imp["win_rate_delta"] * 100,
-                imp["profit_factor_delta"],
-                imp["sharpe_delta"],
-            )
-
-        with open(BT_RESULTS / "reinforcement_log.json", "w") as f:
-            json.dump(improvement_log, f, indent=2, default=str)
-
-        # latest_summary.json = last round summary (what run_pipeline.py checks)
-        with open(BT_RESULTS / "latest_summary.json", "w") as f:
-            json.dump(round_metrics[-1], f, indent=2, default=str)
-
-    # ── Print final table ─────────────────────────────────────────────────────
     print(f"\n{'='*70}")
-    print(f"  BACKTEST + REINFORCED TRAINING COMPLETE  ({len(round_metrics)} rounds)")
+    print(f"  BACKTEST COMPLETE  (round {round_num} / window={bt_window})")
     print(f"{'='*70}")
     print(f"  {'Round':<8} {'Trades':>7} {'WR':>8} {'PF':>7} {'Sharpe':>8}")
     print(f"  {'-'*42}")
-    for m in round_metrics:
-        print(f"  Round {m['round']:<3}  {m['total_trades']:>7}  "
-              f"{m['avg_win_rate']*100:>7.1f}%  {m['avg_profit_factor']:>7.3f}  "
-              f"{m['avg_sharpe']:>8.3f}")
+    print(f"  Round {summary['round']:<3}  {summary['total_trades']:>7}  "
+          f"{summary['avg_win_rate']*100:>7.1f}%  {summary['avg_profit_factor']:>7.3f}  "
+          f"{summary['avg_sharpe']:>8.3f}")
     print()
-
-    if len(round_metrics) > 1:
-        imp = improvement_log.get("improvement", {})
-        wr_d  = imp.get("win_rate_delta", 0) * 100
-        pf_d  = imp.get("profit_factor_delta", 0)
-        sh_d  = imp.get("sharpe_delta", 0)
-        print(f"  Net improvement (round 1 → {len(round_metrics)}):")
-        print(f"    Win rate:      {wr_d:+.1f}%")
-        print(f"    Profit factor: {pf_d:+.3f}")
-        print(f"    Sharpe:        {sh_d:+.3f}")
-        print()
 
 
 if __name__ == "__main__":
