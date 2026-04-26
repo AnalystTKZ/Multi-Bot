@@ -954,10 +954,18 @@ def _precompute_ml_cache(
         _do_4h = bool(regime_4h and regime_4h.is_trained and regime_4h._model is not None)
         _do_1h = bool(regime_1h and regime_1h.is_trained and regime_1h._model is not None)
 
-        _df_src_4h = (htf.get("4H") or htf.get("H4")) if _do_4h else None
+        _df_src_4h = None
+        if _do_4h:
+            _df_src_4h = htf.get("4H")
+            if _df_src_4h is None:
+                _df_src_4h = htf.get("H4")
         if _df_src_4h is None or len(_df_src_4h) < 50:
             _df_src_4h = df if _do_4h else None
-        _df_src_1h = (htf.get("1H") or htf.get("H1")) if _do_1h else None
+        _df_src_1h = None
+        if _do_1h:
+            _df_src_1h = htf.get("1H")
+            if _df_src_1h is None:
+                _df_src_1h = htf.get("H1")
         if _df_src_1h is None or len(_df_src_1h) < 50:
             _df_src_1h = df if _do_1h else None
 
