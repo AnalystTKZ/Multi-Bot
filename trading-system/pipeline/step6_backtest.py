@@ -147,24 +147,22 @@ def run_backtest(bt_start: str, bt_end: str, round_num: int) -> dict:
                 round_num, bt_start, bt_end)
 
     try:
-        # stdout streams directly to terminal — capture_output=True deadlocks when
-        # backtest verbose output (5 traders × 15yr × 11 symbols) exceeds the 64 KB
-        # OS pipe buffer. stderr is captured separately (only errors, stays small).
+        # Both stdout and stderr inherit from parent — no pipe, no deadlock, no
+        # silent capture. run_backtest.py writes its logging to stderr AND to its
+        # own timestamped log file (trading-engine/logs/backtest_*.log), so every
+        # diagnostic line is visible in the notebook and persisted to disk.
         result = subprocess.run(
             cmd,
             cwd=str(ENGINE_DIR),
             env=_build_env(),
-            stdout=None,          # inherit parent stdout — no pipe, no deadlock
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=14400,  # 4 hours — 2021–2024 range, sequential, QualityScorer per-signal
+            stdout=None,   # inherit
+            stderr=None,   # inherit — backtest logs are visible immediately
+            timeout=14400,
         )
         if result.returncode != 0:
-            logger.error("Backtest failed (rc=%d):\n%s", result.returncode, result.stderr[-3000:])
-            return {"error": result.stderr[-2000:], "returncode": result.returncode}
-
-        if result.stderr:
-            logger.debug("Backtest stderr:\n%s", result.stderr[-1000:])
+            logger.error("Backtest failed (rc=%d) — check trading-engine/logs/backtest_*.log",
+                         result.returncode)
+            return {"error": f"backtest exited {result.returncode}", "returncode": result.returncode}
 
         return {"success": True, "returncode": 0}
 
@@ -406,15 +404,13 @@ def run_retrain(round_num: int) -> dict:
                 cmd,
                 cwd=str(ENGINE_DIR),
                 env=_build_env(),
-                stdout=None,           # stream to terminal — avoids pipe-buffer deadlock
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=None,   # inherit
+                stderr=None,   # inherit — retrain logs visible immediately
                 timeout=7200,
             )
             if proc.returncode != 0:
-                logger.error("Retrain %s failed (rc=%d):\n%s",
-                             model, proc.returncode, proc.stderr[-2000:])
-                results[model] = {"error": proc.stderr[-500:]}
+                logger.error("Retrain %s failed (rc=%d)", model, proc.returncode)
+                results[model] = {"error": f"exit {proc.returncode}"}
             else:
                 logger.info("Retrain %s: OK", model)
                 results[model] = {"success": True}

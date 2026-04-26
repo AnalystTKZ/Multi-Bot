@@ -51,8 +51,22 @@ except Exception:
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# Write logs to both stderr (visible in terminal/notebook) AND a timestamped
+# file under trading-engine/logs/ so they survive subprocess pipe capture.
+_BT_LOG_DIR = os.path.join(_ENGINE_DIR, "logs")
+os.makedirs(_BT_LOG_DIR, exist_ok=True)
+_BT_LOG_FILE = os.path.join(_BT_LOG_DIR, f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler(_BT_LOG_FILE, mode="a", encoding="utf-8"),
+    ],
+)
 logger = logging.getLogger("backtest")
+logger.info("Backtest log: %s", _BT_LOG_FILE)
 
 # ── GPU/CPU performance flags ──────────────────────────────────────────────────
 try:
