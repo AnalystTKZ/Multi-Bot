@@ -1,0 +1,114 @@
+[
+  {
+    "run_id": "",
+    "timestamp": "2026-04-27T07:19:06.551031+00:00",
+    "model": "regime_classifier_htf",
+    "retrain_data_split": "train",
+    "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6",
+    "journal_sha256": "",
+    "artifact_hashes": {},
+    "code_commit": "68d48b8b8c6c79fd4c020bc1e033716080df1f41",
+    "accuracy": 0.9694346057982421,
+    "n_train": 30491,
+    "n_val": 7623,
+    "val_loss": 1.103741,
+    "per_class_accuracy": {
+      "BIAS_UP": 1.0,
+      "BIAS_DOWN": 1.0,
+      "BIAS_NEUTRAL": 0.83
+    },
+    "timeframe": "4H",
+    "status": "complete"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-04-27T07:19:42.759581+00:00",
+    "model": "regime_classifier_ltf",
+    "retrain_data_split": "train",
+    "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6",
+    "journal_sha256": "",
+    "artifact_hashes": {},
+    "code_commit": "68d48b8b8c6c79fd4c020bc1e033716080df1f41",
+    "accuracy": 0.8218326453532095,
+    "n_train": 239348,
+    "n_val": 59837,
+    "val_loss": 1.255558,
+    "per_class_accuracy": {
+      "TRENDING": 0.798,
+      "RANGING": 0.756,
+      "CONSOLIDATING": 0.829,
+      "VOLATILE": 0.902
+    },
+    "timeframe": "1H",
+    "status": "complete"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-04-27T07:19:42.763014+00:00",
+    "model": "regime_classifier",
+    "retrain_data_split": "train",
+    "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6",
+    "journal_sha256": "",
+    "artifact_hashes": {
+      "regime_htf.pkl": "4785a2c66cde562f33ff339febbfa812f47d73b83f5a324b08aa6f42598ee74a",
+      "regime_ltf.pkl": "c7974cec1a5a2c3facbd350a26a4cfcb1d370ecb77864dbd2a3c167fd5298526"
+    },
+    "code_commit": "68d48b8b8c6c79fd4c020bc1e033716080df1f41",
+    "trained": true,
+    "samples": 504761,
+    "results": {
+      "HTF": {
+        "accuracy": 0.9694346057982421,
+        "per_class_accuracy": {
+          "BIAS_UP": 1.0,
+          "BIAS_DOWN": 1.0,
+          "BIAS_NEUTRAL": 0.83
+        }
+      },
+      "LTF": {
+        "accuracy": 0.8218326453532095,
+        "per_class_accuracy": {
+          "TRENDING": 0.798,
+          "RANGING": 0.756,
+          "CONSOLIDATING": 0.829,
+          "VOLATILE": 0.902
+        }
+      }
+    }
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-04-27T07:31:02.784568+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6",
+    "journal_sha256": "",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "c6a693496fa2200f6bcaaf1ef3bf2becc97b0b93cf90d88911e843c3c0a881c1",
+      "gru_lstm/weights_manifest.json": "7001133d57fb4572e89ab2469ff919075e22910695628404d3c2b3f0a2473ee9"
+    },
+    "code_commit": "68d48b8b8c6c79fd4c020bc1e033716080df1f41",
+    "status": "complete",
+    "mode": "multi_symbol",
+    "segments": 44,
+    "samples": 6069276,
+    "groups_trained": 1,
+    "val_loss_points": 50
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-04-27T07:31:02.796010+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6",
+    "journal_sha256": "",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "c6a693496fa2200f6bcaaf1ef3bf2becc97b0b93cf90d88911e843c3c0a881c1",
+      "gru_lstm/weights_manifest.json": "7001133d57fb4572e89ab2469ff919075e22910695628404d3c2b3f0a2473ee9"
+    },
+    "code_commit": "68d48b8b8c6c79fd4c020bc1e033716080df1f41",
+    "trained": true,
+    "segments": 44,
+    "samples": 6069276
+  }
+]

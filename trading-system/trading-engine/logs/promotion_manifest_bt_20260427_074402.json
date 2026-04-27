@@ -1,0 +1,53 @@
+{
+  "run_id": "bt_20260427_074402",
+  "created_at": "2026-04-27T07:47:08.908996+00:00",
+  "code_commit": "68d48b8b8c6c79fd4c020bc1e033716080df1f41",
+  "backtest_result": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260427_074402.json",
+    "sha256": "6c775271b2566dd27b6929db88d894b800565ceb78fbdab136d35d2b4de3a59e",
+    "split": "combined_eval",
+    "requested_split": "test",
+    "start": "2022-08-05",
+    "end": "2025-08-05"
+  },
+  "split_summary": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/ml_training/datasets/split_summary.json",
+    "sha256": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6",
+    "date_ranges": {
+      "train": {
+        "start": "2016-01-04 00:00:00+00:00",
+        "end": "2021-08-05 04:45:00+00:00"
+      },
+      "validation": {
+        "start": "2021-08-05 05:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "test": {
+        "start": "2023-08-07 00:00:00+00:00",
+        "end": "2025-08-05 05:00:00+00:00"
+      }
+    },
+    "rows": {
+      "train": 130951,
+      "validation": 44000,
+      "test": 46792
+    },
+    "leakage_check": "PASS"
+  },
+  "weight_artifact_hashes": {
+    "weights/gru_lstm/model.pt": "c0df014e8c590888c015ad7f11e1474a1b1ab0dc438e8b40d99686aee00696c7",
+    "weights/gru_lstm/weights_manifest.json": "3e32f065eea3f6bc5f5aea74faf88fbfec3d0d77d7aa963e4dc24abe64a8e9d4",
+    "weights/regime_htf.pkl": "ae9b872261b79b4dafda67117a0685dab8e56d9c75ae67f4869041392c264b67",
+    "weights/regime_ltf.pkl": "8579f959119a902845ba359a39ba736d330c2110d134e39fd713117f93c7f9cb"
+  },
+  "calibration_report": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/calibration_report.json",
+    "sha256": "f23c5c710d374e199bcde7716dec8deeac5f8e518c12d67b9604ef959b0d8003"
+  },
+  "diagnostic_breakdowns": {
+    "detail_csv": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/backtest_trade_breakdown_bt_20260427_074402.csv",
+    "summary_csv": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/backtest_diagnostic_breakdown_bt_20260427_074402.csv",
+    "summary_json": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/backtest_diagnostic_breakdown_bt_20260427_074402.json"
+  },
+  "promotion_status": "candidate_pending_review"
+}
