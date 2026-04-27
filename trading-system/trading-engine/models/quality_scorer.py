@@ -62,6 +62,29 @@ def _get_device():
 DEVICE = _get_device()
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default)).lower() in ("1", "true", "yes", "on")
+
+
+def _default_allowed_splits() -> set[str] | None:
+    if _env_flag("ALLOW_NONTRAIN_JOURNAL_TRAINING"):
+        return None
+    raw = os.getenv("JOURNAL_ALLOWED_SPLITS", "train,live,paper,production")
+    return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def _record_allowed_by_split(record: dict, allowed_splits: set[str] | None) -> bool:
+    if allowed_splits is None:
+        return True
+    split = str(record.get("source_split", "")).strip().lower()
+    if split:
+        return split in allowed_splits
+    source = str(record.get("source", "")).strip().lower()
+    if source.startswith("backtest_round_"):
+        return False
+    return _env_flag("ALLOW_UNTAGGED_JOURNAL_TRAINING")
+
+
 # ── Architecture ──────────────────────────────────────────────────────────────
 
 def _build_mlp(n_features: int = N_FEATURES):
@@ -219,18 +242,9 @@ class QualityScorer(BaseModel):
     @staticmethod
     def _compute_ev_label(r: dict) -> float | None:
         """
-        Compute the EV label for one journal record as realized_return / entry_risk.
-
-        Realized return = actual PnL in price units (from journal "pnl" field).
-        Entry risk      = |entry - stop_loss| in price units.
-
-        This gives a continuously-scaled label in R-multiples:
-          +1.5  → trade won 1.5R
-          -1.0  → trade lost exactly 1R (hit SL)
-          +0.7  → partial TP, exited early at 0.7R
-
-        Falls back to ±planned_rr when pnl/entry/sl are missing (backtest records
-        don't always store all fields).
+        Compute the EV label for one journal record using the documented tiered
+        outcome mapping. This intentionally rewards full TP2 more than partial
+        trailing exits while keeping SL outcomes at -1R.
         """
         exit_reason = str(r.get("exit_reason", "")).lower()
         rr_planned  = float(r.get("rr_ratio", 1.5))
@@ -260,13 +274,20 @@ class QualityScorer(BaseModel):
             return 0.0
         return None
 
-    def create_labels(self, journal_path: str) -> pd.DataFrame:
+    def create_labels(
+        self,
+        journal_path: str,
+        allowed_splits: set[str] | None = None,
+    ) -> pd.DataFrame:
         """
         Read trade_journal_detailed.jsonl.
-        EV label = realized_pnl / entry_risk (in R-multiples).
-        Positive → winner, negative → loser. Continuously scaled.
+        EV label = documented tiered R-multiple mapping.
+        Production training excludes validation/test backtest journals unless
+        ALLOW_NONTRAIN_JOURNAL_TRAINING=1 is set.
         """
+        allowed_splits = _default_allowed_splits() if allowed_splits is None else allowed_splits
         records = []
+        skipped_split = 0
         try:
             with open(journal_path) as f:
                 for line in f:
@@ -274,12 +295,22 @@ class QualityScorer(BaseModel):
                     if not line:
                         continue
                     try:
-                        records.append(json.loads(line))
+                        rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if not _record_allowed_by_split(rec, allowed_splits):
+                        skipped_split += 1
+                        continue
+                    records.append(rec)
         except FileNotFoundError:
             logger.warning("QualityScorer: journal not found at %s", journal_path)
             return pd.DataFrame()
+        if skipped_split:
+            logger.info(
+                "QualityScorer: skipped %d journal records outside allowed splits %s",
+                skipped_split,
+                "ALL" if allowed_splits is None else sorted(allowed_splits),
+            )
 
         # Per-strategy rolling outcome history for win-rate features (no lookahead).
         # Populated as we iterate records in chronological order — each row gets
@@ -370,7 +401,11 @@ class QualityScorer(BaseModel):
 
     # ── Train ─────────────────────────────────────────────────────────────────
 
-    def train(self, journal_path: str) -> dict:
+    def train(
+        self,
+        journal_path: str,
+        allowed_splits: set[str] | None = None,
+    ) -> dict:
         """Train EV regressor from journal. Returns metrics dict."""
         try:
             import torch
@@ -378,7 +413,7 @@ class QualityScorer(BaseModel):
             from torch.utils.data import DataLoader, TensorDataset
             from services.feature_engine import QUALITY_FEATURES
 
-            labeled_df = self.create_labels(journal_path)
+            labeled_df = self.create_labels(journal_path, allowed_splits=allowed_splits)
             if labeled_df is None or len(labeled_df) < 20:
                 return {"error": "Insufficient journal data"}
 

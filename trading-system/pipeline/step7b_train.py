@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Step 7b: Quality + RL training — runs AFTER step6 backtest generates a real journal.
+Step 7b: Quality + RL training — runs after a real train/live/paper journal exists.
 Requires trade_journal_detailed.jsonl with >= MIN_JOURNAL_STEP7B real entries
 (default 50).
 No synthetic fallback — if journal is missing or too small, step fails loudly.
+Validation/test backtest journals are excluded by default; set
+ALLOW_NONTRAIN_JOURNAL_TRAINING=1 only for explicit research experiments.
 """
 from __future__ import annotations
 import json

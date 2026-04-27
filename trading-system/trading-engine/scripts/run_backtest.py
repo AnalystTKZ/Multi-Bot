@@ -102,7 +102,7 @@ _COMPOUND_EQUITY = str(os.getenv("BACKTEST_COMPOUND_EQUITY", "1")).lower() in (
 )
 _CONFIGURED_MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.02"))
 MAX_DAILY_LOSS_PCT = _CONFIGURED_MAX_DAILY_LOSS_PCT if _ENFORCE_DAILY_HALT else 1.0
-MAX_DRAWDOWN_PCT   = 0.20       # 20% portfolio halt
+MAX_DRAWDOWN_PCT   = float(os.getenv("MAX_DRAWDOWN_PCT", "0.08"))
 COOLDOWN_BARS      = 10         # bars between signals per symbol
 MIN_CONFIDENCE     = 0.58       # align PM floor with ML direction gate for unified trader
 MAX_HOLD_BARS      = 200        # max bars before time-exit
@@ -163,6 +163,47 @@ def _utc_ts(value: str | None) -> pd.Timestamp | None:
         return None
     ts = pd.Timestamp(value)
     return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+
+def _utc_timestamp(value) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+
+def _window_bounds(start: str, end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    start_ts = _utc_timestamp(start)
+    end_ts = _utc_timestamp(end)
+    # Date-only end arguments are intended as whole trading days in reports.
+    if isinstance(end, str) and len(end.strip()) == 10:
+        end_ts = end_ts + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    return start_ts, end_ts
+
+
+def _validate_trade_timestamps(trade_log: list[dict], start: str, end: str) -> None:
+    if not trade_log:
+        return
+    start_ts, end_ts = _window_bounds(start, end)
+    bad: list[str] = []
+    for idx, tr in enumerate(trade_log[:]):
+        for field in ("timestamp", "exit_timestamp"):
+            raw = tr.get(field)
+            if not raw:
+                continue
+            try:
+                ts = _utc_timestamp(raw)
+            except Exception:
+                bad.append(f"{idx}:{field}=unparseable:{raw!r}")
+                continue
+            if ts.year < 2000 or ts < start_ts or ts > end_ts:
+                bad.append(f"{idx}:{field}={ts.isoformat()}")
+                break
+        if len(bad) >= 5:
+            break
+    if bad:
+        raise RuntimeError(
+            "Backtest produced trade timestamps outside the configured window "
+            f"{start_ts.isoformat()} -> {end_ts.isoformat()}: {bad}"
+        )
 
 
 def _coerce_utc_datetime(values) -> pd.DatetimeIndex:
@@ -1552,7 +1593,16 @@ def _backtest_trader(
             else:
                 _arrs[_col] = None
         _sym_arrays[_sym] = _arrs
-        _sym_timestamps[_sym] = _df.index.view(np.int64)  # nanoseconds
+        _idx_utc = pd.DatetimeIndex(pd.to_datetime(_df.index, utc=True, errors="coerce"))
+        if _idx_utc.isna().any():
+            raise RuntimeError(f"{_sym}: non-parseable timestamps in backtest dataframe")
+        # pandas 2 can retain non-ns datetime resolutions from parquet. Timestamp.value
+        # normalizes every element to epoch nanoseconds, avoiding 1970-era trade logs.
+        _sym_timestamps[_sym] = np.fromiter(
+            (pd.Timestamp(_ts).value for _ts in _idx_utc),
+            dtype=np.int64,
+            count=len(_idx_utc),
+        )
 
     # ── Build merged bar iterator via heapq.merge — no flat list, no sort ─────
     # Each per-symbol generator yields (timestamp_ns, symbol, bar_index) in order.
@@ -1643,7 +1693,7 @@ def _backtest_trader(
             )
             _loop_last_log = _now
         df  = symbol_dfs[symbol]
-        dt  = pd.Timestamp(ts_ns, tz="UTC")
+        dt  = pd.to_datetime(int(ts_ns), unit="ns", utc=True)
 
         # ── Circuit breaker 1: portfolio drawdown ─────────────────────────────
         dd = (peak_equity - equity) / (peak_equity + 1e-9)
@@ -1840,8 +1890,12 @@ def _backtest_trader(
 
         meta = raw_signal.get("signal_metadata", {})
         peak_eq = peak_equity if peak_equity > 0 else 1.0
+        exit_idx = min(i + int(result["bars_held"]), len(df) - 1)
+        exit_dt = _utc_timestamp(df.index[exit_idx])
+
         trades.append({
             "timestamp":   dt.isoformat(),
+            "exit_timestamp": exit_dt.isoformat(),
             "trader":      trader_id,
             "symbol":      symbol,
             "side":        enriched["side"],
@@ -2088,6 +2142,30 @@ def _load_split_window(split: str) -> tuple[str, str]:
     )
 
 
+def _split_summary_metadata() -> dict:
+    candidates = [
+        Path(_ENGINE_DIR) / ".." / "ml_training" / "datasets" / "split_summary.json",
+        Path(_DATA_DIR_RESOLVED).parent.parent / "ml_training" / "datasets" / "split_summary.json",
+    ]
+    if "_ENV" in globals() and _ENV is not None:
+        candidates.insert(0, _ENV.get("ml_training", Path()) / "datasets" / "split_summary.json")
+    seen: set[Path] = set()
+    for raw in candidates:
+        try:
+            path = Path(raw).resolve()
+            if path in seen or not path.exists():
+                continue
+            seen.add(path)
+            payload = path.read_bytes()
+            return {
+                "path": str(path),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        except Exception:
+            continue
+    return {}
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Backtest with ML-native execution",
@@ -2110,6 +2188,8 @@ def main():
                         help="Override split start date (YYYY-MM-DD)")
     parser.add_argument("--end",   default=None,
                         help="Override split end date (YYYY-MM-DD)")
+    parser.add_argument("--window-label", default=None,
+                        help="Audit label for manual/custom windows")
     parser.add_argument("--calibrate", action="store_true",
                         help="Run confidence calibration report after backtest")
     args = parser.parse_args()
@@ -2119,9 +2199,11 @@ def main():
     _split_start, _split_end = _load_split_window(_split_key)
     bt_start = args.start or _split_start
     bt_end   = args.end   or _split_end
+    manual_window = bool(args.start or args.end)
+    window_label = args.window_label or (_split_key if not manual_window else f"custom_{_split_key}")
     logger.info(
-        "Backtest window: %s → %s  (split=%s%s)",
-        bt_start, bt_end, _split_key,
+        "Backtest window: %s → %s  (split=%s, label=%s%s)",
+        bt_start, bt_end, _split_key, window_label,
         " [BLIND — test set]" if _split_key == "test" else "",
     )
 
@@ -2211,6 +2293,7 @@ def main():
                               ml_models=ml_models,
                               shared_ml_cache=shared_ml_cache)
     trade_log = result.pop("trade_log", [])
+    _validate_trade_timestamps(trade_log, bt_start, bt_end)
     results["ml_trader"] = result
     all_trade_logs.extend(trade_log)
 
@@ -2235,6 +2318,7 @@ def main():
                         "atr":        tr.get("atr", ""),
                     },
                     executed=True,
+                    timestamp=tr.get("timestamp"),
                 )
                 tp_hit = tr.get("tp1_hit", False) or tr.get("exit_reason", "") == "tp2"
                 sl_hit = str(tr.get("exit_reason", "")).startswith("sl")
@@ -2244,6 +2328,7 @@ def main():
                     sl_hit=bool(sl_hit),
                     pnl=float(tr.get("pnl", 0.0)),
                     exit_reason=str(tr.get("exit_reason", "")),
+                    outcome_ts=tr.get("exit_timestamp", tr.get("timestamp")),
                 )
 
         logger.info(
@@ -2275,13 +2360,18 @@ def main():
         "run_at": run_at.isoformat(),
         "start": bt_start,
         "end":   bt_end,
-        "split": _split_key,
+        "split": window_label,
+        "requested_split": _split_key,
+        "manual_window": manual_window,
+        "split_summary": _split_summary_metadata(),
         "config": {
             "trader": "ml_trader",
             "initial_capital": INITIAL_CAPITAL,
             "risk_per_trade": RISK_PER_TRADE,
             "max_daily_loss_pct": MAX_DAILY_LOSS_PCT,
             "max_drawdown_halt": MAX_DRAWDOWN_PCT,
+            "enforce_daily_halt": _ENFORCE_DAILY_HALT,
+            "compound_equity": _COMPOUND_EQUITY,
             "portfolio_manager": "disabled" if _PM_DISABLED else "enabled",
         },
         "results": results,

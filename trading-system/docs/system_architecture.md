@@ -257,7 +257,7 @@ All features are strictly backward-looking.
 
 | Feature | Status |
 |---------|--------|
-| `sr_dist_*`, `sr_in_*`, `sr_*_strength` (REGIME_FEATURES 28–33) | Zeroed — `detect_sr_zones` uses `rolling(center=True)` |
+| `sr_dist_*`, `sr_in_*`, `sr_*_strength` (REGIME_FEATURES 28–33) | Zeroed for feature-distribution compatibility; detector is causal but enabling requires retrain |
 | `swing_hh_hl_count`, `liquidity_sweep_24h` in REGIME_FEATURES | Used in 1H classifier (live bar OK); zeroed in training if needed |
 | `macro bfill()` | Removed — replaced with `fillna(0.0)` only |
 | All rolling indicators | Backward-only |

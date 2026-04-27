@@ -1166,8 +1166,8 @@ class FeatureEngine:
             feats[offset + 3] = bb_v
 
         # ── S/R and Supply/Demand zone features (indices 28–33) ──────────
-        # detect_sr_zones uses rolling(center=True) — lookahead. Zeroed until
-        # the indicator is made strictly causal.
+        # Kept zero to preserve the trained regime feature distribution. The
+        # indicator itself is now causal; enabling these requires retraining.
         # feats[28:34] already zero from np.zeros init above.
 
         # ── Regime dynamics (indices 34–36) ──────────────────────────────

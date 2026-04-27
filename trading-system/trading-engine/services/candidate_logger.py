@@ -95,6 +95,7 @@ class CandidateLogger:
         side: str,
         features: dict,
         executed: bool = False,
+        timestamp: str | None = None,
     ) -> str:
         """
         Append a candidate row.  Returns candidate_id for later outcome linking.
@@ -107,7 +108,7 @@ class CandidateLogger:
           ensemble_score, ev, rr_ratio, confidence
         """
         cid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = timestamp or datetime.now(timezone.utc).isoformat()
 
         row: dict = {k: "" for k in _FIELDNAMES}
         row.update({
@@ -147,6 +148,7 @@ class CandidateLogger:
         sl_hit: bool,
         pnl: float,
         exit_reason: str = "",
+        outcome_ts: str | None = None,
     ) -> None:
         """Update outcome for a previously logged candidate (appends an outcome row)."""
         with self._lock:
@@ -157,7 +159,7 @@ class CandidateLogger:
                 "sl_hit": 1 if sl_hit else 0,
                 "pnl": round(pnl, 4),
                 "exit_reason": exit_reason,
-                "outcome_ts": datetime.now(timezone.utc).isoformat(),
+                "outcome_ts": outcome_ts or datetime.now(timezone.utc).isoformat(),
             })
             # Rewrite as outcome row (append update marker row)
             outcome_row = dict(self._pending[candidate_id])

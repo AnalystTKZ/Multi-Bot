@@ -25,7 +25,7 @@ Price inside EMA21-50 band. Encoded as: band-normalised position, EMA21 slope / 
 **Asian Range**
 02:00–07:00 UTC session range. Encoded as: range width / ATR, price vs Asian high/low.
 
-> **Lookahead note:** `detect_break_of_structure` and `detect_sr_zones` use `rolling(center=True)` internally — they read future bars. BOS/SR features are zeroed in training arrays but the binary BOS flags (indices 12–13 of SEQUENCE_FEATURES) are computed from causal `detect_fair_value_gaps` which is safe.
+> **Causality note:** `detect_break_of_structure`, `detect_sr_zones`, and range detection now emit swing levels only after right-side confirmation bars have closed. Regime S/R feature slots remain zeroed to preserve the trained feature distribution until a deliberate retrain enables them.
 
 ---
 
@@ -172,7 +172,7 @@ GRU is excluded from per-round reinforcement loop (catastrophic forgetting risk)
 
 | Feature | Status |
 |---------|--------|
-| `sr_dist_*`, `sr_in_*`, `sr_*_strength` (REGIME_FEATURES 28–33) | Zeroed — `detect_sr_zones` uses `rolling(center=True)` |
+| `sr_dist_*`, `sr_in_*`, `sr_*_strength` (REGIME_FEATURES 28–33) | Zeroed for feature-distribution compatibility; detector is causal but enabling requires retrain |
 | Macro `bfill()` | Removed — replaced with `fillna(0.0)` only |
 | All rolling indicators | Backward-only |
 | HTF `reindex(method="ffill")` | Causal — only HTF bars ≤ t contribute |

@@ -886,10 +886,9 @@ class RegimeClassifier(BaseModel):
                 raise RuntimeError(f"_build_feature_matrix: MTF feature extraction failed for tf={tf}: {exc}") from exc
 
         # ── S/R zone features (indices 28–33) ─────────────────────────────────
-        # detect_sr_zones uses rolling(center=True) internally — centred window
-        # reads swing_n future bars per bar, which is lookahead. Until the
-        # indicator is made strictly causal these columns stay zero so they
-        # cannot leak into training or inference.
+        # Kept zero to preserve the trained regime feature distribution. The
+        # underlying detector is causal now; enabling these columns requires a
+        # deliberate retrain and manifest update.
         # X[:, 28:34] already initialised to 0 above.
 
         # ── Regime dynamics (indices 34–35) ──────────────────────────────────

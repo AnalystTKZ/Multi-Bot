@@ -51,6 +51,29 @@ _RL_DEVICE = "cpu"
 _BUFFER_TRIGGER = 64
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default)).lower() in ("1", "true", "yes", "on")
+
+
+def _default_allowed_splits() -> set[str] | None:
+    if _env_flag("ALLOW_NONTRAIN_JOURNAL_TRAINING"):
+        return None
+    raw = os.getenv("JOURNAL_ALLOWED_SPLITS", "train,live,paper,production")
+    return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def _record_allowed_by_split(record: dict, allowed_splits: set[str] | None) -> bool:
+    if allowed_splits is None:
+        return True
+    split = str(record.get("source_split", "")).strip().lower()
+    if split:
+        return split in allowed_splits
+    source = str(record.get("source", "")).strip().lower()
+    if source.startswith("backtest_round_"):
+        return False
+    return _env_flag("ALLOW_UNTAGGED_JOURNAL_TRAINING")
+
+
 def _decode_action(action_id: int) -> Tuple[int, float]:
     """
     Decode action_id → (trader_id [1–5 or 0], confidence_threshold).
@@ -269,14 +292,19 @@ class RLAgent(BaseModel):
         except Exception as exc:
             logger.warning("RLAgent._mini_update failed: %s", exc)
 
-    def retrain_from_journal(self, journal_path: str, n_epochs: int = 10) -> dict:
+    def retrain_from_journal(
+        self,
+        journal_path: str,
+        n_epochs: int = 10,
+        allowed_splits: set[str] | None = None,
+    ) -> dict:
         """For retrain_incremental.py: reconstruct episodes from journal, run PPO update."""
         try:
             import gymnasium as gym  # noqa
             from stable_baselines3 import PPO
             from stable_baselines3.common.vec_env import DummyVecEnv
 
-            episodes = self._load_journal_episodes(journal_path)
+            episodes = self._load_journal_episodes(journal_path, allowed_splits=allowed_splits)
             if len(episodes) < 50:
                 logger.warning("RLAgent.retrain: only %d episodes — skipping", len(episodes))
                 return {"error": f"Only {len(episodes)} episodes — need >=50"}
@@ -310,8 +338,14 @@ class RLAgent(BaseModel):
             logger.error("RLAgent.retrain failed: %s", exc)
             return {"error": str(exc)}
 
-    def _load_journal_episodes(self, journal_path: str) -> List[dict]:
+    def _load_journal_episodes(
+        self,
+        journal_path: str,
+        allowed_splits: set[str] | None = None,
+    ) -> List[dict]:
         episodes = []
+        allowed_splits = _default_allowed_splits() if allowed_splits is None else allowed_splits
+        skipped_split = 0
         try:
             with open(journal_path) as f:
                 for line in f:
@@ -320,12 +354,21 @@ class RLAgent(BaseModel):
                         continue
                     try:
                         rec = json.loads(line)
+                        if not _record_allowed_by_split(rec, allowed_splits):
+                            skipped_split += 1
+                            continue
                         if "state_at_entry" in rec and len(rec["state_at_entry"]) == N_STATE:
                             episodes.append(rec)
                     except Exception:
                         continue
         except FileNotFoundError:
             pass
+        if skipped_split:
+            logger.info(
+                "RLAgent: skipped %d journal records outside allowed splits %s",
+                skipped_split,
+                "ALL" if allowed_splits is None else sorted(allowed_splits),
+            )
         return episodes
 
     def _make_episode_env(self, episodes: list):

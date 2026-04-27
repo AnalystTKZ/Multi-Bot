@@ -32,6 +32,7 @@ import subprocess
 import sys
 import shutil
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -78,15 +79,11 @@ def _build_env() -> dict:
     env.setdefault("RETRAIN_CPU_WORKERS", _n)
     env.setdefault("MAX_PARALLEL_SYMBOL_LOADS", "4")
     env.setdefault("MAX_PARALLEL_CACHE_BUILDS", "4")
-    # Step 6 feeds the Quality/RL journal. Enforcing the live daily kill switch
-    # here can reduce the journal to a handful of trades, which makes downstream
-    # training impossible. Keep the raw signal path measurable; evaluate strict
-    # daily risk separately by setting BACKTEST_ENFORCE_DAILY_HALT=1.
-    env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "0")
-    # Keep sample-generation backtests on fixed initial-capital sizing. Otherwise
-    # thousands of accepted trades compound position size exponentially and make
-    # total_return unreadable even when WR/PF/Sharpe are ordinary.
-    env.setdefault("BACKTEST_COMPOUND_EQUITY", "0")
+    # Production-mode evaluation is the default. Research/journal-generation runs
+    # can still opt out explicitly with BACKTEST_ENFORCE_DAILY_HALT=0 or
+    # BACKTEST_COMPOUND_EQUITY=0, but production promotion must validate these.
+    env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "1")
+    env.setdefault("BACKTEST_COMPOUND_EQUITY", "1")
     return env
 
 
@@ -98,6 +95,26 @@ def _load_split_summary() -> dict:
         )
         sys.exit(1)
     return json.loads(split_path.read_text())
+
+
+def _split_summary_hash() -> str:
+    split_path = _ENV["ml_training"] / "datasets" / "split_summary.json"
+    try:
+        return hashlib.sha256(split_path.read_bytes()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _source_split_for_round(round_num: int) -> str:
+    if round_num == 1:
+        return "validation"
+    if round_num == 2:
+        return "test"
+    return "combined_eval"
+
+
+def _run_split_for_round(round_num: int) -> str:
+    return "test" if round_num in (2, 3) else "validation"
 
 
 def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
@@ -152,6 +169,8 @@ def run_backtest(bt_start: str, bt_end: str, round_num: int) -> dict:
 
     cmd = [
         sys.executable, str(script),
+        "--split", _run_split_for_round(round_num),
+        "--window-label", _source_split_for_round(round_num),
         "--start", bt_start,
         "--end", bt_end,
     ]
@@ -247,6 +266,10 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
 
     rng = np.random.default_rng(round_num)
     written = 0
+    source_split = _source_split_for_round(round_num)
+    split_hash = _split_summary_hash()
+    bt_start = str(data.get("start", ""))
+    bt_end = str(data.get("end", ""))
 
     with open(JOURNAL_PATH, "a") as jf, open(JOURNAL_CSV, "a") as cf:
         # Write CSV header only on first write
@@ -267,6 +290,16 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             conf    = float(tr.get("confidence", 0.7))
             ts_str  = str(tr.get("entry_time", tr.get("timestamp",
                           datetime.now(timezone.utc).isoformat())))
+            exit_ts = str(tr.get("exit_time", tr.get("exit_timestamp", ts_str)))
+            try:
+                ts_parsed = pd.Timestamp(ts_str)
+                if ts_parsed.year < 2000:
+                    raise ValueError(f"timestamp before 2000: {ts_str}")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Round {round_num}: refusing to journal invalid trade timestamp "
+                    f"{ts_str!r} from {result_path}"
+                ) from exc
             # Preserve granular exit reason — _compute_ev_label uses tiered EV values.
             # be_or_trail → partial win (trailed after TP1), tp1 → TP1 hit, tp2 → full TP.
             exit_reason = str(tr.get("exit_reason", "sl")).lower()
@@ -341,7 +374,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
 
             record = {
                 "timestamp":       ts_str,
-                "exit_timestamp":  str(tr.get("exit_time", ts_str)),
+                "exit_timestamp":  exit_ts,
                 "trader":          trader,
                 "symbol":          symbol,
                 "side":            side,
@@ -357,6 +390,10 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "strategy":        trader,
                 "session":         entry_session,
                 "source":          f"backtest_round_{round_num}",
+                "source_split":    source_split,
+                "bt_start":        bt_start,
+                "bt_end":          bt_end,
+                "split_summary_hash": split_hash,
                 "correlation_id":  f"bt_r{round_num}_{written:06d}",
                 "state_at_entry":  state_vec,
                 "rl_action":       int(trader.split("_")[1]) if trader.startswith("trader_") else 1,

@@ -414,6 +414,41 @@ def compute_macd(
     return macd_line, signal_line, histogram
 
 
+def _confirmed_swing_arrays(
+    high: np.ndarray,
+    low: np.ndarray,
+    swing_n: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return swing levels at the bar where they become knowable.
+
+    A swing at bar j needs swing_n bars to its right before it is confirmed.
+    Therefore the level is emitted at j + swing_n, never at j. Downstream
+    consumers see only confirmed, causal structure.
+    """
+    n = len(high)
+    swing_high = np.full(n, np.nan, dtype=np.float64)
+    swing_low = np.full(n, np.nan, dtype=np.float64)
+    if n == 0:
+        return swing_high, swing_low
+
+    swing_n = max(1, int(swing_n))
+    window = 2 * swing_n + 1
+    high_s = pd.Series(high, dtype=np.float64)
+    low_s = pd.Series(low, dtype=np.float64)
+
+    roll_high = high_s.rolling(window, min_periods=window).max()
+    roll_low = low_s.rolling(window, min_periods=window).min()
+    mid_high = high_s.shift(swing_n)
+    mid_low = low_s.shift(swing_n)
+
+    confirmed_high = mid_high.where(mid_high == roll_high)
+    confirmed_low = mid_low.where(mid_low == roll_low)
+    swing_high[:] = confirmed_high.to_numpy(dtype=np.float64)
+    swing_low[:] = confirmed_low.to_numpy(dtype=np.float64)
+    return swing_high, swing_low
+
+
 def detect_fair_value_gaps(df: pd.DataFrame, min_atr_ratio: float = 0.25) -> pd.DataFrame:
     """
     Detect 3-candle Fair Value Gaps (vectorized).
@@ -446,20 +481,19 @@ def detect_fair_value_gaps(df: pd.DataFrame, min_atr_ratio: float = 0.25) -> pd.
 
 def detect_break_of_structure(df: pd.DataFrame, swing_n: int = 5) -> pd.DataFrame:
     """
-    Vectorized BOS detection using rolling window swing highs/lows.
+    Vectorized BOS detection using causally confirmed swing highs/lows.
 
     Returns DataFrame with:
       swing_high (float, NaN where not swing), swing_low (float, NaN),
       bos_bull (bool), bos_bear (bool),
       last_swing_high (float, forward-filled), last_swing_low (float, forward-filled)
     """
-    window = 2 * swing_n + 1
+    high = df["high"].to_numpy(dtype=np.float64)
+    low = df["low"].to_numpy(dtype=np.float64)
+    swing_high_arr, swing_low_arr = _confirmed_swing_arrays(high, low, swing_n)
 
-    roll_high_max = df["high"].rolling(window, center=True).max()
-    roll_low_min = df["low"].rolling(window, center=True).min()
-
-    swing_high = df["high"].where(df["high"] == roll_high_max)
-    swing_low = df["low"].where(df["low"] == roll_low_min)
+    swing_high = pd.Series(swing_high_arr, index=df.index)
+    swing_low = pd.Series(swing_low_arr, index=df.index)
 
     last_swing_high = swing_high.ffill()
     last_swing_low = swing_low.ffill()
@@ -618,12 +652,11 @@ def detect_sr_zones(
     high = df["high"].to_numpy(dtype=np.float32)
     low = df["low"].to_numpy(dtype=np.float32)
 
-    window = 2 * swing_n + 1
-    roll_high = df["high"].rolling(window, center=True).max().to_numpy(dtype=np.float32)
-    roll_low = df["low"].rolling(window, center=True).min().to_numpy(dtype=np.float32)
-
-    swing_highs = np.where(high == roll_high, high, np.nan)
-    swing_lows = np.where(low == roll_low, low, np.nan)
+    swing_highs, swing_lows = _confirmed_swing_arrays(
+        high.astype(np.float64),
+        low.astype(np.float64),
+        swing_n,
+    )
 
     # Output arrays (float64 for numba; cast to float32 at assignment)
     nearest_resist = np.full(n, np.nan, dtype=np.float64)
@@ -768,12 +801,8 @@ def detect_significant_range(
     high  = df["high"].to_numpy(dtype=np.float64)
     low   = df["low"].to_numpy(dtype=np.float64)
 
-    # Compute swing levels using the same window as detect_sr_zones
-    window = 2 * swing_n + 1
-    roll_high = df["high"].rolling(window, center=True).max().to_numpy(dtype=np.float64)
-    roll_low  = df["low"].rolling(window, center=True).min().to_numpy(dtype=np.float64)
-    swing_highs = np.where(high == roll_high, high, np.nan)
-    swing_lows  = np.where(low  == roll_low,  low,  np.nan)
+    # Confirm swing levels only after swing_n right-side bars have closed.
+    swing_highs, swing_lows = _confirmed_swing_arrays(high, low, swing_n)
 
     _range_valid_nb  = np.zeros(n, dtype=np.int8)
     _range_side_nb   = np.zeros(n, dtype=np.int8)
