@@ -25,6 +25,7 @@ import json
 import logging
 import math
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2229,6 +2230,246 @@ def _split_summary_metadata() -> dict:
     return {}
 
 
+def _sha256_file(path: str | Path) -> str:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _code_commit() -> str:
+    try:
+        root = Path(_ENGINE_DIR).resolve().parents[1]
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _weight_artifact_hashes() -> dict:
+    candidates = [
+        Path(_ENGINE_DIR) / "weights" / "gru_lstm" / "model.pt",
+        Path(_ENGINE_DIR) / "weights" / "gru_lstm" / "weights_manifest.json",
+        Path(_ENGINE_DIR) / "weights" / "regime_htf.pkl",
+        Path(_ENGINE_DIR) / "weights" / "regime_ltf.pkl",
+        Path(_ENGINE_DIR) / "weights" / "quality_scorer.pkl",
+        Path(_ENGINE_DIR) / "weights" / "rl_ppo" / "model.zip",
+    ]
+    hashes = {}
+    for path in candidates:
+        if path.exists():
+            hashes[str(path.relative_to(Path(_ENGINE_DIR)))] = _sha256_file(path)
+    return hashes
+
+
+def _confidence_bin(value: float) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return "unknown"
+    edges = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.90, 1.01]
+    for lo, hi in zip(edges, edges[1:]):
+        if lo <= v < hi:
+            return f"{lo:.2f}-{min(hi, 1.0):.2f}"
+    return "<0.50" if v < 0.50 else ">=1.00"
+
+
+def _adx_bin(value: float) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return "unknown"
+    if v < 20:
+        return "<20"
+    if v < 30:
+        return "20-30"
+    if v < 40:
+        return "30-40"
+    if v < 60:
+        return "40-60"
+    return ">=60"
+
+
+def _atr_entry_pct_bin(value: float) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return "unknown"
+    if v < 0.0005:
+        return "<0.05%"
+    if v < 0.0010:
+        return "0.05-0.10%"
+    if v < 0.0020:
+        return "0.10-0.20%"
+    if v < 0.0050:
+        return "0.20-0.50%"
+    return ">=0.50%"
+
+
+def _session_name(hour: int) -> str:
+    if 0 <= hour < 7:
+        return "asian"
+    if 7 <= hour < 12:
+        return "london"
+    if 13 <= hour < 18:
+        return "ny"
+    return "off_session"
+
+
+def _annotate_trade_provenance(
+    trades: list[dict],
+    *,
+    run_id: str,
+    source_split: str,
+    bt_start: str,
+    bt_end: str,
+    split_summary_hash: str,
+    pm,
+) -> None:
+    by_ts: dict[str, int] = {}
+    by_ts_group: dict[tuple[str, str], int] = {}
+    for tr in trades:
+        ts = str(tr.get("timestamp", ""))
+        group = ""
+        if pm is not None:
+            try:
+                group = pm.directional_group(str(tr.get("symbol", "")), str(tr.get("side", ""))) or ""
+            except Exception:
+                group = ""
+        tr["directional_group"] = group
+        by_ts[ts] = by_ts.get(ts, 0) + 1
+        by_ts_group[(ts, group)] = by_ts_group.get((ts, group), 0) + 1
+
+    for idx, tr in enumerate(trades):
+        ts = str(tr.get("timestamp", ""))
+        group = str(tr.get("directional_group", ""))
+        hour = int(tr.get("session_hour", pd.Timestamp(ts).hour if ts else 0))
+        atr = float(tr.get("atr", 0.0) or 0.0)
+        entry = abs(float(tr.get("entry", 0.0) or 0.0))
+        atr_entry_pct = atr / max(entry, 1e-12)
+        tr.update({
+            "run_id": run_id,
+            "source_split": source_split,
+            "bt_start": bt_start,
+            "bt_end": bt_end,
+            "split_summary_hash": split_summary_hash,
+            "correlation_id": tr.get("correlation_id") or f"{run_id}_{idx:06d}",
+            "session": tr.get("session") or _session_name(hour),
+            "confidence_bin": _confidence_bin(float(tr.get("confidence", 0.0) or 0.0)),
+            "p_bull_bin": _confidence_bin(float(tr.get("p_bull", 0.0) or 0.0)),
+            "p_bear_bin": _confidence_bin(float(tr.get("p_bear", 0.0) or 0.0)),
+            "adx_bin": _adx_bin(float(tr.get("adx", 0.0) or 0.0)),
+            "atr_entry_pct": atr_entry_pct,
+            "atr_entry_pct_bin": _atr_entry_pct_bin(atr_entry_pct),
+            "same_timestamp_entries": by_ts.get(ts, 0),
+            "same_timestamp_group_entries": by_ts_group.get((ts, group), 0),
+        })
+
+
+def _write_trade_breakdowns(trades: list[dict], run_id: str) -> dict:
+    if not trades:
+        return {}
+    out_dir = Path(_ENGINE_DIR) / "logs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    detail_columns = [
+        "run_id", "source_split", "timestamp", "exit_timestamp", "symbol", "side",
+        "directional_group", "regime", "confidence", "confidence_bin",
+        "session_hour", "session", "p_bull", "p_bull_bin", "p_bear", "p_bear_bin",
+        "adx", "adx_bin", "atr", "atr_entry_pct", "atr_entry_pct_bin",
+        "ema_stack", "same_timestamp_entries", "same_timestamp_group_entries",
+        "exit_reason", "pnl", "realized_rr",
+    ]
+    detail_path = out_dir / f"backtest_trade_breakdown_{run_id}.csv"
+    latest_detail_path = out_dir / "backtest_trade_breakdown_latest.csv"
+    for path in (detail_path, latest_detail_path):
+        with open(path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=detail_columns, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(trades)
+
+    dimensions = [
+        ("symbol", lambda t: str(t.get("symbol", ""))),
+        ("side", lambda t: str(t.get("side", ""))),
+        ("regime", lambda t: str(t.get("regime", ""))),
+        ("confidence_bin", lambda t: str(t.get("confidence_bin", ""))),
+        ("hour", lambda t: str(t.get("session_hour", ""))),
+        ("session", lambda t: str(t.get("session", ""))),
+        ("p_bull_bin", lambda t: str(t.get("p_bull_bin", ""))),
+        ("p_bear_bin", lambda t: str(t.get("p_bear_bin", ""))),
+        ("adx_bin", lambda t: str(t.get("adx_bin", ""))),
+        ("atr_entry_pct_bin", lambda t: str(t.get("atr_entry_pct_bin", ""))),
+        ("ema_stack", lambda t: str(t.get("ema_stack", ""))),
+        ("directional_group", lambda t: str(t.get("directional_group", ""))),
+        ("same_timestamp_entries", lambda t: str(t.get("same_timestamp_entries", ""))),
+        ("same_timestamp_group_entries", lambda t: str(t.get("same_timestamp_group_entries", ""))),
+    ]
+
+    summary_rows = []
+    for dimension, key_fn in dimensions:
+        buckets: dict[str, list[dict]] = {}
+        for tr in trades:
+            buckets.setdefault(key_fn(tr), []).append(tr)
+        for bucket, rows in sorted(buckets.items(), key=lambda kv: kv[0]):
+            pnls = [float(r.get("pnl", 0.0) or 0.0) for r in rows]
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p < 0]
+            summary_rows.append({
+                "run_id": run_id,
+                "dimension": dimension,
+                "bucket": bucket,
+                "trades": len(rows),
+                "wins": len(wins),
+                "losses": len(losses),
+                "win_rate": round(len(wins) / max(1, len(rows)), 4),
+                "net_pnl": round(sum(pnls), 4),
+                "gross_profit": round(sum(wins), 4),
+                "gross_loss": round(abs(sum(losses)), 4),
+                "profit_factor": round(sum(wins) / (abs(sum(losses)) + 1e-9), 4),
+                "sl_full": sum(1 for r in rows if str(r.get("exit_reason", "")).startswith("sl")),
+                "avg_confidence": round(float(np.mean([float(r.get("confidence", 0.0) or 0.0) for r in rows])), 6),
+                "avg_p_bull": round(float(np.mean([float(r.get("p_bull", 0.0) or 0.0) for r in rows])), 6),
+                "avg_p_bear": round(float(np.mean([float(r.get("p_bear", 0.0) or 0.0) for r in rows])), 6),
+                "avg_adx": round(float(np.mean([float(r.get("adx", 0.0) or 0.0) for r in rows])), 6),
+                "avg_atr": round(float(np.mean([float(r.get("atr", 0.0) or 0.0) for r in rows])), 8),
+                "avg_ema_stack": round(float(np.mean([float(r.get("ema_stack", 0.0) or 0.0) for r in rows])), 6),
+            })
+
+    summary_columns = [
+        "run_id", "dimension", "bucket", "trades", "wins", "losses",
+        "win_rate", "net_pnl", "gross_profit", "gross_loss", "profit_factor",
+        "sl_full", "avg_confidence", "avg_p_bull", "avg_p_bear", "avg_adx",
+        "avg_atr", "avg_ema_stack",
+    ]
+    summary_path = out_dir / f"backtest_diagnostic_breakdown_{run_id}.csv"
+    latest_summary_path = out_dir / "backtest_diagnostic_breakdown_latest.csv"
+    for path in (summary_path, latest_summary_path):
+        with open(path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=summary_columns, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(summary_rows)
+
+    json_path = out_dir / f"backtest_diagnostic_breakdown_{run_id}.json"
+    latest_json_path = out_dir / "backtest_diagnostic_breakdown_latest.json"
+    payload = {"run_id": run_id, "detail_csv": str(detail_path), "summary": summary_rows}
+    for path in (json_path, latest_json_path):
+        with open(path, "w") as fh:
+            json.dump(payload, fh, indent=2, default=str)
+    return {
+        "detail_csv": str(detail_path),
+        "summary_csv": str(summary_path),
+        "summary_json": str(json_path),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Backtest with ML-native execution",
@@ -2275,6 +2516,9 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs("logs", exist_ok=True)
     run_at = datetime.now(timezone.utc)
+    run_id = os.getenv("RUN_ID") or f"bt_{run_at.strftime('%Y%m%d_%H%M%S')}"
+    split_summary = _split_summary_metadata()
+    split_summary_hash = str(split_summary.get("sha256", ""))
     results = {}
     all_trade_logs = []
 
@@ -2357,8 +2601,18 @@ def main():
                               shared_ml_cache=shared_ml_cache)
     trade_log = result.pop("trade_log", [])
     _validate_trade_timestamps(trade_log, bt_start, bt_end)
+    _annotate_trade_provenance(
+        trade_log,
+        run_id=run_id,
+        source_split=window_label,
+        bt_start=bt_start,
+        bt_end=bt_end,
+        split_summary_hash=split_summary_hash,
+        pm=pm,
+    )
     results["ml_trader"] = result
     all_trade_logs.extend(trade_log)
+    diagnostic_breakdowns = _write_trade_breakdowns(all_trade_logs, run_id)
 
     # Log backtest trades as candidates with outcomes for calibration
     for trader_id, result in results.items():
@@ -2379,6 +2633,13 @@ def main():
                         "regime":     tr.get("regime", ""),
                         "adx":        tr.get("adx", ""),
                         "atr":        tr.get("atr", ""),
+                        "ema_stack_score": tr.get("ema_stack", ""),
+                        "run_id":     run_id,
+                        "source_split": tr.get("source_split", window_label),
+                        "bt_start":   bt_start,
+                        "bt_end":     bt_end,
+                        "split_summary_hash": split_summary_hash,
+                        "correlation_id": tr.get("correlation_id", ""),
                     },
                     executed=True,
                     timestamp=tr.get("timestamp"),
@@ -2415,18 +2676,32 @@ def main():
             from services.quant_analytics import ConfidenceCalibrator
             cal = ConfidenceCalibrator(candidate_log_path="logs/backtest_candidate_log.csv")
             calibration_report = cal.run_all_traders()
+            calibration_report.update({
+                "run_id": run_id,
+                "source_split": window_label,
+                "bt_start": bt_start,
+                "bt_end": bt_end,
+                "split_summary_hash": split_summary_hash,
+            })
+            with open(ConfidenceCalibrator.REPORT_PATH, "w") as f:
+                json.dump(calibration_report, f, indent=2, default=str)
             logger.info("Calibration report generated: %s", ConfidenceCalibrator.REPORT_PATH)
         except Exception as _ce:
             logger.warning("Calibration report failed: %s", _ce)
 
+    code_commit = _code_commit()
+    weight_artifact_hashes = _weight_artifact_hashes()
     output = {
+        "run_id": run_id,
         "run_at": run_at.isoformat(),
+        "code_commit": code_commit,
         "start": bt_start,
         "end":   bt_end,
         "split": window_label,
         "requested_split": _split_key,
         "manual_window": manual_window,
-        "split_summary": _split_summary_metadata(),
+        "split_summary": split_summary,
+        "weight_artifact_hashes": weight_artifact_hashes,
         "config": {
             "trader": "ml_trader",
             "initial_capital": INITIAL_CAPITAL,
@@ -2440,12 +2715,40 @@ def main():
         "results": results,
         "trade_log": all_trade_logs,
         "calibration": calibration_report,
+        "diagnostic_breakdowns": diagnostic_breakdowns,
     }
 
     filename = f"backtest_{run_at.strftime('%Y%m%d_%H%M%S')}.json"
     outpath = os.path.join(OUTPUT_DIR, filename)
     with open(outpath, "w") as f:
         json.dump(output, f, indent=2, default=str)
+
+    manifest = {
+        "run_id": run_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "code_commit": code_commit,
+        "backtest_result": {
+            "path": outpath,
+            "sha256": _sha256_file(outpath),
+            "split": window_label,
+            "requested_split": _split_key,
+            "start": bt_start,
+            "end": bt_end,
+        },
+        "split_summary": split_summary,
+        "weight_artifact_hashes": weight_artifact_hashes,
+        "calibration_report": {
+            "path": str(Path(_ENGINE_DIR) / "logs" / "calibration_report.json"),
+            "sha256": _sha256_file(Path(_ENGINE_DIR) / "logs" / "calibration_report.json"),
+        },
+        "diagnostic_breakdowns": diagnostic_breakdowns,
+        "promotion_status": "candidate_pending_review",
+    }
+    manifest_path = Path(_ENGINE_DIR) / "logs" / f"promotion_manifest_{run_id}.json"
+    latest_manifest_path = Path(_ENGINE_DIR) / "logs" / "promotion_manifest_latest.json"
+    for path in (manifest_path, latest_manifest_path):
+        with open(path, "w") as f:
+            json.dump(manifest, f, indent=2, default=str)
 
     logger.info("Backtest complete → %s", outpath)
     print(f"\nBacktest results → {outpath}")

@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import shutil
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +37,14 @@ for d in [ML_METRICS, ML_LOGS]:
 
 JOURNAL_PATH     = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
 JOURNAL_CSV_PATH = ENGINE_DIR / "logs" / "trade_journal.csv"
+
+
+def _split_summary_hash() -> str:
+    split_path = ML_DIR / "datasets" / "split_summary.json"
+    try:
+        return hashlib.sha256(split_path.read_bytes()).hexdigest()
+    except Exception:
+        return ""
 
 
 def generate_synthetic_journal(n_trades: int = 200) -> None:
@@ -68,6 +77,8 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
     df_train = df.iloc[:train_end]
 
     rng = np.random.default_rng(42)
+    run_id = os.getenv("RUN_ID") or f"synthetic_train_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    split_hash = _split_summary_hash()
 
     traders = ["trader_1", "trader_2", "trader_3", "trader_4", "trader_5"]
     symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "AUDUSD", "USDCAD"]
@@ -165,7 +176,9 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
 
         # CSV row
         csv_rows.append({
+            "run_id": run_id,
             "timestamp": ts.isoformat(),
+            "exit_timestamp": exit_ts.isoformat(),
             "trader": trader,
             "symbol": symbol,
             "side": side,
@@ -177,10 +190,18 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
             "confidence": confidence,
             "pnl": pnl_net,
             "commission": round(commission, 4),
+            "exit_reason": exit_reason,
+            "source": "synthetic_train_journal",
+            "source_split": "train",
+            "bt_start": "",
+            "bt_end": "",
+            "split_summary_hash": split_hash,
+            "correlation_id": f"synth_{i:05d}",
         })
 
         # JSONL row (full Contract 4 format)
         jsonl_rows.append({
+            "run_id": run_id,
             "timestamp": ts.isoformat(),
             "exit_timestamp": exit_ts.isoformat(),
             "trader": trader,
@@ -197,6 +218,11 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
             "exit_reason": exit_reason,
             "strategy": trader,
             "session": "london" if 7 <= ts.hour < 12 else ("ny" if 13 <= ts.hour < 18 else "asian"),
+            "source": "synthetic_train_journal",
+            "source_split": "train",
+            "bt_start": "",
+            "bt_end": "",
+            "split_summary_hash": split_hash,
             "correlation_id": f"synth_{i:05d}",
             "state_at_entry": state_vec,
             "rl_action": int(traders.index(trader)) + 1,
@@ -208,6 +234,8 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
                 "sentiment_score": round(rng.uniform(-0.5, 0.5), 3),
             },
             "signal_metadata": {
+                "run_id": run_id,
+                "source_split": "train",
                 "atr": round(atr, 6),
                 # Bar-derived values consumed by quality_scorer.create_labels()
                 "adx_at_signal":        float(bar.get("adx_14", 20.0)),

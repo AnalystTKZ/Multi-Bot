@@ -31,6 +31,12 @@ _CSV_PATH = "logs/candidate_log.csv"
 
 _FIELDNAMES = [
     "candidate_id",
+    "run_id",
+    "source_split",
+    "bt_start",
+    "bt_end",
+    "split_summary_hash",
+    "correlation_id",
     "trader_id",
     "symbol",
     "side",

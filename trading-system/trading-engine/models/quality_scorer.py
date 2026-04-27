@@ -133,6 +133,7 @@ class QualityScorer(BaseModel):
         self._model        = None
         self._n_features   = N_FEATURES
         self._feature_order = None
+        self._training_metadata = {}
         self._inference_lock = threading.RLock()
         os.makedirs(os.path.join(_MODEL_ROOT, "weights"), exist_ok=True)
         if self.is_trained:
@@ -416,6 +417,12 @@ class QualityScorer(BaseModel):
             labeled_df = self.create_labels(journal_path, allowed_splits=allowed_splits)
             if labeled_df is None or len(labeled_df) < 20:
                 return {"error": "Insufficient journal data"}
+            effective_splits = _default_allowed_splits() if allowed_splits is None else allowed_splits
+            self._training_metadata = {
+                "journal_path": journal_path,
+                "allowed_splits": "ALL" if effective_splits is None else sorted(effective_splits),
+                "n_labeled_rows": int(len(labeled_df)),
+            }
 
             feature_cols = [c for c in QUALITY_FEATURES if c in labeled_df.columns]
             self._feature_order = feature_cols
@@ -598,6 +605,7 @@ class QualityScorer(BaseModel):
                 "state_dict":    {k: v.cpu() for k, v in _m.state_dict().items()},
                 "n_features":    self._n_features,
                 "feature_order": self._feature_order,
+                "training_metadata": self._training_metadata,
             }
             with open(path, "wb") as f:
                 pickle.dump(payload, f)

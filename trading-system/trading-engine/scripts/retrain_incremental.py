@@ -15,10 +15,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,6 +83,7 @@ DATA_DIR        = str(_ENV["data"])
 JOURNAL_PATH    = str(_ENV["engine"] / "logs" / "trade_journal_detailed.jsonl")
 WEIGHTS_DIR     = str(_ENV["weights"])
 BACKUP_DIR      = str(_ENV["weights"] / "backups")
+SPLIT_SUMMARY_PATH = str(_ENV["ml_training"] / "datasets" / "split_summary.json")
 MAX_BACKUPS = 5
 MONTHS_OF_DATA = int(os.getenv("RETRAIN_MONTHS", "0"))  # 0 = use all available data
 RETRAIN_DATA_SPLIT = os.getenv("RETRAIN_DATA_SPLIT", "train").strip().lower()
@@ -1276,12 +1279,67 @@ def validate_only() -> dict:
     return results
 
 
+def _file_sha256(path: str) -> str:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _code_commit() -> str:
+    try:
+        root = Path(_ENV["base"]).resolve().parent
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _artifact_hashes(model_name: str) -> dict:
+    candidates = {
+        "gru_lstm": [
+            os.path.join(WEIGHTS_DIR, "gru_lstm", "model.pt"),
+            os.path.join(WEIGHTS_DIR, "gru_lstm", "weights_manifest.json"),
+        ],
+        "regime_classifier": [
+            os.path.join(WEIGHTS_DIR, "regime_htf.pkl"),
+            os.path.join(WEIGHTS_DIR, "regime_ltf.pkl"),
+        ],
+        "quality_scorer": [
+            os.path.join(WEIGHTS_DIR, "quality_scorer.pkl"),
+        ],
+        "rl_agent": [
+            os.path.join(WEIGHTS_DIR, "rl_ppo", "model.zip"),
+        ],
+    }.get(model_name, [])
+    return {
+        os.path.relpath(path, WEIGHTS_DIR): _file_sha256(path)
+        for path in candidates
+        if os.path.exists(path)
+    }
+
+
 def log_retrain(model_name: str, result: dict) -> None:
     os.makedirs("logs", exist_ok=True)
     path = "logs/retrain_history.jsonl"
+    split_hash = _file_sha256(SPLIT_SUMMARY_PATH)
     record = {
+        "run_id": os.getenv("RUN_ID", ""),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "model": model_name,
+        "retrain_data_split": RETRAIN_DATA_SPLIT,
+        "split_summary_hash": split_hash,
+        "journal_sha256": _file_sha256(JOURNAL_PATH),
+        "artifact_hashes": _artifact_hashes(model_name),
+        "code_commit": _code_commit(),
         **result,
     }
     with open(path, "a") as f:

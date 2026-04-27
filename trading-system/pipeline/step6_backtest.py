@@ -57,10 +57,10 @@ JOURNAL_PATH = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
 JOURNAL_CSV  = ENGINE_DIR / "logs" / "trade_journal.csv"
 N_ROUNDS     = 3
 JOURNAL_CSV_COLUMNS = [
-    "timestamp", "exit_timestamp", "trader", "symbol", "side", "size",
-    "entry", "stop_loss", "take_profit", "rr_ratio", "confidence", "pnl",
-    "commission", "exit_reason", "source", "source_split", "bt_start",
-    "bt_end", "split_summary_hash", "correlation_id",
+    "run_id", "timestamp", "exit_timestamp", "trader", "symbol", "side",
+    "size", "entry", "stop_loss", "take_profit", "rr_ratio", "confidence",
+    "pnl", "commission", "exit_reason", "source", "source_split",
+    "bt_start", "bt_end", "split_summary_hash", "correlation_id",
 ]
 
 for d in [BT_RESULTS, BT_LOGS, ENGINE_DIR / "logs"]:
@@ -277,6 +277,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
     split_hash = _split_summary_hash()
     bt_start = str(data.get("start", ""))
     bt_end = str(data.get("end", ""))
+    run_id = str(data.get("run_id") or f"round{round_num}_{Path(result_path).stem}")
 
     with open(JOURNAL_PATH, "a") as jf, open(JOURNAL_CSV, "a", newline="") as cf:
         csv_writer = csv.DictWriter(cf, fieldnames=JOURNAL_CSV_COLUMNS)
@@ -380,9 +381,13 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 pass
 
             source = f"backtest_round_{round_num}"
-            correlation_id = f"bt_r{round_num}_{written:06d}"
+            correlation_id = str(tr.get("correlation_id") or f"bt_r{round_num}_{written:06d}")
+            trade_source_split = str(tr.get("source_split") or source_split)
+            trade_split_hash = str(tr.get("split_summary_hash") or split_hash)
+            trade_run_id = str(tr.get("run_id") or run_id)
 
             record = {
+                "run_id":          trade_run_id,
                 "timestamp":       ts_str,
                 "exit_timestamp":  exit_ts,
                 "trader":          trader,
@@ -400,10 +405,10 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "strategy":        trader,
                 "session":         entry_session,
                 "source":          source,
-                "source_split":    source_split,
+                "source_split":    trade_source_split,
                 "bt_start":        bt_start,
                 "bt_end":          bt_end,
-                "split_summary_hash": split_hash,
+                "split_summary_hash": trade_split_hash,
                 "correlation_id":  correlation_id,
                 "state_at_entry":  state_vec,
                 "rl_action":       int(trader.split("_")[1]) if trader.startswith("trader_") else 1,
@@ -422,15 +427,20 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                     "sentiment_confidence": 0.0,
                 },
                 "signal_metadata": {
+                    "run_id":    trade_run_id,
                     "atr":       float(tr.get("atr", 0.001)),
                     "adx":       float(tr.get("adx", 20.0)),
                     "ema_stack": float(tr.get("ema_stack", 0)),
+                    "directional_group": str(tr.get("directional_group", "")),
+                    "same_timestamp_entries": int(tr.get("same_timestamp_entries", 1)),
+                    "same_timestamp_group_entries": int(tr.get("same_timestamp_group_entries", 1)),
                 },
             }
             jf.write(json.dumps(record, default=str) + "\n")
 
             # CSV row
             csv_writer.writerow({
+                "run_id":             trade_run_id,
                 "timestamp":          ts_str,
                 "exit_timestamp":     exit_ts,
                 "trader":             trader,
@@ -446,10 +456,10 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "commission":         round(commission, 4),
                 "exit_reason":        exit_reason,
                 "source":             source,
-                "source_split":       source_split,
+                "source_split":       trade_source_split,
                 "bt_start":           bt_start,
                 "bt_end":             bt_end,
-                "split_summary_hash": split_hash,
+                "split_summary_hash": trade_split_hash,
                 "correlation_id":     correlation_id,
             })
             written += 1

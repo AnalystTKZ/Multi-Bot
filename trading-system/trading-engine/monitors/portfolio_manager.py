@@ -422,6 +422,10 @@ class PortfolioManager:
             return False
         return True
 
+    def directional_group(self, symbol: str, side: str) -> Optional[str]:
+        """Public audit helper for the same grouping used by the correlation cap."""
+        return self._directional_group(symbol, side)
+
     def _directional_group(self, symbol: str, side: str) -> Optional[str]:
         base = _CURRENCY_GROUPS.get(symbol)
         if base is None:

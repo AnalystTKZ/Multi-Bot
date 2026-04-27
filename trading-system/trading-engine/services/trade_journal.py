@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 _CSV_PATH = "logs/trade_journal.csv"
 _JSONL_PATH = "logs/trade_journal_detailed.jsonl"
 _CSV_COLUMNS = [
-    "timestamp", "exit_timestamp", "trader", "symbol", "side", "size",
-    "entry", "stop_loss", "take_profit", "rr_ratio", "confidence", "pnl",
-    "commission", "exit_reason", "source", "source_split", "bt_start",
-    "bt_end", "split_summary_hash", "correlation_id",
+    "run_id", "timestamp", "exit_timestamp", "trader", "symbol", "side",
+    "size", "entry", "stop_loss", "take_profit", "rr_ratio", "confidence",
+    "pnl", "commission", "exit_reason", "source", "source_split",
+    "bt_start", "bt_end", "split_summary_hash", "correlation_id",
 ]
 
 
@@ -71,6 +71,7 @@ class TradeJournal:
 
         # ─── CSV ─────────────────────────────────────────────────────────────
         csv_row = {
+            "run_id": str(trade.get("run_id") or meta.get("run_id", "")),
             "timestamp": timestamp,
             "exit_timestamp": exit_timestamp,
             "trader": trader,
@@ -104,6 +105,7 @@ class TradeJournal:
         # ─── JSONL ───────────────────────────────────────────────────────────
         jsonl_record = {
             # CSV fields
+            "run_id": str(trade.get("run_id") or meta.get("run_id", "")),
             "timestamp": timestamp,
             "exit_timestamp": exit_timestamp,
             "trader": trader,
