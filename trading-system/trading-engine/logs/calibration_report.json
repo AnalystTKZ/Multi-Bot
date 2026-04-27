@@ -1,81 +1,71 @@
 {
-  "timestamp": "2026-04-27T00:34:23.133014+00:00",
+  "timestamp": "2026-04-27T01:53:12.502421+00:00",
   "traders": {
     "all": {
       "trader_id": "all",
       "bins": [
         {
-          "predicted_range": "0.55-0.60",
-          "actual_win_rate": 0.5741,
-          "count": 3008
-        },
-        {
           "predicted_range": "0.60-0.65",
-          "actual_win_rate": 0.5689,
-          "count": 3020
+          "actual_win_rate": 0.3077,
+          "count": 13
         },
         {
           "predicted_range": "0.65-0.70",
-          "actual_win_rate": 0.5983,
-          "count": 814
+          "actual_win_rate": 0.4545,
+          "count": 11
         },
         {
           "predicted_range": "0.70-0.75",
-          "actual_win_rate": 0.5971,
-          "count": 206
+          "actual_win_rate": 0.2222,
+          "count": 9
         },
         {
           "predicted_range": "0.75-0.80",
-          "actual_win_rate": 0.597,
-          "count": 67
+          "actual_win_rate": 0.4667,
+          "count": 15
         },
         {
           "predicted_range": "0.80-0.90",
-          "actual_win_rate": 0.5455,
-          "count": 11
+          "actual_win_rate": 0.3846,
+          "count": 13
         }
       ],
       "monotonic": false,
-      "reliable": true,
-      "note": "Calibration usable but not strictly monotonic: 1/5 pairs violated."
+      "reliable": false,
+      "note": "Non-monotonic calibration: 2/4 pairs violated. Consider retraining QualityScorer."
     },
     "ml_trader": {
       "trader_id": "ml_trader",
       "bins": [
         {
-          "predicted_range": "0.55-0.60",
-          "actual_win_rate": 0.5741,
-          "count": 3008
-        },
-        {
           "predicted_range": "0.60-0.65",
-          "actual_win_rate": 0.5689,
-          "count": 3020
+          "actual_win_rate": 0.3077,
+          "count": 13
         },
         {
           "predicted_range": "0.65-0.70",
-          "actual_win_rate": 0.5983,
-          "count": 814
+          "actual_win_rate": 0.4545,
+          "count": 11
         },
         {
           "predicted_range": "0.70-0.75",
-          "actual_win_rate": 0.5971,
-          "count": 206
+          "actual_win_rate": 0.2222,
+          "count": 9
         },
         {
           "predicted_range": "0.75-0.80",
-          "actual_win_rate": 0.597,
-          "count": 67
+          "actual_win_rate": 0.4667,
+          "count": 15
         },
         {
           "predicted_range": "0.80-0.90",
-          "actual_win_rate": 0.5455,
-          "count": 11
+          "actual_win_rate": 0.3846,
+          "count": 13
         }
       ],
       "monotonic": false,
-      "reliable": true,
-      "note": "Calibration usable but not strictly monotonic: 1/5 pairs violated."
+      "reliable": false,
+      "note": "Non-monotonic calibration: 2/4 pairs violated. Consider retraining QualityScorer."
     }
   }
 }
