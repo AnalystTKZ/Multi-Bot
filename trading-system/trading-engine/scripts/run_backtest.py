@@ -1663,6 +1663,10 @@ def _backtest_trader(
 
     # Per-symbol cooldown: symbol → last bar index where a trade was taken
     last_trade_bar: dict[str, int] = {}
+    # Simulated open/pending positions for PM portfolio_state. The backtest still
+    # computes trade outcomes immediately, but this ledger preserves entry→exit
+    # exposure so later signals at the same or later timestamp see correlation risk.
+    open_positions_detail: list[dict] = []
 
     # Trade density tracking: rolling 96-bar window (~24h at 15M) per symbol.
     # Used for soft exponential confidence penalty — not a hard cap.
@@ -1732,6 +1736,10 @@ def _backtest_trader(
             _loop_last_log = _now
         df  = symbol_dfs[symbol]
         dt  = pd.to_datetime(int(ts_ns), unit="ns", utc=True)
+        open_positions_detail = [
+            pos for pos in open_positions_detail
+            if int(pos.get("exit_ts_ns", -1)) > int(ts_ns)
+        ]
 
         # ── Circuit breaker 1: portfolio drawdown ─────────────────────────────
         dd = (peak_equity - equity) / (peak_equity + 1e-9)
@@ -1859,7 +1867,10 @@ def _backtest_trader(
                 _dbg["pm_reject"] += 1
                 continue
         else:
-            portfolio_state = {"equity": sizing_equity, "open_positions_detail": []}
+            portfolio_state = {
+                "equity": sizing_equity,
+                "open_positions_detail": open_positions_detail,
+            }
             enriched = pm.enrich_signal(raw_signal, portfolio_state, atr=atr)
             if enriched is None:
                 _dbg["pm_reject"] += 1
@@ -1933,6 +1944,21 @@ def _backtest_trader(
         peak_eq = peak_equity if peak_equity > 0 else 1.0
         exit_idx = min(i + int(result["bars_held"]), len(df) - 1)
         exit_dt = _utc_timestamp(df.index[exit_idx])
+        exit_ts_ns = int(pd.Timestamp(exit_dt).value)
+        pm_open_positions_seen = len(open_positions_detail)
+        open_positions_detail.append({
+            "symbol": symbol,
+            "side": enriched["side"],
+            "trader_id": trader_id,
+            "entry_timestamp": dt.isoformat(),
+            "exit_timestamp": exit_dt.isoformat(),
+            "exit_ts_ns": exit_ts_ns,
+            "entry": entry,
+            "stop_loss": sl,
+            "take_profit": tp2,
+            "size": size,
+            "confidence": enriched.get("confidence", 0.0),
+        })
 
         trades.append({
             "timestamp":   dt.isoformat(),
@@ -1979,6 +2005,7 @@ def _backtest_trader(
             "age_weight":      float(meta.get("age_weight", 1.0)),
             "realized_rr":   float(abs(pnl) / (abs(entry - sl) * size + 1e-9)) * (1 if pnl > 0 else -1),
             "density_count": _density_count,
+            "pm_open_positions_seen": pm_open_positions_seen,
         })
 
         post_trade_dd = (peak_equity - equity) / (peak_equity + 1e-9)
@@ -2386,7 +2413,7 @@ def _write_trade_breakdowns(trades: list[dict], run_id: str) -> dict:
         "session_hour", "session", "p_bull", "p_bull_bin", "p_bear", "p_bear_bin",
         "adx", "adx_bin", "atr", "atr_entry_pct", "atr_entry_pct_bin",
         "ema_stack", "same_timestamp_entries", "same_timestamp_group_entries",
-        "exit_reason", "pnl", "realized_rr",
+        "pm_open_positions_seen", "exit_reason", "pnl", "realized_rr",
     ]
     detail_path = out_dir / f"backtest_trade_breakdown_{run_id}.csv"
     latest_detail_path = out_dir / "backtest_trade_breakdown_latest.csv"
@@ -2411,6 +2438,7 @@ def _write_trade_breakdowns(trades: list[dict], run_id: str) -> dict:
         ("directional_group", lambda t: str(t.get("directional_group", ""))),
         ("same_timestamp_entries", lambda t: str(t.get("same_timestamp_entries", ""))),
         ("same_timestamp_group_entries", lambda t: str(t.get("same_timestamp_group_entries", ""))),
+        ("pm_open_positions_seen", lambda t: str(t.get("pm_open_positions_seen", ""))),
     ]
 
     summary_rows = []
