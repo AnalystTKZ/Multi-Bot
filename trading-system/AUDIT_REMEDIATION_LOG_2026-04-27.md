@@ -237,3 +237,40 @@ python3 -m py_compile \
   trading-system/trading-engine/models/rl_agent.py \
   trading-system/trading-engine/scripts/retrain_incremental.py
 ```
+
+## Clean Artifact Reset
+
+Generated artifacts were cleared again so the next run starts from a clean state.
+
+Deleted and recreated empty:
+
+- `trading-system/trading-engine/backtest_results`
+- `trading-system/trading-engine/backtest_results/ml_cache`
+- `trading-system/trading-engine/logs`
+- `trading-system/trading-engine/weights`
+- `trading-system/backtesting/results`
+- `trading-system/backtesting/logs`
+- `trading-system/ml_training/metrics`
+- `trading-system/ml_training/logs`
+
+Also removed generated caches:
+
+- `trading-system/trading-engine/models/weights`
+- `trading-system/trading-engine/vector_store`
+- Python `__pycache__` directories under `trading-system`
+- `.pytest_cache` directories under `trading-system`
+
+Verification:
+
+```bash
+find trading-system/trading-engine/backtest_results \
+     trading-system/trading-engine/logs \
+     trading-system/trading-engine/weights \
+     trading-system/backtesting/results \
+     trading-system/backtesting/logs \
+     trading-system/ml_training/metrics \
+     trading-system/ml_training/logs \
+     -type f -print
+```
+
+The verification command returned no files.
