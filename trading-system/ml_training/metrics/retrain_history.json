@@ -1,72 +1,72 @@
 [
   {
-    "timestamp": "2026-04-26T20:23:21.118328+00:00",
+    "timestamp": "2026-04-26T23:59:49.172752+00:00",
     "model": "regime_classifier_htf",
-    "accuracy": 0.9752066115702479,
+    "accuracy": 0.9731077003804276,
     "n_train": 30491,
     "n_val": 7623,
-    "val_loss": 1.101352,
+    "val_loss": 1.106386,
     "per_class_accuracy": {
       "BIAS_UP": 1.0,
-      "BIAS_DOWN": 1.0,
-      "BIAS_NEUTRAL": 0.863
+      "BIAS_DOWN": 0.998,
+      "BIAS_NEUTRAL": 0.854
     },
     "timeframe": "4H",
     "status": "complete"
   },
   {
-    "timestamp": "2026-04-26T20:23:59.304372+00:00",
+    "timestamp": "2026-04-27T00:00:23.876183+00:00",
     "model": "regime_classifier_ltf",
-    "accuracy": 0.8231027625048047,
+    "accuracy": 0.8267961294851012,
     "n_train": 239348,
     "n_val": 59837,
-    "val_loss": 1.243079,
+    "val_loss": 1.243897,
     "per_class_accuracy": {
-      "TRENDING": 0.801,
-      "RANGING": 0.77,
-      "CONSOLIDATING": 0.832,
-      "VOLATILE": 0.892
+      "TRENDING": 0.803,
+      "RANGING": 0.767,
+      "CONSOLIDATING": 0.84,
+      "VOLATILE": 0.899
     },
     "timeframe": "1H",
     "status": "complete"
   },
   {
-    "timestamp": "2026-04-26T20:23:59.305276+00:00",
+    "timestamp": "2026-04-27T00:00:23.876894+00:00",
     "model": "regime_classifier",
     "trained": true,
     "samples": 504761,
     "results": {
       "HTF": {
-        "accuracy": 0.9752066115702479,
+        "accuracy": 0.9731077003804276,
         "per_class_accuracy": {
           "BIAS_UP": 1.0,
-          "BIAS_DOWN": 1.0,
-          "BIAS_NEUTRAL": 0.863
+          "BIAS_DOWN": 0.998,
+          "BIAS_NEUTRAL": 0.854
         }
       },
       "LTF": {
-        "accuracy": 0.8231027625048047,
+        "accuracy": 0.8267961294851012,
         "per_class_accuracy": {
-          "TRENDING": 0.801,
-          "RANGING": 0.77,
-          "CONSOLIDATING": 0.832,
-          "VOLATILE": 0.892
+          "TRENDING": 0.803,
+          "RANGING": 0.767,
+          "CONSOLIDATING": 0.84,
+          "VOLATILE": 0.899
         }
       }
     }
   },
   {
-    "timestamp": "2026-04-26T20:31:40.752675+00:00",
+    "timestamp": "2026-04-27T00:11:14.063040+00:00",
     "model": "gru_lstm",
     "status": "complete",
     "mode": "multi_symbol",
     "segments": 44,
     "samples": 6069276,
     "groups_trained": 1,
-    "val_loss_points": 29
+    "val_loss_points": 50
   },
   {
-    "timestamp": "2026-04-26T20:31:40.758237+00:00",
+    "timestamp": "2026-04-27T00:11:14.067212+00:00",
     "model": "gru_lstm",
     "trained": true,
     "segments": 44,
