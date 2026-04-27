@@ -70,7 +70,7 @@ def _default_allowed_splits() -> set[str] | None:
     if _env_flag("ALLOW_NONTRAIN_JOURNAL_TRAINING"):
         return None
     default = "train,live,paper,production"
-    if _env_flag("ALLOW_ROUND_JOURNAL_TRAINING", "1"):
+    if _env_flag("ALLOW_ROUND_JOURNAL_TRAINING", "0"):
         default = "train,validation,test,combined_eval,live,paper,production"
     raw = os.getenv("JOURNAL_ALLOWED_SPLITS", default)
     return {s.strip().lower() for s in raw.split(",") if s.strip()}
@@ -286,9 +286,9 @@ class QualityScorer(BaseModel):
         """
         Read trade_journal_detailed.jsonl.
         EV label = documented tiered R-multiple mapping.
-        Round backtest journals are included by default for the staged
-        Quality/RL feedback loop. Override JOURNAL_ALLOWED_SPLITS for stricter
-        production-only retraining.
+        Only train/live/paper/production journals are included by default.
+        Set ALLOW_ROUND_JOURNAL_TRAINING=1 or JOURNAL_ALLOWED_SPLITS explicitly
+        for research-only feedback loops that train on evaluation journals.
         """
         allowed_splits = _default_allowed_splits() if allowed_splits is None else allowed_splits
         records = []

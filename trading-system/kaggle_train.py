@@ -25,15 +25,18 @@ Step 7a always re-runs (GRU + Regime full training on train set).
 
 == BLIND BACKTEST PIPELINE ==
 
+  Clean Quality/RL source — backtest on train window only
+             → retrain Quality + RL on train-split journal
+
   Round 1 — backtest on val window (last 2yr of training data)
-             → retrain Quality + RL on Round 1 journal
+             → no Quality/RL retrain from validation journal by default
 
   Round 2 — backtest on test window (unseen 2yr — BLIND)
-             → retrain Quality + RL on Round 1+2 journal
+             → no Quality/RL retrain from test journal by default
 
   Round 3 — incremental retrain
              → backtest on last 3yr (val+test overlap) as a stability check
-             → retrain Quality + RL on Round 1+2+3 journal for the next run
+             → optional research-only Quality/RL eval-journal feedback loop
 
 Data split (step5_split.py):
   train      = data_start → (test_end - 4yr)      models train on this
@@ -62,9 +65,11 @@ ensure_output_dirs(env)
 if env["on_kaggle"]:
     for stale in [
         env["ml_training"] / "metrics" / "training_summary.json",
+        env["ml_training"] / "metrics" / "training_7b_train_summary.json",
         env["ml_training"] / "metrics" / "training_7b_r1_summary.json",
         env["ml_training"] / "metrics" / "training_7b_r2_summary.json",
         env["ml_training"] / "metrics" / "training_7b_r3_summary.json",
+        env["base"] / "backtesting" / "results" / "train_quality_rl_source_summary.json",
         env["base"] / "backtesting" / "results" / "latest_summary.json",
         env["base"] / "backtesting" / "results" / "round1_summary.json",
         env["base"] / "backtesting" / "results" / "round2_summary.json",
@@ -137,17 +142,32 @@ def _base_env() -> dict:
     }
 
 
-def _round_journal_training_env() -> dict:
+def _clean_journal_training_env() -> dict:
     """
-    Permit Quality/RL to train from the journals produced by the staged
-    backtest rounds. This is intentionally scoped to explicit source_split
-    names instead of ALLOW_NONTRAIN_JOURNAL_TRAINING=1, which would accept any
-    journal provenance.
+    Production-safe Quality/RL training: train from train-period, live, paper,
+    or production journals only. Validation/test/combined_eval journals remain
+    evaluation evidence and are not used for fitting.
+    """
+    return {
+        "ALLOW_ROUND_JOURNAL_TRAINING": "0",
+        "JOURNAL_ALLOWED_SPLITS": "train,live,paper,production",
+    }
+
+
+def _eval_journal_training_env() -> dict:
+    """
+    Research-only feedback loop. This intentionally permits evaluation
+    journals and therefore invalidates blind-test claims for any later result
+    that uses the adapted Quality/RL weights.
     """
     return {
         "ALLOW_ROUND_JOURNAL_TRAINING": "1",
         "JOURNAL_ALLOWED_SPLITS": "train,validation,test,combined_eval,live,paper,production",
     }
+
+
+def _allow_eval_journal_retraining() -> bool:
+    return str(os.getenv("ALLOW_EVAL_JOURNAL_RETRAINING", "0")).lower() in {"1", "true", "yes", "on"}
 
 
 def run_step(name: str, script: str, done_check: Path, extra_env: dict | None = None) -> None:
@@ -197,6 +217,23 @@ def _journal_count() -> int:
     if not j.exists():
         return 0
     return sum(1 for _ in open(j))
+
+
+def _archive_journal(label: str) -> None:
+    """Persist the current journal/CSV under a label before later phases reset it."""
+    import shutil
+
+    j = _journal_path()
+    if j.exists():
+        dest = j.with_name(f"trade_journal_{label}.jsonl")
+        shutil.copy2(j, dest)
+        print(f"  Archived journal → {dest.name}")
+
+    csv_path = env["engine"] / "logs" / "trade_journal.csv"
+    if csv_path.exists():
+        dest = csv_path.with_name(f"trade_journal_{label}.csv")
+        shutil.copy2(csv_path, dest)
+        print(f"  Archived journal CSV → {dest.name}")
 
 
 def _copy_bt_result(src_label: str, dest_name: str) -> None:
@@ -264,10 +301,39 @@ run_step(
     env["ml_training"] / "metrics" / "training_summary.json",
 )
 
+# ─── Clean Quality/RL labels from TRAIN split only ────────────────────────────
+# QualityScorer and RLAgent need executed trade outcomes, but validation/test
+# journals must remain evaluation evidence. Generate those outcomes from a
+# train-window backtest, train Quality/RL from source_split=train, archive the
+# train journal, then start Round 1 with a fresh evaluation journal.
+
+print("\n=== Clean Quality/RL source: Backtest on train window ===")
+run_step(
+    "Train-window backtest for Quality/RL labels",
+    "step6_backtest.py",
+    env["base"] / "backtesting" / "results" / "train_quality_rl_source_summary.json",
+    extra_env={"BT_WINDOW": "train"},
+)
+_copy_bt_result("Train Quality/RL source", "train_quality_rl_source_summary.json")
+print(f"  Train-label journal entries: {_journal_count()}")
+
+print("\n=== Train Quality + RL on train-only journal ===")
+run_step(
+    "Train-only Quality+RL retrain",
+    "step7b_train.py",
+    env["ml_training"] / "metrics" / "training_7b_train_summary.json",
+    extra_env=_clean_journal_training_env(),
+)
+train_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+train_dest = env["ml_training"] / "metrics" / "training_7b_train_summary.json"
+if train_done.exists() and not train_dest.exists():
+    train_done.rename(train_dest)
+_archive_journal("train_only")
+
 # ─── Round 1: Backtest on val window ─────────────────────────────────────────
 # Covers the last 2 years of the training window (val set).
 # Tests whether trained models generalise beyond the training period.
-# Journal is cleared before Round 1 so it accumulates only backtest trades.
+# Journal is cleared before Round 1 so it accumulates only evaluation evidence.
 
 print("\n=== Round 1: Backtest on validation window (last 2yr of training data) ===")
 
@@ -285,19 +351,21 @@ run_step(
 _copy_bt_result("Round 1", "round1_summary.json")
 print(f"  Journal after Round 1: {_journal_count()} entries")
 
-# ─── Train Quality + RL on Round 1 journal ───────────────────────────────────
-print("\n=== Round 1 → Retrain Quality + RL on Round 1 journal ===")
-run_step(
-    "Round 1 - Quality+RL retrain",
-    "step7b_train.py",
-    env["ml_training"] / "metrics" / "training_7b_r1_summary.json",
-    extra_env=_round_journal_training_env(),
-)
-# Rename done-check so Round 2's retrain gets a fresh marker
-r1_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
-r1_dest = env["ml_training"] / "metrics" / "training_7b_r1_summary.json"
-if r1_done.exists() and not r1_dest.exists():
-    r1_done.rename(r1_dest)
+if _allow_eval_journal_retraining():
+    print("\n=== RESEARCH ONLY: Round 1 → Retrain Quality + RL on validation journal ===")
+    run_step(
+        "Round 1 - Quality+RL retrain",
+        "step7b_train.py",
+        env["ml_training"] / "metrics" / "training_7b_r1_summary.json",
+        extra_env=_eval_journal_training_env(),
+    )
+    # Rename done-check so Round 2's retrain gets a fresh marker
+    r1_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+    r1_dest = env["ml_training"] / "metrics" / "training_7b_r1_summary.json"
+    if r1_done.exists() and not r1_dest.exists():
+        r1_done.rename(r1_dest)
+else:
+    print("\n  SKIP  Round 1 Quality+RL retrain — validation journal kept evaluation-only")
 
 # ─── Round 2: BLIND backtest on test window ───────────────────────────────────
 # This is the true out-of-sample evaluation.
@@ -313,35 +381,39 @@ run_step(
 _copy_bt_result("Round 2", "round2_summary.json")
 print(f"  Journal after Round 2: {_journal_count()} entries")
 
-# ─── Train Quality + RL on Round 1+2 combined journal ────────────────────────
-print("\n=== Round 2 → Retrain Quality + RL on Round 1+2 journal ===")
-r2_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
-if r2_done.exists():
-    r2_done.unlink()
-run_step(
-    "Round 2 - Quality+RL retrain",
-    "step7b_train.py",
-    env["ml_training"] / "metrics" / "training_7b_r2_summary.json",
-    extra_env=_round_journal_training_env(),
-)
-r2_dest = env["ml_training"] / "metrics" / "training_7b_r2_summary.json"
-if r2_done.exists() and not r2_dest.exists():
-    r2_done.rename(r2_dest)
+if _allow_eval_journal_retraining():
+    print("\n=== RESEARCH ONLY: Round 2 → Retrain Quality + RL on validation+test journal ===")
+    r2_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+    if r2_done.exists():
+        r2_done.unlink()
+    run_step(
+        "Round 2 - Quality+RL retrain",
+        "step7b_train.py",
+        env["ml_training"] / "metrics" / "training_7b_r2_summary.json",
+        extra_env=_eval_journal_training_env(),
+    )
+    r2_dest = env["ml_training"] / "metrics" / "training_7b_r2_summary.json"
+    if r2_done.exists() and not r2_dest.exists():
+        r2_done.rename(r2_dest)
+else:
+    print("\n  SKIP  Round 2 Quality+RL retrain — blind test journal kept untouched")
 
 # ─── Round 3: Incremental retrain ────────────────────────────────────────────
-# GRU/Regime continue to fit only on the train split. Quality/RL train on the
-# accumulated round journals because they are the feedback learners for this
-# staged research loop.
+# GRU/Regime continue to fit only on the train split. Quality/RL remain fixed
+# from the train-only journal unless explicit research feedback is enabled.
 
 print("\n=== Round 3: Incremental retrain ===")
 for model in ["gru", "regime"]:
     run_retrain(model, label="train-split retrain")
-for model in ["quality", "rl"]:
-    run_retrain(
-        model,
-        label="round-journal retrain",
-        extra_env=_round_journal_training_env(),
-    )
+if _allow_eval_journal_retraining():
+    for model in ["quality", "rl"]:
+        run_retrain(
+            model,
+            label="research eval-journal retrain",
+            extra_env=_eval_journal_training_env(),
+        )
+else:
+    print("  SKIP  Quality/RL incremental retrain — clean train-only weights retained")
 
 # ─── Round 3: Backtest on last 3yr (val+test overlap) ────────────────────────
 # Evaluates the fully-retrained models over the most recent 3 years of data.
@@ -358,20 +430,22 @@ run_step(
 _copy_bt_result("Round 3", "round3_summary.json")
 print(f"  Journal after Round 3: {_journal_count()} entries")
 
-# ─── Train Quality + RL on Round 1+2+3 combined journal ──────────────────────
-print("\n=== Round 3 → Retrain Quality + RL on Round 1+2+3 journal ===")
-r3_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
-if r3_done.exists():
-    r3_done.unlink()
-run_step(
-    "Round 3 - Quality+RL retrain",
-    "step7b_train.py",
-    env["ml_training"] / "metrics" / "training_7b_r3_summary.json",
-    extra_env=_round_journal_training_env(),
-)
-r3_dest = env["ml_training"] / "metrics" / "training_7b_r3_summary.json"
-if r3_done.exists() and not r3_dest.exists():
-    r3_done.rename(r3_dest)
+if _allow_eval_journal_retraining():
+    print("\n=== RESEARCH ONLY: Round 3 → Retrain Quality + RL on Round 1+2+3 journal ===")
+    r3_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+    if r3_done.exists():
+        r3_done.unlink()
+    run_step(
+        "Round 3 - Quality+RL retrain",
+        "step7b_train.py",
+        env["ml_training"] / "metrics" / "training_7b_r3_summary.json",
+        extra_env=_eval_journal_training_env(),
+    )
+    r3_dest = env["ml_training"] / "metrics" / "training_7b_r3_summary.json"
+    if r3_done.exists() and not r3_dest.exists():
+        r3_done.rename(r3_dest)
+else:
+    print("\n  SKIP  Round 3 Quality+RL retrain — evaluation journals not used for fitting")
 
 # ─── Final summary ────────────────────────────────────────────────────────────
 

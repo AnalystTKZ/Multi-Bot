@@ -2,12 +2,14 @@
 """
 Step 6: Backtest + Reinforced Training Loop
 
-Blind-backtest pipeline (3 rounds):
-  Round 1 — train window (data_start → val_end):   val set as the "seen" evaluation window
-  Round 2 — test window  (test_start → test_end):  fully blind OOS evaluation
-  Round 3 — last 3yr     (3yr_before_end → end):   post-incremental-retrain evaluation
+Blind-backtest pipeline:
+  Train   — train window (train_start → train_end): Quality/RL label source
+  Round 1 — validation window:                      seen evaluation window
+  Round 2 — test window  (test_start → test_end):   fully blind OOS evaluation
+  Round 3 — last 3yr     (3yr_before_end → end):    post-incremental-retrain evaluation
 
 Control via BT_WINDOW env var:
+  BT_WINDOW=train    — train period only (Quality/RL label generation)
   BT_WINDOW=round1   — val period only   (default; protects test set)
   BT_WINDOW=round2   — test period only  (blind backtest)
   BT_WINDOW=round3   — last 3yr          (post-full-retrain evaluation)
@@ -122,6 +124,8 @@ def _split_summary_hash() -> str:
 
 
 def _source_split_for_round(round_num: int) -> str:
+    if round_num == 0:
+        return "train"
     if round_num == 1:
         return "validation"
     if round_num == 2:
@@ -130,6 +134,8 @@ def _source_split_for_round(round_num: int) -> str:
 
 
 def _run_split_for_round(round_num: int) -> str:
+    if round_num == 0:
+        return "train"
     return "test" if round_num in (2, 3) else "validation"
 
 
@@ -137,6 +143,7 @@ def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
     """
     Return (bt_start, bt_end) for the requested backtest window.
 
+    train  — train window: train_start → train_end (clean Quality/RL labels)
     round1 — val window: val_start → val_end   (test set protected)
     round2 — test window: test_start → test_end (blind OOS)
     round3 — last 3yr: (test_end - 3yr) → test_end (post-incremental-retrain eval)
@@ -148,12 +155,17 @@ def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
     summary = _load_split_summary()
     dr = summary["date_ranges"]
 
-    val_start  = dr["validation"]["start"][:10]
+    train_start = dr["train"]["start"][:10]
+    train_end   = dr["train"]["end"][:10]
+    val_start   = dr["validation"]["start"][:10]
     val_end    = dr["validation"]["end"][:10]
     test_start = dr["test"]["start"][:10]
     test_end   = dr["test"]["end"][:10]
 
-    if bt_window == "round2":
+    if bt_window == "train":
+        bt_start, bt_end = train_start, train_end
+        logger.info("BT_WINDOW=train — train-window backtest: %s → %s (clean Quality/RL labels)", bt_start, bt_end)
+    elif bt_window == "round2":
         bt_start, bt_end = test_start, test_end
         logger.info("BT_WINDOW=round2 — BLIND backtest: %s → %s (test set)", bt_start, bt_end)
     elif bt_window == "round3":
@@ -167,7 +179,7 @@ def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
         logger.info("BT_WINDOW=round1 — val-window backtest: %s → %s (test set protected)", bt_start, bt_end)
     else:
         logger.error(
-            "Unknown BT_WINDOW=%r — must be one of: round1, round2, round3", bt_window
+            "Unknown BT_WINDOW=%r — must be one of: train, round1, round2, round3", bt_window
         )
         sys.exit(1)
 
@@ -403,7 +415,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             except Exception:
                 pass
 
-            source = f"backtest_round_{round_num}"
+            source = "backtest_train" if round_num == 0 else f"backtest_round_{round_num}"
             correlation_id = str(tr.get("correlation_id") or f"bt_r{round_num}_{written:06d}")
             trade_source_split = str(tr.get("source_split") or source_split)
             trade_split_hash = str(tr.get("split_summary_hash") or split_hash)
@@ -498,19 +510,20 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
 def main():
     bt_window = os.getenv("BT_WINDOW", "").lower().strip()
     if not bt_window:
-        logger.error("BT_WINDOW env var not set — must be one of: round1, round2, round3")
+        logger.error("BT_WINDOW env var not set — must be one of: train, round1, round2, round3")
         sys.exit(1)
     logger.info("=== STEP 6: BACKTEST (%s) ===", bt_window)
 
     bt_start, bt_end = _resolve_bt_window(bt_window)
-    round_num_map = {"round1": 1, "round2": 2, "round3": 3}
+    round_num_map = {"train": 0, "round1": 1, "round2": 2, "round3": 3}
     round_num = round_num_map[bt_window]
 
-    # Clear journal before round 1 so we accumulate only backtest-sourced trades
-    if bt_window == "round1" and JOURNAL_PATH.exists():
+    # Clear journal before train-label generation and before round 1 evaluation
+    # so Quality/RL training data and validation/test diagnostics stay separate.
+    if bt_window in {"train", "round1"} and JOURNAL_PATH.exists():
         JOURNAL_PATH.unlink()
-        logger.info("Cleared existing journal for fresh reinforced training run")
-    if bt_window == "round1" and JOURNAL_CSV.exists():
+        logger.info("Cleared existing journal for fresh %s run", bt_window)
+    if bt_window in {"train", "round1"} and JOURNAL_CSV.exists():
         JOURNAL_CSV.unlink()
 
     sep = "=" * 64

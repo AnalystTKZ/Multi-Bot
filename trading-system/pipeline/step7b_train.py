@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Step 7b: Quality + RL training — runs after a real round/live/paper journal exists.
+Step 7b: Quality + RL training — runs after a real train/live/paper journal exists.
 Requires trade_journal_detailed.jsonl with >= MIN_JOURNAL_STEP7B real entries
 (default 50).
 No synthetic fallback — if journal is missing or too small, step fails loudly.
-Round-produced backtest journals are allowed here because this step is the
-research feedback loop that retrains Quality/RL between backtest rounds.
+Evaluation backtest journals are excluded by default so validation/test windows
+remain clean. Set ALLOW_ROUND_JOURNAL_TRAINING=1 and widen
+JOURNAL_ALLOWED_SPLITS only for research-only feedback loops.
 """
 from __future__ import annotations
 import json
@@ -36,8 +37,18 @@ JOURNAL_PATH         = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
 MIN_JOURNAL_ENTRIES = int(os.getenv("MIN_JOURNAL_STEP7B", "50"))
 ROUND_JOURNAL_SPLITS = os.getenv(
     "ROUND_JOURNAL_ALLOWED_SPLITS",
-    "train,validation,test,combined_eval,live,paper,production",
+    "train,live,paper,production",
 )
+
+
+def _allowed_splits() -> set[str]:
+    raw = os.getenv("JOURNAL_ALLOWED_SPLITS", ROUND_JOURNAL_SPLITS)
+    return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def _record_allowed(record: dict, allowed: set[str]) -> bool:
+    split = str(record.get("source_split", "")).strip().lower()
+    return bool(split and split in allowed)
 
 
 def run_retrain(model: str) -> dict:
@@ -48,7 +59,7 @@ def run_retrain(model: str) -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ENGINE_DIR)
     env["TF_CPP_MIN_LOG_LEVEL"] = "2"
-    env.setdefault("ALLOW_ROUND_JOURNAL_TRAINING", "1")
+    env.setdefault("ALLOW_ROUND_JOURNAL_TRAINING", "0")
     env.setdefault("JOURNAL_ALLOWED_SPLITS", ROUND_JOURNAL_SPLITS)
 
     logger.info(
@@ -91,15 +102,27 @@ def main():
         )
         sys.exit(0)
 
+    allowed_splits = _allowed_splits()
+    n_entries = 0
+    n_allowed = 0
     with open(JOURNAL_PATH) as f:
-        n_entries = sum(1 for line in f if line.strip())
+        for line in f:
+            if not line.strip():
+                continue
+            n_entries += 1
+            try:
+                if _record_allowed(json.loads(line), allowed_splits):
+                    n_allowed += 1
+            except Exception:
+                continue
 
-    logger.info("Journal entries: %d", n_entries)
-    if n_entries < MIN_JOURNAL_ENTRIES:
+    logger.info("Journal entries: %d total, %d allowed for training (%s)",
+                n_entries, n_allowed, sorted(allowed_splits))
+    if n_allowed < MIN_JOURNAL_ENTRIES:
         logger.warning(
-            "Journal has only %d entries (need %d) — backtest produced too few trades. "
-            "Skipping Quality+RL training. Check step6 logs.",
-            n_entries, MIN_JOURNAL_ENTRIES,
+            "Journal has only %d allowed entries (need %d) — not enough clean "
+            "Quality/RL training data. Check step6 logs or collect live/paper data.",
+            n_allowed, MIN_JOURNAL_ENTRIES,
         )
         sys.exit(0)
 
@@ -120,6 +143,8 @@ def main():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "step": "7b",
         "journal_entries": n_entries,
+        "allowed_journal_entries": n_allowed,
+        "allowed_splits": sorted(allowed_splits),
         "models": metrics,
     }
     out = ML_METRICS / "training_7b_summary.json"

@@ -59,7 +59,7 @@ def _default_allowed_splits() -> set[str] | None:
     if _env_flag("ALLOW_NONTRAIN_JOURNAL_TRAINING"):
         return None
     default = "train,live,paper,production"
-    if _env_flag("ALLOW_ROUND_JOURNAL_TRAINING", "1"):
+    if _env_flag("ALLOW_ROUND_JOURNAL_TRAINING", "0"):
         default = "train,validation,test,combined_eval,live,paper,production"
     raw = os.getenv("JOURNAL_ALLOWED_SPLITS", default)
     return {s.strip().lower() for s in raw.split(",") if s.strip()}
