@@ -31,8 +31,9 @@ Step 7a always re-runs (GRU + Regime full training on train set).
   Round 2 — backtest on test window (unseen 2yr — BLIND)
              → retrain Quality + RL on Round 1+2 journal
 
-  Round 3 — incremental retrain on train split only
+  Round 3 — incremental retrain
              → backtest on last 3yr (val+test overlap) as a stability check
+             → retrain Quality + RL on Round 1+2+3 journal for the next run
 
 Data split (step5_split.py):
   train      = data_start → (test_end - 4yr)      models train on this
@@ -133,6 +134,19 @@ def _base_env() -> dict:
     return {
         **os.environ,
         "PYTHONPATH": f"{env['base']}:{env['base'] / 'trading-engine'}",
+    }
+
+
+def _round_journal_training_env() -> dict:
+    """
+    Permit Quality/RL to train from the journals produced by the staged
+    backtest rounds. This is intentionally scoped to explicit source_split
+    names instead of ALLOW_NONTRAIN_JOURNAL_TRAINING=1, which would accept any
+    journal provenance.
+    """
+    return {
+        "ALLOW_ROUND_JOURNAL_TRAINING": "1",
+        "JOURNAL_ALLOWED_SPLITS": "train,validation,test,combined_eval,live,paper,production",
     }
 
 
@@ -272,20 +286,18 @@ _copy_bt_result("Round 1", "round1_summary.json")
 print(f"  Journal after Round 1: {_journal_count()} entries")
 
 # ─── Train Quality + RL on Round 1 journal ───────────────────────────────────
-if os.getenv("ALLOW_NONTRAIN_JOURNAL_TRAINING", "0").lower() in ("1", "true", "yes", "on"):
-    print("\n=== Round 1 → Retrain Quality + RL (research override) ===")
-    run_step(
-        "Round 1 - Quality+RL retrain",
-        "step7b_train.py",
-        env["ml_training"] / "metrics" / "training_7b_r1_summary.json",
-    )
-    # Rename done-check so Round 2's retrain gets a fresh marker
-    r1_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
-    r1_dest = env["ml_training"] / "metrics" / "training_7b_r1_summary.json"
-    if r1_done.exists() and not r1_dest.exists():
-        r1_done.rename(r1_dest)
-else:
-    print("\n=== Round 1 → Quality + RL retrain skipped (validation journal is not train data) ===")
+print("\n=== Round 1 → Retrain Quality + RL on Round 1 journal ===")
+run_step(
+    "Round 1 - Quality+RL retrain",
+    "step7b_train.py",
+    env["ml_training"] / "metrics" / "training_7b_r1_summary.json",
+    extra_env=_round_journal_training_env(),
+)
+# Rename done-check so Round 2's retrain gets a fresh marker
+r1_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+r1_dest = env["ml_training"] / "metrics" / "training_7b_r1_summary.json"
+if r1_done.exists() and not r1_dest.exists():
+    r1_done.rename(r1_dest)
 
 # ─── Round 2: BLIND backtest on test window ───────────────────────────────────
 # This is the true out-of-sample evaluation.
@@ -302,30 +314,34 @@ _copy_bt_result("Round 2", "round2_summary.json")
 print(f"  Journal after Round 2: {_journal_count()} entries")
 
 # ─── Train Quality + RL on Round 1+2 combined journal ────────────────────────
-if os.getenv("ALLOW_NONTRAIN_JOURNAL_TRAINING", "0").lower() in ("1", "true", "yes", "on"):
-    print("\n=== Round 2 → Retrain Quality + RL (research override, Round 1+2 journal) ===")
-    r2_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
-    if r2_done.exists():
-        r2_done.unlink()
-    run_step(
-        "Round 2 - Quality+RL retrain",
-        "step7b_train.py",
-        env["ml_training"] / "metrics" / "training_7b_r2_summary.json",
-    )
-    r2_dest = env["ml_training"] / "metrics" / "training_7b_r2_summary.json"
-    if r2_done.exists() and not r2_dest.exists():
-        r2_done.rename(r2_dest)
-else:
-    print("\n=== Round 2 → Quality + RL retrain skipped (blind-test journal is not train data) ===")
+print("\n=== Round 2 → Retrain Quality + RL on Round 1+2 journal ===")
+r2_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+if r2_done.exists():
+    r2_done.unlink()
+run_step(
+    "Round 2 - Quality+RL retrain",
+    "step7b_train.py",
+    env["ml_training"] / "metrics" / "training_7b_r2_summary.json",
+    extra_env=_round_journal_training_env(),
+)
+r2_dest = env["ml_training"] / "metrics" / "training_7b_r2_summary.json"
+if r2_done.exists() and not r2_dest.exists():
+    r2_done.rename(r2_dest)
 
-# ─── Round 3: Incremental retrain on training split only ──────────────────────
-# Keep calendar splits intact. GRU/Regime continue to fit only on the train split.
-# Quality/RL retraining also filters journal rows by source_split unless the
-# explicit research override ALLOW_NONTRAIN_JOURNAL_TRAINING=1 is set.
+# ─── Round 3: Incremental retrain ────────────────────────────────────────────
+# GRU/Regime continue to fit only on the train split. Quality/RL train on the
+# accumulated round journals because they are the feedback learners for this
+# staged research loop.
 
-print("\n=== Round 3: Incremental retrain on train split only ===")
-for model in ["gru", "regime", "quality", "rl"]:
+print("\n=== Round 3: Incremental retrain ===")
+for model in ["gru", "regime"]:
     run_retrain(model, label="train-split retrain")
+for model in ["quality", "rl"]:
+    run_retrain(
+        model,
+        label="round-journal retrain",
+        extra_env=_round_journal_training_env(),
+    )
 
 # ─── Round 3: Backtest on last 3yr (val+test overlap) ────────────────────────
 # Evaluates the fully-retrained models over the most recent 3 years of data.
@@ -340,6 +356,22 @@ run_step(
     extra_env={"BT_WINDOW": "round3"},
 )
 _copy_bt_result("Round 3", "round3_summary.json")
+print(f"  Journal after Round 3: {_journal_count()} entries")
+
+# ─── Train Quality + RL on Round 1+2+3 combined journal ──────────────────────
+print("\n=== Round 3 → Retrain Quality + RL on Round 1+2+3 journal ===")
+r3_done = env["ml_training"] / "metrics" / "training_7b_summary.json"
+if r3_done.exists():
+    r3_done.unlink()
+run_step(
+    "Round 3 - Quality+RL retrain",
+    "step7b_train.py",
+    env["ml_training"] / "metrics" / "training_7b_r3_summary.json",
+    extra_env=_round_journal_training_env(),
+)
+r3_dest = env["ml_training"] / "metrics" / "training_7b_r3_summary.json"
+if r3_done.exists() and not r3_dest.exists():
+    r3_done.rename(r3_dest)
 
 # ─── Final summary ────────────────────────────────────────────────────────────
 

@@ -89,14 +89,16 @@ def _build_env() -> dict:
     # High-trade research mode is the default for fresh weight generation.
     # Set BACKTEST_ENFORCE_DAILY_HALT=1 when validating production promotion.
     env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "0")
-    env.setdefault("BACKTEST_COMPOUND_EQUITY", "1")
+    env.setdefault("BACKTEST_COMPOUND_EQUITY", "0")
     env.setdefault("MAX_DAILY_LOSS_PCT", "1.0")
     env.setdefault("MAX_DRAWDOWN_PCT", "1.0")
     env.setdefault("MAX_CONCURRENT_POSITIONS", "25")
     env.setdefault("PM_MIN_CONFIDENCE", "0.50")
-    env.setdefault("ML_DIRECTION_THRESHOLD", "0.50")
-    env.setdefault("NEUTRAL_BIAS_THRESHOLD", "0.50")
-    env.setdefault("VOLATILE_ENTRY_THRESHOLD", "0.50")
+    env.setdefault("ML_DIRECTION_THRESHOLD", "0.55")
+    env.setdefault("NEUTRAL_BIAS_THRESHOLD", "0.60")
+    env.setdefault("VOLATILE_ENTRY_THRESHOLD", "0.70")
+    env.setdefault("BLOCK_LTF_CONSOLIDATING", "1")
+    env.setdefault("RANGING_REQUIRE_RANGE", "1")
     env.setdefault("COOLDOWN_BARS", "1")
     return env
 
@@ -238,24 +240,38 @@ def _summarise(result_path: Path) -> dict:
     if not results:
         return {"total_trades": 0, "avg_win_rate": 0.0, "avg_profit_factor": 0.0, "avg_sharpe": 0.0, "traders": {}}
 
+    def _primary(m: dict) -> dict:
+        return m.get("primary_metrics") or {
+            "basis": "legacy_pnl",
+            "profit_factor": m.get("profit_factor", 0.0),
+            "total_return": m.get("total_return", 0.0),
+            "max_drawdown": m.get("max_drawdown", 0.0),
+            "sharpe": m.get("sharpe", 0.0),
+            "expectancy_r": m.get("expectancy_r", 0.0),
+        }
+
     avg_wr = np.mean([r.get("win_rate", 0.0) for r in results.values()])
-    avg_pf = np.mean([r.get("profit_factor", 0.0) for r in results.values()])
-    avg_sh = np.mean([r.get("sharpe", 0.0) for r in results.values()])
+    avg_pf = np.mean([_primary(r).get("profit_factor", 0.0) for r in results.values()])
+    avg_sh = np.mean([_primary(r).get("sharpe", 0.0) for r in results.values()])
     traders = {}
     for tid, m in results.items():
+        pm = _primary(m)
         traders[tid] = {
             "trades": m.get("trades", 0),
             "win_rate": round(m.get("win_rate", 0.0), 4),
-            "profit_factor": round(m.get("profit_factor", 0.0), 3),
-            "total_return": round(m.get("total_return", 0.0), 4),
-            "max_drawdown": round(m.get("max_drawdown", 0.0), 4),
-            "sharpe": round(m.get("sharpe", 0.0), 3),
+            "metric_basis": m.get("primary_metric_basis", pm.get("basis", "legacy_pnl")),
+            "profit_factor": round(pm.get("profit_factor", 0.0), 3),
+            "total_return": round(pm.get("total_return", 0.0), 4),
+            "max_drawdown": round(pm.get("max_drawdown", 0.0), 4),
+            "sharpe": round(pm.get("sharpe", 0.0), 3),
+            "expectancy_r": round(pm.get("expectancy_r", 0.0), 4),
         }
     return {
         "total_trades": total_trades,
         "avg_win_rate": round(float(avg_wr), 4),
         "avg_profit_factor": round(float(avg_pf), 3),
         "avg_sharpe": round(float(avg_sh), 3),
+        "primary_metric_basis": "fixed_risk_r_multiple",
         "traders": traders,
     }
 
@@ -531,9 +547,9 @@ def main():
     )
     for tid, m in summary["traders"].items():
         logger.info(
-            "  %s: %d trades | WR=%.1f%% | PF=%.2f | Return=%.1f%% | DD=%.1f%% | Sharpe=%.2f",
+            "  %s: %d trades | WR=%.1f%% | fixed PF=%.2f | Return=%.1f%% | ExpR=%.3f | DD=%.1f%% | Sharpe=%.2f",
             tid, m["trades"], m["win_rate"]*100, m["profit_factor"],
-            m["total_return"]*100, m["max_drawdown"]*100, m["sharpe"],
+            m["total_return"]*100, m.get("expectancy_r", 0.0), m["max_drawdown"]*100, m["sharpe"],
         )
 
     try:
@@ -556,7 +572,7 @@ def main():
     print(f"\n{'='*70}")
     print(f"  BACKTEST COMPLETE  (round {round_num} / window={bt_window})")
     print(f"{'='*70}")
-    print(f"  {'Round':<8} {'Trades':>7} {'WR':>8} {'PF':>7} {'Sharpe':>8}")
+    print(f"  {'Round':<8} {'Trades':>7} {'WR':>8} {'PF*':>7} {'Sharpe*':>8}")
     print(f"  {'-'*42}")
     print(f"  Round {summary['round']:<3}  {summary['total_trades']:>7}  "
           f"{summary['avg_win_rate']*100:>7.1f}%  {summary['avg_profit_factor']:>7.3f}  "

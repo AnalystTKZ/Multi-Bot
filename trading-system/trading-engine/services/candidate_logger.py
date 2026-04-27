@@ -46,6 +46,7 @@ _FIELDNAMES = [
     "adx",
     "ema_stack_score",
     "regime",
+    "regime_ltf",
     # Trader-specific features
     "rsi",
     "pullback_depth",
@@ -65,6 +66,12 @@ _FIELDNAMES = [
     "ev",
     "rr_ratio",
     "confidence",
+    "rejection_reason",
+    "pm_open_positions_seen",
+    "hypothetical_pnl",
+    "hypothetical_rr",
+    "hypothetical_exit_reason",
+    "hypothetical_exit_ts",
     # Outcome (filled later)
     "tp_hit",
     "sl_hit",

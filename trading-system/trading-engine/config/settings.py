@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # ML thresholds
     ML_QUALITY_THRESHOLD_DEFAULT: float = 0.55
-    ML_DIRECTION_THRESHOLD: float = 0.50
+    ML_DIRECTION_THRESHOLD: float = 0.55
     RL_ACTION_CONFIDENCE_MIN: float = 0.45
     PM_MIN_CONFIDENCE: float = 0.50
 

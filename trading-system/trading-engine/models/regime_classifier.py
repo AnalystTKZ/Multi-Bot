@@ -586,17 +586,17 @@ class RegimeClassifier(BaseModel):
         Mode-aware rule-based regime labels with per-bar confidence scores.
 
         mode="htf_bias" (4H): 3-class direction labels
-          - BIAS_UP (0):     ADX>20 AND ema_stack >= 1 AND drift > 0
-          - BIAS_DOWN (1):   ADX>20 AND ema_stack <= -1 AND drift < 0
-          - BIAS_NEUTRAL (2): everything else
+          - BIAS_UP (0):      strong ADX, full bullish EMA stack, directional drift, trend efficiency
+          - BIAS_DOWN (1):    strong ADX, full bearish EMA stack, directional drift, trend efficiency
+          - BIAS_NEUTRAL (2): explicit low-ADX, weak-stack, low-drift, low-efficiency middle-volatility state
           Persistence: 20 bars (4H) for BIAS_UP/DOWN; 5 bars for BIAS_NEUTRAL.
 
         mode="ltf_behaviour" (1H): 4-class behaviour labels (direction-agnostic)
           Priority order:
-          1. VOLATILE (3):       atr_pctile >= 80th pctile  (expansion/stress)
-          2. TRENDING (0):       ADX>25 AND abs(ema_stack)>=1 AND abs(drift)>0 AND not volatile
-          3. CONSOLIDATING (2):  atr_pctile<=25th pctile AND atr_slope<0 AND not trending/volatile
-          4. RANGING (1):        everything else — sideways oscillation
+          1. VOLATILE (3):       ATR expansion/stress
+          2. TRENDING (0):       strong ADX, full EMA stack, meaningful drift, efficient movement
+          3. RANGING (1):        explicit sideways oscillation, not a fallback class
+          4. CONSOLIDATING (2):  low/falling ATR compression without trend/volatile conditions
           Persistence: TRENDING=20 bars, VOLATILE=10 bars, RANGING/CONSOLIDATING=5 bars.
 
         Bars with confidence < 0.4 are "ambiguous" — by default retraining drops
@@ -616,7 +616,11 @@ class RegimeClassifier(BaseModel):
         adx       = df["adx_14"]    if "adx_14"    in df.columns else compute_adx(df, 14)
         ema_stack = df["ema_stack"] if "ema_stack" in df.columns else compute_ema_stack_score(df)
         drift = (close - close.shift(n_bar)) / (n_bar * close.shift(n_bar) + 1e-9)
-        drift_p80 = float(drift.abs().quantile(0.80)) + 1e-9
+        drift_abs = drift.abs()
+        drift_p35 = float(drift_abs.quantile(0.35)) + 1e-9
+        drift_p40 = float(drift_abs.quantile(0.40)) + 1e-9
+        drift_p60 = float(drift_abs.quantile(0.60)) + 1e-9
+        drift_p80 = float(drift_abs.quantile(0.80)) + 1e-9
 
         atr = compute_atr(df, n_bar)
         _hist = n_bar * 3
@@ -629,46 +633,60 @@ class RegimeClassifier(BaseModel):
             lambda x: (x[-1] - x[0]) / (x[0] + 1e-9) if len(x) > 1 else 0.0, raw=True
         ).fillna(0.0)
 
+        ret = close.pct_change()
+        direction = (close - close.shift(n_bar)).abs()
+        path = close.diff().abs().rolling(n_bar, min_periods=max(2, n_bar // 2)).sum()
+        efficiency = (direction / (path + 1e-9)).fillna(0.0).clip(0.0, 1.0)
+        autocorr_lag1 = ret.rolling(_hist, min_periods=n_bar).corr(ret.shift(1)).fillna(0.0).clip(-1.0, 1.0)
+        hurst_proxy = (0.5 + 0.5 * autocorr_lag1).clip(0.0, 1.0)
+
         # ── HTF BIAS mode (3-class: direction-focused) ────────────────────────
         if mode == "htf_bias":
             labels = pd.Series(2, index=df.index, dtype=int)  # default BIAS_NEUTRAL
+            conf[:] = 0.0
 
-            # BIAS_UP: ADX>25 AND ema_stack>=1 AND drift>drift_p40
-            # Raised from ADX>20 to ADX>25 — weak-trend bars (20-25 ADX) are genuinely
-            # ambiguous and were causing the model to memorise noise instead of structure.
-            # drift_p40 filter ensures the move has meaningful directional commitment.
-            drift_p40 = float(drift.abs().quantile(0.40)) + 1e-9
-            bu_mask = (adx > 25) & (ema_stack >= 1) & (drift > drift_p40)
+            trend_quality = (efficiency >= 0.40) & ((autocorr_lag1 >= 0.03) | (hurst_proxy >= 0.55))
+
+            # BIAS_UP/DOWN require full EMA alignment and efficient movement.
+            # Weak or conflicted directional bars remain neutral-labeled but
+            # zero-confidence so training can drop them as ambiguous.
+            bu_mask = (adx >= 28) & (ema_stack == 2) & (drift > drift_p60) & trend_quality
             labels[bu_mask] = 0
-            adx_conf_bu   = ((adx - 25) / 25.0).clip(0.0, 1.0)
-            stack_conf_bu = np.where(ema_stack >= 2, 1.0, 0.7)
+            adx_conf_bu   = ((adx - 28) / 22.0).clip(0.0, 1.0)
+            stack_conf_bu = np.where(ema_stack == 2, 1.0, 0.0)
             drift_conf_bu = (drift.abs() / drift_p80).clip(0.0, 1.0)
-            bu_conf = (adx_conf_bu * stack_conf_bu * drift_conf_bu).astype(np.float32)
+            eff_conf_bu = efficiency.clip(0.0, 1.0)
+            bu_conf = (adx_conf_bu * stack_conf_bu * drift_conf_bu * eff_conf_bu).astype(np.float32)
             conf[bu_mask] = (0.5 + 0.5 * pd.Series(bu_conf, index=df.index)[bu_mask]).astype(np.float32)
 
-            # BIAS_DOWN: ADX>25 AND ema_stack<=-1 AND drift<-drift_p40
-            bd_mask = (adx > 25) & (ema_stack <= -1) & (drift < -drift_p40)
+            bd_mask = (adx >= 28) & (ema_stack == -2) & (drift < -drift_p60) & trend_quality
             labels[bd_mask] = 1
-            adx_conf_bd   = ((adx - 25) / 25.0).clip(0.0, 1.0)
-            stack_conf_bd = np.where(ema_stack <= -2, 1.0, 0.7)
+            adx_conf_bd   = ((adx - 28) / 22.0).clip(0.0, 1.0)
+            stack_conf_bd = np.where(ema_stack == -2, 1.0, 0.0)
             drift_conf_bd = (drift.abs() / drift_p80).clip(0.0, 1.0)
-            bd_conf = (adx_conf_bd * stack_conf_bd * drift_conf_bd).astype(np.float32)
+            eff_conf_bd = efficiency.clip(0.0, 1.0)
+            bd_conf = (adx_conf_bd * stack_conf_bd * drift_conf_bd * eff_conf_bd).astype(np.float32)
             conf[bd_mask] = (0.5 + 0.5 * pd.Series(bd_conf, index=df.index)[bd_mask]).astype(np.float32)
 
-            # BIAS_NEUTRAL: everything else — high confidence when clearly non-directional
-            neutral_mask = ~bu_mask & ~bd_mask
-            # NEUTRAL should mean "clearly no directional bias", not merely "failed
-            # the trend rule". Combine low ADX, weak EMA stack, and small drift so
-            # clean neutral samples survive while conflicted bars become ambiguous.
-            adx_neutral_conf   = (1.0 - (adx / 25.0).clip(0.0, 1.0))
-            stack_neutral_conf = (1.0 - (ema_stack.abs() / 2.0).clip(0.0, 1.0))
-            drift_neutral_conf = (1.0 - (drift.abs() / (drift_p40 + 1e-9)).clip(0.0, 1.0))
+            # BIAS_NEUTRAL is explicit market classification, not "not trend".
+            neutral_clean = (
+                (adx <= 20)
+                & (ema_stack == 0)
+                & (drift_abs <= drift_p35)
+                & (efficiency <= 0.35)
+                & (atr_pctile >= 0.25)
+                & (atr_pctile <= 0.75)
+            )
+            labels[neutral_clean] = 2
+            adx_neutral_conf = (1.0 - (adx / 20.0).clip(0.0, 1.0))
+            drift_neutral_conf = (1.0 - (drift_abs / (drift_p35 + 1e-9)).clip(0.0, 1.0))
+            eff_neutral_conf = (1.0 - (efficiency / 0.35).clip(0.0, 1.0))
             neutral_conf = (
-                0.50 * adx_neutral_conf
-                + 0.25 * stack_neutral_conf
-                + 0.25 * drift_neutral_conf
+                0.40 * adx_neutral_conf
+                + 0.30 * drift_neutral_conf
+                + 0.30 * eff_neutral_conf
             ).clip(0.0, 1.0)
-            conf[neutral_mask] = neutral_conf[neutral_mask].astype(np.float32)
+            conf[neutral_clean] = (0.5 + 0.5 * neutral_conf[neutral_clean]).astype(np.float32)
 
             # ── Persistence filter (HTF) ──────────────────────────────────────
             # BIAS_UP/DOWN: a 4H structural bias should hold for at least 8 bars
@@ -700,48 +718,71 @@ class RegimeClassifier(BaseModel):
         # ── LTF BEHAVIOUR mode (4-class: behaviour-focused, direction-agnostic) ─
         else:  # ltf_behaviour (default)
             labels = pd.Series(1, index=df.index, dtype=int)  # default RANGING
-            vol_thresh    = float(atr_pctile.quantile(0.80))
-            consol_thresh = float(atr_pctile.quantile(0.25))
+            conf[:] = 0.0
+            vol_thresh    = max(float(atr_pctile.quantile(0.80)), 0.85)
+            consol_thresh = min(float(atr_pctile.quantile(0.25)), 0.20)
+            trend_quality = (efficiency >= 0.45) & ((autocorr_lag1 >= 0.03) | (hurst_proxy >= 0.55))
 
             # VOLATILE (3): ATR expanding — chaotic, unpredictable
-            volatile_mask = atr_pctile >= vol_thresh
+            volatile_mask = (atr_pctile >= vol_thresh) & (atr_slope > 0)
             labels[volatile_mask] = 3
             vol_conf = ((atr_pctile - vol_thresh) / (1.0 - vol_thresh + 1e-9)).clip(0.0, 1.0)
             conf[volatile_mask] = (0.5 + 0.5 * vol_conf[volatile_mask]).astype(np.float32)
 
             # TRENDING (0): directional momentum — direction-agnostic (we know direction from HTF)
-            trend_mask = (adx > 25) & (ema_stack.abs() >= 1) & (drift.abs() > 0) & ~volatile_mask
+            trend_mask = (
+                (adx >= 28)
+                & (ema_stack.abs() == 2)
+                & (drift_abs > drift_p60)
+                & trend_quality
+                & (atr_pctile < 0.85)
+                & ~volatile_mask
+            )
             labels[trend_mask] = 0
-            adx_conf_t   = ((adx - 25) / 25.0).clip(0.0, 1.0)
-            stack_conf_t = np.where(ema_stack.abs() >= 2, 1.0, 0.7)
-            drift_conf_t = (drift.abs() / drift_p80).clip(0.0, 1.0)
-            t_conf = (adx_conf_t * stack_conf_t * drift_conf_t).astype(np.float32)
+            adx_conf_t   = ((adx - 28) / 22.0).clip(0.0, 1.0)
+            stack_conf_t = np.where(ema_stack.abs() == 2, 1.0, 0.0)
+            drift_conf_t = (drift_abs / drift_p80).clip(0.0, 1.0)
+            eff_conf_t = efficiency.clip(0.0, 1.0)
+            t_conf = (adx_conf_t * stack_conf_t * drift_conf_t * eff_conf_t).astype(np.float32)
             conf[trend_mask] = (0.5 + 0.5 * pd.Series(t_conf, index=df.index)[trend_mask]).astype(np.float32)
 
             # CONSOLIDATING (2): ATR at multi-period low AND falling — pre-breakout compression
-            consol_mask = (atr_pctile <= consol_thresh) & (atr_slope < 0) & ~volatile_mask & ~trend_mask
+            consol_mask = (
+                (atr_pctile <= consol_thresh)
+                & (atr_slope < 0)
+                & (adx <= 22)
+                & (efficiency <= 0.30)
+                & ~volatile_mask
+                & ~trend_mask
+            )
             labels[consol_mask] = 2
             consol_atr_conf   = (1.0 - (atr_pctile / (consol_thresh + 1e-9)).clip(0.0, 1.0))
             consol_slope_conf = (-atr_slope).clip(0.0, 0.5) / 0.5
             consol_conf = (0.5 * consol_atr_conf + 0.5 * consol_slope_conf).clip(0.1, 1.0)
             conf[consol_mask] = (0.5 + 0.5 * consol_conf[consol_mask]).astype(np.float32)
 
-            # RANGING (1): explicit definition — sideways oscillation in the middle band.
-            # ADX<25 (no meaningful trend), atr_pctile in the mid-band (not volatile, not consolidating),
-            # and abs(drift) below the 60th percentile (no committed direction).
-            # Being explicit prevents the model from learning "RANGING = garbage bin of everything else".
-            drift_p60 = float(drift.abs().quantile(0.60)) + 1e-9
+            # RANGING (1): explicit sideways oscillation in the middle volatility band.
             ranging_mask = (
                 ~trend_mask & ~volatile_mask & ~consol_mask
-                & (adx < 25)
-                & (atr_pctile > consol_thresh) & (atr_pctile < vol_thresh)
-                & (drift.abs() < drift_p60)
+                & (adx <= 20)
+                & (ema_stack == 0)
+                & (drift_abs <= drift_p40)
+                & (efficiency <= 0.35)
+                & (autocorr_lag1 >= -0.15)
+                & (autocorr_lag1 <= 0.10)
+                & (atr_pctile >= 0.25)
+                & (atr_pctile <= 0.70)
             )
             labels[ranging_mask] = 1
-            adx_range_conf = (1.0 - (adx / 25.0).clip(0.0, 1.0))
-            atr_range_conf = (1.0 - (atr_pctile / vol_thresh).clip(0.0, 1.0))
-            ranging_conf   = (0.5 * adx_range_conf + 0.5 * atr_range_conf).clip(0.45, 1.0)
-            conf[ranging_mask] = ranging_conf[ranging_mask].astype(np.float32)
+            adx_range_conf = (1.0 - (adx / 20.0).clip(0.0, 1.0))
+            drift_range_conf = (1.0 - (drift_abs / (drift_p40 + 1e-9)).clip(0.0, 1.0))
+            eff_range_conf = (1.0 - (efficiency / 0.35).clip(0.0, 1.0))
+            ranging_conf = (
+                0.35 * adx_range_conf
+                + 0.35 * drift_range_conf
+                + 0.30 * eff_range_conf
+            ).clip(0.0, 1.0)
+            conf[ranging_mask] = (0.5 + 0.5 * ranging_conf[ranging_mask]).astype(np.float32)
 
             # Ambiguous bars: don't fit any explicit definition cleanly — assign most
             # likely class by ADX/atr_pctile but zero their confidence so the MLP

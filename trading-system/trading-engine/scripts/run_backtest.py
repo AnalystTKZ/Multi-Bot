@@ -51,6 +51,7 @@ except Exception:
 
 import numpy as np
 import pandas as pd
+from services.market_decision import combined_market_decision
 
 # Write logs to both stderr (visible in terminal/notebook) AND a timestamped
 # file under trading-engine/logs/ so they survive subprocess pipe capture.
@@ -98,7 +99,7 @@ SLIPPAGE_PCT       = 0.0002
 _ENFORCE_DAILY_HALT = str(os.getenv("BACKTEST_ENFORCE_DAILY_HALT", "0")).lower() in (
     "1", "true", "yes", "on",
 )
-_COMPOUND_EQUITY = str(os.getenv("BACKTEST_COMPOUND_EQUITY", "1")).lower() in (
+_COMPOUND_EQUITY = str(os.getenv("BACKTEST_COMPOUND_EQUITY", "0")).lower() in (
     "1", "true", "yes", "on",
 )
 _CONFIGURED_MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "1.0"))
@@ -132,6 +133,7 @@ _PM_SETTINGS = SimpleNamespace(
     RISK_PER_TRADE=RISK_PER_TRADE,
     MAX_DAILY_LOSS_PCT=MAX_DAILY_LOSS_PCT,
     MAX_CONCURRENT_POSITIONS=int(os.getenv("MAX_CONCURRENT_POSITIONS", "25")),
+    MAX_CORRELATED_POSITIONS=int(os.getenv("MAX_CORRELATED_POSITIONS", "25")),
     PM_MIN_CONFIDENCE=float(os.getenv("PM_MIN_CONFIDENCE", "0.50")),
 )
 
@@ -977,6 +979,153 @@ def _simulate_trade_pm(
     }
 
 
+def _hypothetical_outcome(
+    df: pd.DataFrame,
+    entry_idx: int,
+    raw_signal: dict,
+    atr: float,
+) -> dict:
+    """Simulate a rejected signal at fixed initial-capital risk for audit logging."""
+    enriched = _enrich_signal_no_pm(raw_signal, INITIAL_CAPITAL, atr)
+    if enriched is None:
+        return {}
+    result = _simulate_trade_pm(
+        df,
+        entry_idx,
+        str(enriched["side"]),
+        float(enriched["entry"]),
+        float(enriched["stop_loss"]),
+        float(enriched["tp1"]),
+        float(enriched["tp2"]),
+        float(enriched["size"]),
+        atr,
+    )
+    risk_amount = max(INITIAL_CAPITAL * RISK_PER_TRADE, 1e-9)
+    bars_held = int(result.get("bars_held", 0) or 0)
+    exit_idx = min(entry_idx + bars_held, len(df) - 1)
+    return {
+        "hypothetical_pnl": float(result.get("pnl", 0.0)),
+        "hypothetical_rr": float(result.get("pnl", 0.0)) / risk_amount,
+        "hypothetical_exit_reason": str(result.get("exit_reason", "")),
+        "hypothetical_exit_ts": _utc_timestamp(df.index[exit_idx]).isoformat(),
+    }
+
+
+def _candidate_feature_row(
+    *,
+    raw_signal: dict,
+    ml_preds: dict,
+    bar: dict,
+    run_id: str,
+    source_split: str,
+    bt_start: str,
+    bt_end: str,
+    split_summary_hash: str,
+    correlation_id: str,
+    rejection_reason: str = "",
+    pm_open_positions_seen: int = 0,
+    hypothetical: dict | None = None,
+) -> dict:
+    meta = raw_signal.get("signal_metadata", {}) or {}
+    features = {
+        "run_id": run_id,
+        "source_split": source_split,
+        "bt_start": bt_start,
+        "bt_end": bt_end,
+        "split_summary_hash": split_summary_hash,
+        "correlation_id": correlation_id,
+        "atr": float(bar.get("atr_14", meta.get("atr_at_entry", 0.0)) or 0.0),
+        "adx": float(bar.get("adx_14", ml_preds.get("adx", 0.0)) or 0.0),
+        "ema_stack_score": int(bar.get("ema_stack", 0) or 0),
+        "regime": str(ml_preds.get("regime") or meta.get("regime", "")),
+        "regime_ltf": str(ml_preds.get("regime_ltf") or meta.get("regime_ltf", "")),
+        "p_win": float(ml_preds.get("quality_score", 0.0) or 0.0),
+        "p_bull": float(ml_preds.get("p_bull", meta.get("p_bull", 0.5)) or 0.5),
+        "p_bear": float(ml_preds.get("p_bear", meta.get("p_bear", 0.5)) or 0.5),
+        "sentiment_score": float(ml_preds.get("sentiment_score", 0.0) or 0.0),
+        "ensemble_score": float(raw_signal.get("confidence", 0.0) or 0.0),
+        "ev": float(ml_preds.get("ev", 0.0) or 0.0),
+        "rr_ratio": raw_signal.get("rr_ratio", ""),
+        "confidence": float(raw_signal.get("confidence", 0.0) or 0.0),
+        "rejection_reason": rejection_reason,
+        "pm_open_positions_seen": pm_open_positions_seen,
+    }
+    if hypothetical:
+        features.update(hypothetical)
+    return features
+
+
+def _log_backtest_candidate(
+    candidate_logger,
+    *,
+    df: pd.DataFrame,
+    entry_idx: int,
+    raw_signal: dict,
+    ml_preds: dict,
+    bar: dict,
+    timestamp: str,
+    executed: bool,
+    rejection_reason: str,
+    pm_open_positions_seen: int,
+    run_id: str,
+    source_split: str,
+    bt_start: str,
+    bt_end: str,
+    split_summary_hash: str,
+    correlation_id: str,
+    actual_result: dict | None = None,
+    actual_pnl: float | None = None,
+) -> None:
+    if candidate_logger is None:
+        return
+    try:
+        atr = float(bar.get("atr_14", raw_signal.get("signal_metadata", {}).get("atr_at_entry", 0.0)) or 0.0)
+        hypothetical = _hypothetical_outcome(df, entry_idx, raw_signal, atr)
+        features = _candidate_feature_row(
+            raw_signal=raw_signal,
+            ml_preds=ml_preds or {},
+            bar=bar,
+            run_id=run_id,
+            source_split=source_split,
+            bt_start=bt_start,
+            bt_end=bt_end,
+            split_summary_hash=split_summary_hash,
+            correlation_id=correlation_id,
+            rejection_reason=rejection_reason,
+            pm_open_positions_seen=pm_open_positions_seen,
+            hypothetical=hypothetical,
+        )
+        cid = candidate_logger.log_candidate(
+            trader_id=str(raw_signal.get("trader_id", "ml_trader")),
+            symbol=str(raw_signal.get("symbol", "")),
+            side=str(raw_signal.get("side", "")),
+            features=features,
+            executed=executed,
+            timestamp=timestamp,
+        )
+        outcome = actual_result or hypothetical
+        pnl = float(actual_pnl if actual_pnl is not None else outcome.get("hypothetical_pnl", 0.0))
+        exit_reason = str(
+            (actual_result or {}).get("exit_reason")
+            or outcome.get("hypothetical_exit_reason", "")
+        )
+        outcome_ts = str(
+            (actual_result or {}).get("exit_timestamp")
+            or outcome.get("hypothetical_exit_ts")
+            or timestamp
+        )
+        candidate_logger.mark_outcome(
+            candidate_id=cid,
+            tp_hit=exit_reason in ("tp2", "be_or_trail", "time_exit") and pnl > 0,
+            sl_hit=exit_reason.startswith("sl"),
+            pnl=pnl,
+            exit_reason=exit_reason,
+            outcome_ts=outcome_ts,
+        )
+    except Exception as exc:
+        logger.debug("candidate audit logging failed: %s", exc)
+
+
 def _run_bar_ml(ml_models: dict, df: pd.DataFrame, i: int, symbol: str = "",
                 htf: dict = None) -> dict:
     """
@@ -1341,7 +1490,7 @@ def _compute_backtest_signal(
     # ── Gate 3: GRU direction ─────────────────────────────────────────────────
     p_bull = float(ml_preds.get("p_bull", 0.5))
     p_bear = float(ml_preds.get("p_bear", 0.5))
-    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))
+    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.55"))
     if p_bull >= p_bear and p_bull >= _dir_thresh:
         side = "buy"
         conf = p_bull
@@ -1352,75 +1501,29 @@ def _compute_backtest_signal(
         _reject("weak_gru_direction")
         return None
 
-    # ── Gate 4: HTF bias alignment ────────────────────────────────────────────
-    # BIAS_UP   → only buys allowed (HTF trend is up)
-    # BIAS_DOWN → only sells allowed (HTF trend is down)
-    # BIAS_NEUTRAL → require at least the same bar as the direction threshold
-    # (0.65 was stricter than the direction gate and filtered almost all NEUTRAL bars)
+    # ── Gate 4/5: combined HTF/LTF market-decision matrix ─────────────────────
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.50"))
-
-    if _htf_bias == "BIAS_UP" and side == "sell":
-        _reject("htf_bias_conflict")
-        return None   # HTF is bullish — no sells
-    if _htf_bias == "BIAS_DOWN" and side == "buy":
-        _reject("htf_bias_conflict")
-        return None   # HTF is bearish — no buys
-    if _htf_bias == "BIAS_NEUTRAL" and conf < _neutral_thresh:
-        _reject("neutral_bias_weak_conf")
-        return None   # no structural bias — require stronger GRU conviction
-
-    # ── Gate 5: LTF behaviour filter ─────────────────────────────────────────
     _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
-    # Default tracks direction threshold — 0.72 blocked almost all VOLATILE bars
-    _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", str(_dir_thresh)))
-
     _range_valid    = bool(bar.get("range_valid", False))
-    _range_side     = str(bar.get("range_side", ""))
     _pullback_valid = bool(bar.get("pullback_valid", False))
-    _pullback_side  = str(bar.get("pullback_side", ""))
-    _strict_trend_pb = str(os.getenv("REQUIRE_TRENDING_PULLBACK", "0")).lower() in (
-        "1", "true", "yes",
+    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.60"))
+    _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.70"))
+    _block_consol = str(os.getenv("BLOCK_LTF_CONSOLIDATING", "1")).lower() in ("1", "true", "yes")
+    _require_range = str(os.getenv("RANGING_REQUIRE_RANGE", "1")).lower() in ("1", "true", "yes")
+    _allowed, _reason = combined_market_decision(
+        htf_bias=_htf_bias,
+        ltf_behaviour=_ltf_behaviour,
+        side=side,
+        confidence=conf,
+        bar=bar,
+        neutral_threshold=_neutral_thresh,
+        volatile_threshold=_volatile_thresh,
+        block_consolidating=_block_consol,
+        require_range=_require_range,
     )
-
-    if _ltf_behaviour == "CONSOLIDATING":
-        if str(os.getenv("BLOCK_LTF_CONSOLIDATING", "0")).lower() in ("1", "true", "yes"):
-            _reject("blocked_consolidating")
-            return None
-
-    if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
-        _reject("volatile_weak_conf")
+    if not _allowed:
+        _reject(_reason)
         return None
-
-    if _ltf_behaviour == "TRENDING":
-        if _strict_trend_pb:
-            if not _pullback_valid:
-                _reject("trend_pullback_missing")
-                return None
-            if str(_pullback_side or "") != side:
-                _reject("trend_pullback_conflict")
-                return None
-        else:
-            # When a retest is detected, it must not contradict the GRU side; when
-            # none is detected, rely on direction + HTF gates (REQUIRE_TRENDING_PULLBACK=1
-            # restores the old "pullback on every TRENDING bar" rule, which is ~0 signals).
-            if _pullback_valid and str(_pullback_side or "") and str(_pullback_side) != side:
-                _reject("trend_pullback_conflict")
-                return None
-
-    if _ltf_behaviour == "RANGING":
-        _strict_rng = str(os.getenv("RANGING_REQUIRE_RANGE", "0")).lower() in ("1", "true", "yes")
-        if _strict_rng:
-            if not _range_valid:
-                _reject("range_missing")
-                return None
-            if str(_range_side or "") != side:
-                _reject("range_side_conflict")
-                return None
-        else:
-            if _range_valid and str(_range_side or "") and str(_range_side) != side:
-                _reject("range_side_conflict")
-                return None
 
     # ── ATR-based entry / SL / TP ─────────────────────────────────────────────
     # For RANGING entries: TP is the far wall of the range rather than a fixed
@@ -1477,6 +1580,53 @@ def _compute_backtest_signal(
         },
     }
 
+
+def _fixed_risk_metrics(trades: list[dict]) -> dict:
+    """
+    Primary profitability metric: fixed-risk, non-compounded R-multiple results.
+
+    This removes position-size drift from compounding, streak down-scaling, and
+    symbol price differences so strategy profitability is judged by realized R.
+    """
+    risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
+    realized_rr = [float(t.get("realized_rr", 0.0)) for t in trades]
+    fixed_pnls = [r * risk_amount for r in realized_rr]
+    wins = [p for p in fixed_pnls if p > 0]
+    losses = [p for p in fixed_pnls if p < 0]
+    gross_profit = float(sum(wins))
+    gross_loss = float(abs(sum(losses)))
+    total_pnl = float(sum(fixed_pnls))
+
+    eq_curve = [INITIAL_CAPITAL]
+    for pnl in fixed_pnls:
+        eq_curve.append(eq_curve[-1] + pnl)
+    peak = eq_curve[0]
+    max_dd = 0.0
+    for value in eq_curve:
+        peak = max(peak, value)
+        max_dd = max(max_dd, (peak - value) / (peak + 1e-9))
+
+    sharpe = 0.0
+    if len(fixed_pnls) >= 2:
+        mean_r = float(np.mean(fixed_pnls))
+        std_r = float(np.std(fixed_pnls))
+        sharpe = float((mean_r / (std_r + 1e-9)) * np.sqrt(252))
+
+    return {
+        "basis": "fixed_risk_r_multiple",
+        "risk_amount": round(risk_amount, 2),
+        "expectancy_r": round(float(np.mean(realized_rr)) if realized_rr else 0.0, 4),
+        "total_r": round(float(sum(realized_rr)), 4),
+        "net_pnl": round(total_pnl, 2),
+        "gross_profit": round(gross_profit, 2),
+        "gross_loss": round(gross_loss, 2),
+        "profit_factor": round(gross_profit / (gross_loss + 1e-9), 4),
+        "total_return": round(total_pnl / INITIAL_CAPITAL, 4),
+        "max_drawdown": round(float(max_dd), 4),
+        "sharpe": round(sharpe, 4),
+    }
+
+
 def _backtest_trader(
     trader_id: str,
     symbols: list,
@@ -1485,6 +1635,10 @@ def _backtest_trader(
     end: str,
     ml_models: dict = None,
     shared_ml_cache: dict = None,
+    candidate_logger=None,
+    run_id: str = "",
+    source_split: str = "",
+    split_summary_hash: str = "",
 ) -> dict:
     """
     Run backtest for one trader across all its symbols.
@@ -1556,9 +1710,19 @@ def _backtest_trader(
     logger.info("%s: all symbols loaded in %.1fs", trader_id, _time.perf_counter() - _t_load_all)
 
     if not symbol_dfs:
-        return {"trades": 0, "win_rate": 0.0, "total_return": 0.0,
-                "profit_factor": 0.0, "max_drawdown": 0.0, "sharpe": 0.0,
-                "tp1_rate": 0.0, "tp2_rate": 0.0, "trade_log": []}
+        fixed_metrics = _fixed_risk_metrics([])
+        return {
+            "trades": 0, "win_rate": 0.0, "total_return": 0.0,
+            "profit_factor": 0.0, "max_drawdown": 0.0, "sharpe": 0.0,
+            "primary_metric_basis": "fixed_risk_r_multiple",
+            "primary_metrics": fixed_metrics,
+            "primary_profit_factor": fixed_metrics["profit_factor"],
+            "primary_total_return": fixed_metrics["total_return"],
+            "primary_max_drawdown": fixed_metrics["max_drawdown"],
+            "primary_sharpe": fixed_metrics["sharpe"],
+            "expectancy_r": fixed_metrics["expectancy_r"],
+            "tp1_rate": 0.0, "tp2_rate": 0.0, "trade_log": [],
+        }
 
 
     # ── GPU-batched ML pre-computation ────────────────────────────────────────
@@ -1693,15 +1857,15 @@ def _backtest_trader(
     # Hoist env-var reads outside the 473k-bar loop — os.getenv does a dict lookup
     # + string compare on every call; at 473k bars this adds measurable overhead.
     _cfg_density_lambda   = float(os.getenv("DENSITY_LAMBDA",             "0.12"))
-    _cfg_dir_thresh       = float(os.getenv("ML_DIRECTION_THRESHOLD",     "0.50"))
+    _cfg_dir_thresh       = float(os.getenv("ML_DIRECTION_THRESHOLD",     "0.55"))
     _cfg_min_conf         = float(os.getenv("MIN_CONFIDENCE",             "0.0"))
     _cfg_min_ev           = float(os.getenv("MIN_EV_THRESHOLD",           "0.0"))
     _cfg_max_uncertainty  = float(os.getenv("MAX_UNCERTAINTY",            "2.0"))
-    _cfg_neutral_thresh   = float(os.getenv("NEUTRAL_BIAS_THRESHOLD",     "0.50"))
-    _cfg_volatile_thresh  = float(os.getenv("VOLATILE_ENTRY_THRESHOLD",   _cfg_dir_thresh.__str__()))
-    _cfg_block_consol     = os.getenv("BLOCK_LTF_CONSOLIDATING",          "0").lower() in ("1","true","yes")
+    _cfg_neutral_thresh   = float(os.getenv("NEUTRAL_BIAS_THRESHOLD",     "0.60"))
+    _cfg_volatile_thresh  = float(os.getenv("VOLATILE_ENTRY_THRESHOLD",   "0.70"))
+    _cfg_block_consol     = os.getenv("BLOCK_LTF_CONSOLIDATING",          "1").lower() in ("1","true","yes")
     _cfg_strict_trend_pb  = os.getenv("REQUIRE_TRENDING_PULLBACK",        "0").lower() in ("1","true","yes")
-    _cfg_strict_rng       = os.getenv("RANGING_REQUIRE_RANGE",            "0").lower() in ("1","true","yes")
+    _cfg_strict_rng       = os.getenv("RANGING_REQUIRE_RANGE",            "1").lower() in ("1","true","yes")
     _cfg_sl_mult          = float(os.getenv("SL_ATR_MULT",               "1.5"))
     _cfg_rr_default       = float(os.getenv("RR_DEFAULT",                "2.0"))
 
@@ -1840,6 +2004,8 @@ def _backtest_trader(
         if raw_signal is None:
             _dbg["no_signal"] += 1
             continue
+        candidate_correlation_id = f"{run_id or 'bt'}_{_dbg['total']:08d}"
+        raw_signal["correlation_id"] = candidate_correlation_id
 
         # ── Soft density penalty: exp decay on confidence ─────────────────────
         _density_mult = math.exp(-_cfg_density_lambda * _density_count)
@@ -1847,9 +2013,45 @@ def _backtest_trader(
 
         if _cfg_min_conf > 0 and raw_signal["confidence"] < _cfg_min_conf:
             _dbg["density"] += 1
+            _log_backtest_candidate(
+                candidate_logger,
+                df=df,
+                entry_idx=i,
+                raw_signal=raw_signal,
+                ml_preds=ml_preds,
+                bar=bar,
+                timestamp=dt.isoformat(),
+                executed=False,
+                rejection_reason="min_confidence",
+                pm_open_positions_seen=len(open_positions_detail),
+                run_id=run_id,
+                source_split=source_split,
+                bt_start=start,
+                bt_end=end,
+                split_summary_hash=split_summary_hash,
+                correlation_id=candidate_correlation_id,
+            )
             continue
         if raw_signal["confidence"] < _cfg_dir_thresh:
             _dbg["density"] += 1
+            _log_backtest_candidate(
+                candidate_logger,
+                df=df,
+                entry_idx=i,
+                raw_signal=raw_signal,
+                ml_preds=ml_preds,
+                bar=bar,
+                timestamp=dt.isoformat(),
+                executed=False,
+                rejection_reason="direction_confidence_after_density",
+                pm_open_positions_seen=len(open_positions_detail),
+                run_id=run_id,
+                source_split=source_split,
+                bt_start=start,
+                bt_end=end,
+                split_summary_hash=split_summary_hash,
+                correlation_id=candidate_correlation_id,
+            )
             continue
 
         # Apply slippage
@@ -1866,6 +2068,24 @@ def _backtest_trader(
             enriched = _enrich_signal_no_pm(raw_signal, sizing_equity, atr)
             if enriched is None:
                 _dbg["pm_reject"] += 1
+                _log_backtest_candidate(
+                    candidate_logger,
+                    df=df,
+                    entry_idx=i,
+                    raw_signal=raw_signal,
+                    ml_preds=ml_preds,
+                    bar=bar,
+                    timestamp=dt.isoformat(),
+                    executed=False,
+                    rejection_reason="no_pm_enrich_failed",
+                    pm_open_positions_seen=len(open_positions_detail),
+                    run_id=run_id,
+                    source_split=source_split,
+                    bt_start=start,
+                    bt_end=end,
+                    split_summary_hash=split_summary_hash,
+                    correlation_id=candidate_correlation_id,
+                )
                 continue
         else:
             portfolio_state = {
@@ -1875,6 +2095,24 @@ def _backtest_trader(
             enriched = pm.enrich_signal(raw_signal, portfolio_state, atr=atr)
             if enriched is None:
                 _dbg["pm_reject"] += 1
+                _log_backtest_candidate(
+                    candidate_logger,
+                    df=df,
+                    entry_idx=i,
+                    raw_signal=raw_signal,
+                    ml_preds=ml_preds,
+                    bar=bar,
+                    timestamp=dt.isoformat(),
+                    executed=False,
+                    rejection_reason=getattr(pm, "last_reject_reason", "") or "pm_reject",
+                    pm_open_positions_seen=len(open_positions_detail),
+                    run_id=run_id,
+                    source_split=source_split,
+                    bt_start=start,
+                    bt_end=end,
+                    split_summary_hash=split_summary_hash,
+                    correlation_id=candidate_correlation_id,
+                )
                 continue
 
         entry    = float(enriched["entry"])
@@ -1916,11 +2154,47 @@ def _backtest_trader(
             # gate actually filters predicted-negative-EV setups.
             if _ev < _cfg_min_ev:
                 _dbg["quality_block"] += 1
+                _log_backtest_candidate(
+                    candidate_logger,
+                    df=df,
+                    entry_idx=i,
+                    raw_signal={**raw_signal, "rr_ratio": rr_ratio},
+                    ml_preds=ml_preds,
+                    bar=bar,
+                    timestamp=dt.isoformat(),
+                    executed=False,
+                    rejection_reason="quality_ev_below_threshold",
+                    pm_open_positions_seen=len(open_positions_detail),
+                    run_id=run_id,
+                    source_split=source_split,
+                    bt_start=start,
+                    bt_end=end,
+                    split_summary_hash=split_summary_hash,
+                    correlation_id=candidate_correlation_id,
+                )
                 continue
         elif ml_preds and ml_preds.get("ev") is not None:
             # Cache had ev (e.g. from _run_bar_ml fallback path)
             if float(ml_preds["ev"]) < _cfg_min_ev:
                 _dbg["quality_block"] += 1
+                _log_backtest_candidate(
+                    candidate_logger,
+                    df=df,
+                    entry_idx=i,
+                    raw_signal={**raw_signal, "rr_ratio": rr_ratio},
+                    ml_preds=ml_preds,
+                    bar=bar,
+                    timestamp=dt.isoformat(),
+                    executed=False,
+                    rejection_reason="cached_ev_below_threshold",
+                    pm_open_positions_seen=len(open_positions_detail),
+                    run_id=run_id,
+                    source_split=source_split,
+                    bt_start=start,
+                    bt_end=end,
+                    split_summary_hash=split_summary_hash,
+                    correlation_id=candidate_correlation_id,
+                )
                 continue
 
         # ── Simulate trade ────────────────────────────────────────────────────
@@ -1947,6 +2221,26 @@ def _backtest_trader(
         exit_dt = _utc_timestamp(df.index[exit_idx])
         exit_ts_ns = int(pd.Timestamp(exit_dt).value)
         pm_open_positions_seen = len(open_positions_detail)
+        _log_backtest_candidate(
+            candidate_logger,
+            df=df,
+            entry_idx=i,
+            raw_signal={**raw_signal, "rr_ratio": rr_ratio},
+            ml_preds=ml_preds,
+            bar=bar,
+            timestamp=dt.isoformat(),
+            executed=True,
+            rejection_reason="",
+            pm_open_positions_seen=pm_open_positions_seen,
+            run_id=run_id,
+            source_split=source_split,
+            bt_start=start,
+            bt_end=end,
+            split_summary_hash=split_summary_hash,
+            correlation_id=candidate_correlation_id,
+            actual_result={**result, "exit_timestamp": exit_dt.isoformat()},
+            actual_pnl=pnl,
+        )
         open_positions_detail.append({
             "symbol": symbol,
             "side": enriched["side"],
@@ -2044,6 +2338,7 @@ def _backtest_trader(
             reverse=True,
         )))
     if not trades:
+        fixed_metrics = _fixed_risk_metrics(trades)
         return {
             "trades": 0,
             "win_rate": 0.0,
@@ -2051,6 +2346,13 @@ def _backtest_trader(
             "profit_factor": 0.0,
             "max_drawdown": 0.0,
             "sharpe": 0.0,
+            "primary_metric_basis": "fixed_risk_r_multiple",
+            "primary_metrics": fixed_metrics,
+            "primary_profit_factor": fixed_metrics["profit_factor"],
+            "primary_total_return": fixed_metrics["total_return"],
+            "primary_max_drawdown": fixed_metrics["max_drawdown"],
+            "primary_sharpe": fixed_metrics["sharpe"],
+            "expectancy_r": fixed_metrics["expectancy_r"],
             "tp1_rate": 0.0,
             "tp2_rate": 0.0,
             "trade_log": [],
@@ -2100,6 +2402,7 @@ def _backtest_trader(
 
     # Avg bars held
     avg_bars = float(np.mean([t["bars_held"] for t in trades]))
+    fixed_metrics = _fixed_risk_metrics(trades)
 
     return {
         "trades": len(trades),
@@ -2108,6 +2411,13 @@ def _backtest_trader(
         "profit_factor": round(profit_factor, 4),
         "max_drawdown": round(max_dd, 4),
         "sharpe": round(sharpe, 4),
+        "primary_metric_basis": "fixed_risk_r_multiple",
+        "primary_metrics": fixed_metrics,
+        "primary_profit_factor": fixed_metrics["profit_factor"],
+        "primary_total_return": fixed_metrics["total_return"],
+        "primary_max_drawdown": fixed_metrics["max_drawdown"],
+        "primary_sharpe": fixed_metrics["sharpe"],
+        "expectancy_r": fixed_metrics["expectancy_r"],
         "tp1_rate": round(tp1_hits / len(trades), 4),
         "tp2_rate": round(tp2_hits / len(trades), 4),
         "avg_bars_held": round(avg_bars, 1),
@@ -2627,7 +2937,11 @@ def main():
     shared_ml_cache: dict = {} if ml_models else None
     result = _backtest_trader("ml_trader", symbols, pm, bt_start, bt_end,
                               ml_models=ml_models,
-                              shared_ml_cache=shared_ml_cache)
+                              shared_ml_cache=shared_ml_cache,
+                              candidate_logger=_bt_candidate_logger,
+                              run_id=run_id,
+                              source_split=window_label,
+                              split_summary_hash=split_summary_hash)
     trade_log = result.pop("trade_log", [])
     _validate_trade_timestamps(trade_log, bt_start, bt_end)
     _annotate_trade_provenance(
@@ -2643,59 +2957,21 @@ def main():
     all_trade_logs.extend(trade_log)
     diagnostic_breakdowns = _write_trade_breakdowns(all_trade_logs, run_id)
 
-    # Log backtest trades as candidates with outcomes for calibration
     for trader_id, result in results.items():
-        trade_log = [t for t in all_trade_logs if t.get("trader") == trader_id]
-        if _bt_candidate_logger is not None:
-            for tr in trade_log:
-                cid = _bt_candidate_logger.log_candidate(
-                    trader_id=trader_id,
-                    symbol=tr.get("symbol", ""),
-                    side=tr.get("side", "buy"),
-                    features={
-                        "rr_ratio":   tr.get("rr_ratio", 1.5),
-                        "confidence": tr.get("confidence", 0.7),
-                        "p_win":      tr.get("confidence", 0.7),
-                        "p_bull":     tr.get("p_bull", ""),
-                        "p_bear":     tr.get("p_bear", ""),
-                        "ev":         tr.get("ev", tr.get("quality_score", "")),
-                        "regime":     tr.get("regime", ""),
-                        "adx":        tr.get("adx", ""),
-                        "atr":        tr.get("atr", ""),
-                        "ema_stack_score": tr.get("ema_stack", ""),
-                        "run_id":     run_id,
-                        "source_split": tr.get("source_split", window_label),
-                        "bt_start":   bt_start,
-                        "bt_end":     bt_end,
-                        "split_summary_hash": split_summary_hash,
-                        "correlation_id": tr.get("correlation_id", ""),
-                    },
-                    executed=True,
-                    timestamp=tr.get("timestamp"),
-                )
-                tp_hit = tr.get("tp1_hit", False) or tr.get("exit_reason", "") == "tp2"
-                sl_hit = str(tr.get("exit_reason", "")).startswith("sl")
-                _bt_candidate_logger.mark_outcome(
-                    candidate_id=cid,
-                    tp_hit=bool(tp_hit),
-                    sl_hit=bool(sl_hit),
-                    pnl=float(tr.get("pnl", 0.0)),
-                    exit_reason=str(tr.get("exit_reason", "")),
-                    outcome_ts=tr.get("exit_timestamp", tr.get("timestamp")),
-                )
-
         logger.info(
-            "%s: %d trades | WR=%.1f%% | PF=%.2f | Return=%.1f%% | "
-            "TP1=%.1f%% TP2=%.1f%% | DD=%.1f%% | Sharpe=%.2f",
+            "%s: %d trades | WR=%.1f%% | primary fixed-risk PF=%.2f | "
+            "primary return=%.1f%% | expectancy=%.3fR | TP1=%.1f%% TP2=%.1f%% | "
+            "primary DD=%.1f%% | primary Sharpe=%.2f",
             trader_id,
             result["trades"],
             result["win_rate"] * 100,
-            result["profit_factor"],
-            result["total_return"] * 100,
+            result.get("primary_profit_factor", result["profit_factor"]),
+            result.get("primary_total_return", result["total_return"]) * 100,
+            result.get("expectancy_r", 0.0),
             result["tp1_rate"] * 100,
             result["tp2_rate"] * 100,
-            result["max_drawdown"] * 100,
-            result["sharpe"],
+            result.get("primary_max_drawdown", result["max_drawdown"]) * 100,
+            result.get("primary_sharpe", result["sharpe"]),
         )
 
     # ── Calibration report ────────────────────────────────────────────────────
@@ -2781,14 +3057,18 @@ def main():
 
     logger.info("Backtest complete → %s", outpath)
     print(f"\nBacktest results → {outpath}")
-    print(f"{'Trader':<40} {'Trades':>6} {'WR':>7} {'PF':>6} {'Return':>8} {'TP1%':>6} {'TP2%':>6} {'DD':>7} {'Sharpe':>7}")
+    print(f"{'Trader':<40} {'Trades':>6} {'WR':>7} {'PF*':>6} {'Return*':>8} {'ExpR':>7} {'TP1%':>6} {'TP2%':>6} {'DD*':>7} {'Sharpe*':>8}")
     print("-" * 105)
     for tid, r in results.items():
         name = TRADER_NAMES.get(tid, tid)
         print(
-            f"{name:<40} {r['trades']:>6} {r['win_rate']:>6.1%} {r['profit_factor']:>6.2f}"
-            f" {r['total_return']:>7.1%} {r['tp1_rate']:>5.1%} {r['tp2_rate']:>5.1%}"
-            f" {r['max_drawdown']:>6.1%} {r['sharpe']:>7.2f}"
+            f"{name:<40} {r['trades']:>6} {r['win_rate']:>6.1%}"
+            f" {r.get('primary_profit_factor', r['profit_factor']):>6.2f}"
+            f" {r.get('primary_total_return', r['total_return']):>7.1%}"
+            f" {r.get('expectancy_r', 0.0):>7.3f}"
+            f" {r['tp1_rate']:>5.1%} {r['tp2_rate']:>5.1%}"
+            f" {r.get('primary_max_drawdown', r['max_drawdown']):>6.1%}"
+            f" {r.get('primary_sharpe', r['sharpe']):>8.2f}"
         )
         gd = r.get("gate_diagnostics") or {}
         if gd:

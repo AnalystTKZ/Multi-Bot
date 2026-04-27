@@ -72,6 +72,7 @@ class PortfolioManager:
 
     def __init__(self, settings, bar_date: Optional[str] = None):
         self._settings = settings
+        self.last_reject_reason = ""
 
         # Per-trader streak: list of bool (True=win)
         self._outcome_history: Dict[str, List[bool]] = defaultdict(list)
@@ -124,6 +125,7 @@ class PortfolioManager:
         confidence = float(signal.get("confidence", 0.60))
         entry      = float(signal.get("entry", 0.0))
         stop_loss  = float(signal.get("stop_loss", entry))
+        self.last_reject_reason = ""
 
         # 1. Daily loss budget
         account    = float(getattr(self._settings, "ACCOUNT_BALANCE", 10000))
@@ -131,23 +133,41 @@ class PortfolioManager:
         budget     = alloc * float(getattr(self._settings, "MAX_DAILY_LOSS_PCT", 1.00))
         daily_loss = abs(min(0.0, self._daily_pnl[trader_id]))
         if daily_loss >= budget:
+            self.last_reject_reason = "daily_budget_exhausted"
             logger.info("PM: %s daily budget exhausted (%.2f/%.2f) — skip",
                         trader_id, daily_loss, budget)
             return None
 
+        # 2. Total exposure cap. The correlation cap below limits positions
+        # within a directional group; this cap limits all simulated/live open
+        # positions so "open positions seen" cannot grow past the configured
+        # portfolio maximum.
+        open_positions = portfolio_state.get("open_positions_detail", [])
+        max_positions = int(getattr(self._settings, "MAX_CONCURRENT_POSITIONS", 25))
+        if max_positions > 0 and len(open_positions) >= max_positions:
+            self.last_reject_reason = "max_concurrent_positions"
+            logger.info(
+                "PM: %s %s %s — max open positions hit (%d/%d)",
+                trader_id, side, symbol, len(open_positions), max_positions,
+            )
+            return None
+
         # 2. Correlation cap
         if not self._passes_correlation_check(symbol, side, portfolio_state):
+            self.last_reject_reason = "correlation_cap"
             logger.info("PM: %s %s %s — correlation cap hit", trader_id, side, symbol)
             return None
 
         # 3. Dynamic R:R
         sl_dist = abs(entry - stop_loss)
         if sl_dist < 1e-9:
+            self.last_reject_reason = "zero_sl_distance"
             logger.warning("PM: %s zero SL distance — skip", trader_id)
             return None
 
         tp1_mult, tp2_mult = self._dynamic_rr_multipliers(confidence)
         if tp1_mult < 2.0:
+            self.last_reject_reason = "rr_below_min"
             logger.info("PM: %s conf=%.2f → R:R=%.2f < 2.0 (min 1:2) — skip",
                         trader_id, confidence, tp1_mult)
             return None
@@ -406,19 +426,20 @@ class PortfolioManager:
     def _passes_correlation_check(
         self, symbol: str, side: str, portfolio_state: dict
     ) -> bool:
-        """Block if adding this trade exceeds _MAX_SAME_GROUP in any directional group."""
+        """Block if adding this trade exceeds the same-direction group cap."""
         open_positions = portfolio_state.get("open_positions_detail", [])
         if not open_positions:
             return True
         new_group = self._directional_group(symbol, side)
         if new_group is None:
             return True
+        max_same_group = int(getattr(self._settings, "MAX_CORRELATED_POSITIONS", _MAX_SAME_GROUP))
         count = sum(
             1 for pos in open_positions
             if self._directional_group(pos.get("symbol", ""), pos.get("side", "")) == new_group
         )
-        if count >= _MAX_SAME_GROUP:
-            logger.debug("PM: group=%s at cap (%d) — block", new_group, count)
+        if max_same_group > 0 and count >= max_same_group:
+            logger.debug("PM: group=%s at cap (%d/%d) — block", new_group, count, max_same_group)
             return False
         return True
 

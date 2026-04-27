@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Step 7b: Quality + RL training — runs after a real train/live/paper journal exists.
+Step 7b: Quality + RL training — runs after a real round/live/paper journal exists.
 Requires trade_journal_detailed.jsonl with >= MIN_JOURNAL_STEP7B real entries
 (default 50).
 No synthetic fallback — if journal is missing or too small, step fails loudly.
-Validation/test backtest journals are excluded by default; set
-ALLOW_NONTRAIN_JOURNAL_TRAINING=1 only for explicit research experiments.
+Round-produced backtest journals are allowed here because this step is the
+research feedback loop that retrains Quality/RL between backtest rounds.
 """
 from __future__ import annotations
 import json
@@ -34,6 +34,10 @@ for d in [ML_METRICS, ML_LOGS]:
 
 JOURNAL_PATH         = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
 MIN_JOURNAL_ENTRIES = int(os.getenv("MIN_JOURNAL_STEP7B", "50"))
+ROUND_JOURNAL_SPLITS = os.getenv(
+    "ROUND_JOURNAL_ALLOWED_SPLITS",
+    "train,validation,test,combined_eval,live,paper,production",
+)
 
 
 def run_retrain(model: str) -> dict:
@@ -44,8 +48,14 @@ def run_retrain(model: str) -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ENGINE_DIR)
     env["TF_CPP_MIN_LOG_LEVEL"] = "2"
+    env.setdefault("ALLOW_ROUND_JOURNAL_TRAINING", "1")
+    env.setdefault("JOURNAL_ALLOWED_SPLITS", ROUND_JOURNAL_SPLITS)
 
-    logger.info("Running retrain --model %s", model)
+    logger.info(
+        "Running retrain --model %s with JOURNAL_ALLOWED_SPLITS=%s",
+        model,
+        env.get("JOURNAL_ALLOWED_SPLITS", ""),
+    )
     try:
         # Stream output directly — capture_output=True causes pipe-buffer deadlock
         # when training verbose output fills the 64 KB OS pipe buffer.

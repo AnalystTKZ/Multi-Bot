@@ -65,6 +65,8 @@ class StatisticalBinningEngine:
 
         # Keep only rows with known outcomes
         df = df.dropna(subset=["tp_hit", "sl_hit"])
+        if "executed" in df.columns:
+            df = df[df["executed"].astype(str).isin(["1", "1.0", "True", "true"])]
         df["win"] = (df["tp_hit"].astype(float) == 1.0).astype(float)
 
         # Numeric conversion
@@ -211,6 +213,8 @@ class EVFilter:
             df = df[df["candidate_id"].astype(str).str.endswith("__outcome")].copy()
             if len(df) == 0:
                 return
+            if "executed" in df.columns:
+                df = df[df["executed"].astype(str).isin(["1", "1.0", "True", "true"])]
             df["tp_hit"] = pd.to_numeric(df["tp_hit"], errors="coerce")
             df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce")
             df["rr_ratio"] = pd.to_numeric(df["rr_ratio"], errors="coerce")
@@ -296,6 +300,8 @@ class ConfidenceCalibrator:
             if len(df) == 0:
                 result["note"] = "No outcome data yet"
                 return result
+            if "executed" in df.columns:
+                df = df[df["executed"].astype(str).isin(["1", "1.0", "True", "true"])]
 
             if trader_id:
                 df = df[df["trader_id"] == trader_id]
@@ -378,6 +384,8 @@ class ConfidenceCalibrator:
 
             df = pd.read_csv(self._log_path)
             df = df[df["candidate_id"].astype(str).str.endswith("__outcome")]
+            if "executed" in df.columns:
+                df = df[df["executed"].astype(str).isin(["1", "1.0", "True", "true"])]
             trader_ids = list(df["trader_id"].unique()) if "trader_id" in df.columns else []
         except Exception:
             trader_ids = []

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from services.event_bus import EventBus, EventType
+from services.market_decision import combined_market_decision
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +281,7 @@ class SignalPipeline:
         # Gate 3: GRU direction
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
-        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))
+        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.55"))
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
             conf = p_bull
@@ -290,55 +291,32 @@ class SignalPipeline:
         else:
             return None
 
-        # Gate 4: HTF bias alignment
+        # Gate 4/5: combined HTF/LTF market-decision matrix
         _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.50"))
-        if _htf_bias == "BIAS_UP" and side == "sell":
-            return None
-        if _htf_bias == "BIAS_DOWN" and side == "buy":
-            return None
-        if _htf_bias == "BIAS_NEUTRAL" and conf < _neutral_thresh:
-            return None
-
-        # Gate 5: LTF behaviour filter
         _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
-        _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", str(_dir_thresh)))
-
         _range_valid    = bool(bar.get("range_valid", False))
-        _range_side     = str(bar.get("range_side", ""))
         _pullback_valid = bool(bar.get("pullback_valid", False))
-        _pullback_side  = str(bar.get("pullback_side", ""))
-        _strict_trend_pb = str(os.getenv("REQUIRE_TRENDING_PULLBACK", "0")).lower() in (
-            "1", "true", "yes",
+        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.60"))
+        _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.70"))
+        _block_consol = str(os.getenv("BLOCK_LTF_CONSOLIDATING", "1")).lower() in ("1", "true", "yes")
+        _require_range = str(os.getenv("RANGING_REQUIRE_RANGE", "1")).lower() in ("1", "true", "yes")
+        _allowed, _reason = combined_market_decision(
+            htf_bias=_htf_bias,
+            ltf_behaviour=_ltf_behaviour,
+            side=side,
+            confidence=conf,
+            bar=bar,
+            neutral_threshold=_neutral_thresh,
+            volatile_threshold=_volatile_thresh,
+            block_consolidating=_block_consol,
+            require_range=_require_range,
         )
-
-        if _ltf_behaviour == "CONSOLIDATING":
-            if str(os.getenv("BLOCK_LTF_CONSOLIDATING", "0")).lower() in ("1", "true", "yes"):
-                return None
-
-        if _ltf_behaviour == "VOLATILE" and conf < _volatile_thresh:
+        if not _allowed:
+            logger.debug(
+                "Signal rejected %s %s — %s htf=%s ltf=%s conf=%.3f",
+                symbol, side, _reason, _htf_bias, _ltf_behaviour, conf,
+            )
             return None
-
-        if _ltf_behaviour == "TRENDING":
-            if _strict_trend_pb:
-                if not _pullback_valid:
-                    return None
-                if str(_pullback_side or "") != side:
-                    return None
-            else:
-                if _pullback_valid and str(_pullback_side or "") and str(_pullback_side) != side:
-                    return None
-
-        if _ltf_behaviour == "RANGING":
-            _strict_rng = str(os.getenv("RANGING_REQUIRE_RANGE", "0")).lower() in ("1", "true", "yes")
-            if _strict_rng:
-                if not _range_valid:
-                    return None
-                if str(_range_side or "") != side:
-                    return None
-            else:
-                if _range_valid and str(_range_side or "") and str(_range_side) != side:
-                    return None
 
         # ATR-based entry / SL / TP
         # For RANGING entries: TP targets the far wall of the range.

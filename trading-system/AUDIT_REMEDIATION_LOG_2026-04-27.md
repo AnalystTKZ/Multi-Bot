@@ -187,3 +187,53 @@ This means the next pipeline run must rebuild weights and generate fresh backtes
 - QualityScorer still needs clean train-only labels before it can be active.
 - Backtest equity/PnL accounting still computes trade outcomes immediately, while the new ledger only models exposure for PM correlation gating.
 - The next full run is required to confirm whether PM correlation caps materially reduce clustered losses.
+
+## Profitability Remediation Update
+
+After reviewing the new run output, the main problem shifted from trade count to profitability quality:
+
+- Candidate logging now happens inside the backtest decision loop, so rejected opportunities are logged with `rejection_reason`, `pm_open_positions_seen`, and a simulated hypothetical outcome.
+- Calibration, EV filtering, and statistical binning now ignore rejected hypothetical rows and train only from `executed=1` outcomes.
+- Backtest profitability reporting now uses fixed-risk, non-compounded R-multiple metrics as the primary PF/return/drawdown/Sharpe basis.
+- PortfolioManager now enforces the total `MAX_CONCURRENT_POSITIONS` cap before correlation checks, which addresses `pm_open_positions_seen` exceeding the configured cap.
+- HTF/LTF market-decision logic is shared between backtest and live signal generation.
+- `BIAS_NEUTRAL` and `RANGING` labels are now explicit clean market states instead of fallback buckets, with ambiguous bars assigned zero confidence for dropping during retraining.
+
+Verification:
+
+```bash
+python3 -m py_compile \
+  trading-system/trading-engine/services/candidate_logger.py \
+  trading-system/trading-engine/services/quant_analytics.py \
+  trading-system/trading-engine/monitors/portfolio_manager.py \
+  trading-system/trading-engine/services/market_decision.py \
+  trading-system/trading-engine/scripts/run_backtest.py \
+  trading-system/trading-engine/services/signal_pipeline.py \
+  trading-system/trading-engine/models/regime_classifier.py \
+  trading-system/pipeline/step6_backtest.py
+```
+
+No full backtest was run after these code changes; the next pipeline run is required to measure the new fixed-risk profitability and candidate rejection distribution.
+
+## Round Journal Quality/RL Training Update
+
+QualityScorer and RLAgent now accept round-produced journal splits by default:
+
+- `validation`
+- `test`
+- `combined_eval`
+
+The Kaggle pipeline now retrains Quality/RL after Round 1, after Round 2, and after Round 3 using the accumulated journal entries. GRU and Regime remain train-split retrains in the Round 3 incremental phase.
+
+The allowed split list is still overrideable with `JOURNAL_ALLOWED_SPLITS`. Set `ALLOW_ROUND_JOURNAL_TRAINING=0` and provide a stricter split list if a production-only train/live/paper journal retrain is required.
+
+Verification:
+
+```bash
+python3 -m py_compile \
+  trading-system/kaggle_train.py \
+  trading-system/pipeline/step7b_train.py \
+  trading-system/trading-engine/models/quality_scorer.py \
+  trading-system/trading-engine/models/rl_agent.py \
+  trading-system/trading-engine/scripts/retrain_incremental.py
+```
