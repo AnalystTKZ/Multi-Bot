@@ -1,6 +1,4 @@
-  Cleared done-check: training_summary.json
-  Cleared done-check: training_7b_r1_summary.json
-  Cleared done-check: training_7b_r2_summary.json
+ Cleared done-check: training_summary.json
 Environment : KAGGLE
   base      -> /kaggle/working/Multi-Bot/trading-system
   data      -> /kaggle/working/Multi-Bot/trading-system/training_data
@@ -22,13 +20,13 @@ All scripts and inputs verified.
   SKIP  Step 3 - Alignment
   SKIP  Step 4 - Features
   START Step 5 - Split
-2026-04-27 01:26:13,624 INFO Loading feature-engineered data...
-2026-04-27 01:26:14,262 INFO Loaded 221743 rows, 202 features
-2026-04-27 01:26:14,264 INFO Data span: 2016-01-04 → 2025-08-05  (9.6 years)
-2026-04-27 01:26:14,266 INFO Train:        130951 bars  2016-01-04 → 2021-08-05
-2026-04-27 01:26:14,266 INFO Validation:    44000 bars  2021-08-05 → 2023-08-04
-2026-04-27 01:26:14,266 INFO Test:          46792 bars  2023-08-07 → 2025-08-05
-2026-04-27 01:26:14,266 INFO No leakage confirmed: train < val < test timestamps
+2026-04-27 05:34:02,564 INFO Loading feature-engineered data...
+2026-04-27 05:34:03,198 INFO Loaded 221743 rows, 202 features
+2026-04-27 05:34:03,199 INFO Data span: 2016-01-04 → 2025-08-05  (9.6 years)
+2026-04-27 05:34:03,202 INFO Train:        130951 bars  2016-01-04 → 2021-08-05
+2026-04-27 05:34:03,202 INFO Validation:    44000 bars  2021-08-05 → 2023-08-04
+2026-04-27 05:34:03,202 INFO Test:          46792 bars  2023-08-07 → 2025-08-05
+2026-04-27 05:34:03,202 INFO No leakage confirmed: train < val < test timestamps
 
 === SPLIT COMPLETE (CALENDAR, no shuffling) ===
   Train:      130,951 bars  2016-01-04 → 2021-08-05
@@ -45,619 +43,713 @@ All scripts and inputs verified.
 
 === Phase 7a: Train GRU + Regime (train set only) ===
   START Step 7a - GRU+Regime
-2026-04-27 01:26:16,761 INFO === STEP 7a: GRU + REGIME TRAINING ===
-2026-04-27 01:26:16,761 INFO --- Training regime ---
-2026-04-27 01:26:16,762 INFO Running retrain --model regime
-2026-04-27 01:26:16,942 INFO retrain environment: KAGGLE
-2026-04-27 01:26:18,640 INFO Device: CUDA (2 GPU(s))
-2026-04-27 01:26:18,651 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:26:18,651 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:26:18,651 INFO cuDNN benchmark=True, TF32 matmul=True
-2026-04-27 01:26:18,654 INFO PyTorch CPU threads: 4 intra / 2 interop
-2026-04-27 01:26:18,655 INFO Retrain data split: train
-2026-04-27 01:26:18,656 INFO === RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===
-2026-04-27 01:26:18,824 INFO NumExpr defaulting to 4 threads.
-2026-04-27 01:26:19,074 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
-2026-04-27 01:26:19,074 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:26:19,074 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:26:19,075 INFO Regime phase macro_correlations: 0.0s
-2026-04-27 01:26:19,075 INFO Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...
-2026-04-27 01:26:19,115 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
-2026-04-27 01:26:19,116 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,152 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,174 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,205 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,230 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,256 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,271 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,298 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,314 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,337 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,353 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,376 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,391 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,411 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,426 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,447 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,462 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,485 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,500 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,522 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:26:19,539 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:26:19,580 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:26:20,813 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
-2026-04-27 01:26:44,246 INFO GMM fitted on 58459 samples (mode=htf_bias) — cluster→regime: {2: 0, 0: 1, 1: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
-2026-04-27 01:26:44,251 INFO Regime HTF GMM 'dollar' fitted on 7 4H dfs (3-class bias) in 24.7s
-2026-04-27 01:26:44,251 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
-2026-04-27 01:26:54,416 INFO GMM fitted on 25054 samples (mode=htf_bias) — cluster→regime: {1: 0, 0: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
-2026-04-27 01:26:54,418 INFO Regime HTF GMM 'cross' fitted on 3 4H dfs (3-class bias) in 10.2s
-2026-04-27 01:26:54,418 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
-2026-04-27 01:27:02,321 INFO GMM fitted on 19766 samples (mode=htf_bias) — cluster→regime: {0: 0, 1: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
-2026-04-27 01:27:02,322 INFO Regime HTF GMM 'gold' fitted on 1 4H dfs (3-class bias) in 7.9s
-2026-04-27 01:27:02,322 INFO Regime phase GMM HTF total: 42.7s
-2026-04-27 01:27:02,323 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
-2026-04-27 01:28:14,917 INFO GMM fitted on 76337 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 3: 0, 0: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
-2026-04-27 01:28:14,930 INFO Regime LTF GMM 'dollar' fitted on 7 1H dfs (4-class behaviour) in 72.6s
-2026-04-27 01:28:14,930 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
-2026-04-27 01:28:47,486 INFO GMM fitted on 32715 samples (mode=ltf_behaviour) — cluster→regime: {0: 3, 3: 0, 2: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
-2026-04-27 01:28:47,488 INFO Regime LTF GMM 'cross' fitted on 3 1H dfs (4-class behaviour) in 32.6s
-2026-04-27 01:28:47,488 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
-2026-04-27 01:29:10,671 INFO GMM fitted on 10657 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 1: 0, 0: 2, 3: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
-2026-04-27 01:29:10,672 INFO Regime LTF GMM 'gold' fitted on 1 1H dfs (4-class behaviour) in 23.2s
-2026-04-27 01:29:10,673 INFO Regime phase GMM LTF total: 128.3s
-2026-04-27 01:29:10,777 INFO Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...
-2026-04-27 01:29:10,778 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,779 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,780 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,782 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,783 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,784 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,785 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,786 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,787 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,788 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:10,790 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:29:10,916 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:10,960 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:10,961 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:10,961 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:10,969 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:10,970 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:11,404 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
-2026-04-27 01:29:11,405 INFO Regime[4H mode=htf_bias]: collected AUDUSD — 8352 samples (group=dollar)
-2026-04-27 01:29:11,587 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:11,621 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:11,622 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:11,623 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:11,631 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:11,632 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:12,007 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
-2026-04-27 01:29:12,009 INFO Regime[4H mode=htf_bias]: collected EURGBP — 8352 samples (group=cross)
-2026-04-27 01:29:12,208 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,245 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,245 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,246 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,254 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,255 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:12,649 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
-2026-04-27 01:29:12,650 INFO Regime[4H mode=htf_bias]: collected EURJPY — 8352 samples (group=cross)
-2026-04-27 01:29:12,824 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,861 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,861 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,862 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,870 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:12,871 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:13,251 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
-2026-04-27 01:29:13,252 INFO Regime[4H mode=htf_bias]: collected EURUSD — 8352 samples (group=dollar)
-2026-04-27 01:29:13,428 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:13,464 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:13,465 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:13,466 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:13,474 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:13,475 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:13,857 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
-2026-04-27 01:29:13,859 INFO Regime[4H mode=htf_bias]: collected GBPJPY — 8353 samples (group=cross)
-2026-04-27 01:29:14,037 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:14,073 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:14,073 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:14,074 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:14,082 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:14,083 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:14,465 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
-2026-04-27 01:29:14,466 INFO Regime[4H mode=htf_bias]: collected GBPUSD — 8353 samples (group=dollar)
-2026-04-27 01:29:14,627 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:14,655 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:14,655 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:14,656 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:14,663 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:14,664 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:15,038 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
-2026-04-27 01:29:15,039 INFO Regime[4H mode=htf_bias]: collected NZDUSD — 8352 samples (group=dollar)
-2026-04-27 01:29:15,205 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,240 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,241 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,241 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,249 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,250 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:15,633 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
-2026-04-27 01:29:15,634 INFO Regime[4H mode=htf_bias]: collected USDCAD — 8352 samples (group=dollar)
-2026-04-27 01:29:15,811 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,846 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,847 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,847 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,855 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:15,856 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:16,250 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
-2026-04-27 01:29:16,252 INFO Regime[4H mode=htf_bias]: collected USDCHF — 8352 samples (group=dollar)
-2026-04-27 01:29:16,433 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:16,470 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:16,470 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:16,471 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:16,479 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:16,480 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:16,872 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
-2026-04-27 01:29:16,874 INFO Regime[4H mode=htf_bias]: collected USDJPY — 8353 samples (group=dollar)
-2026-04-27 01:29:17,151 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:17,211 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:17,212 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:17,212 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:17,223 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:17,224 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:29:18,047 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
-2026-04-27 01:29:18,050 INFO Regime[4H mode=htf_bias]: collected XAUUSD — 19767 samples (group=gold)
-2026-04-27 01:29:18,228 INFO Regime phase HTF dataset build: 7.5s (103290 samples)
-2026-04-27 01:29:18,229 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/regime_htf.pkl_20260427_012918
-2026-04-27 01:29:18,522 INFO RegimeClassifier[mode=htf_bias] loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl (device=cuda, features=34, n_classes=3)
-2026-04-27 01:29:18,523 INFO RegimeClassifier[mode=htf_bias]: dropped ambiguous labels below 0.40 (kept=38114 dropped=65176 classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728})
-2026-04-27 01:29:18,533 INFO RegimeClassifier[mode=htf_bias]: 38114 samples, classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728}, device=cuda
-2026-04-27 01:29:18,533 INFO RegimeClassifier: sample weights — mean=0.708  ambiguous(<0.4)=0.0%
-2026-04-27 01:29:18,533 INFO RegimeClassifier[mode=htf_bias]: warm start from existing weights
-2026-04-27 01:29:18,533 INFO RegimeClassifier: DataParallel across 2 GPUs
-2026-04-27 01:29:23,297 INFO Regime epoch  1/50 — tr=0.4714 va=1.0544 acc=0.984 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.912}
-2026-04-27 01:29:23,365 INFO Regime epoch  2/50 — tr=0.4710 va=1.0563 acc=0.983
-2026-04-27 01:29:23,433 INFO Regime epoch  3/50 — tr=0.4708 va=1.0545 acc=0.984
-2026-04-27 01:29:23,505 INFO Regime epoch  4/50 — tr=0.4707 va=1.0536 acc=0.984
-2026-04-27 01:29:23,579 INFO Regime epoch  5/50 — tr=0.4706 va=1.0537 acc=0.983 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.907}
-2026-04-27 01:29:23,649 INFO Regime epoch  6/50 — tr=0.4704 va=1.0524 acc=0.983
-2026-04-27 01:29:23,722 INFO Regime epoch  7/50 — tr=0.4701 va=1.0512 acc=0.983
-2026-04-27 01:29:23,798 INFO Regime epoch  8/50 — tr=0.4700 va=1.0491 acc=0.984
-2026-04-27 01:29:23,867 INFO Regime epoch  9/50 — tr=0.4699 va=1.0462 acc=0.984
-2026-04-27 01:29:23,941 INFO Regime epoch 10/50 — tr=0.4695 va=1.0451 acc=0.984 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.912}
-2026-04-27 01:29:24,013 INFO Regime epoch 11/50 — tr=0.4697 va=1.0395 acc=0.985
-2026-04-27 01:29:24,087 INFO Regime epoch 12/50 — tr=0.4692 va=1.0395 acc=0.985
-2026-04-27 01:29:24,158 INFO Regime epoch 13/50 — tr=0.4689 va=1.0397 acc=0.985
-2026-04-27 01:29:24,228 INFO Regime epoch 14/50 — tr=0.4685 va=1.0354 acc=0.985
-2026-04-27 01:29:24,304 INFO Regime epoch 15/50 — tr=0.4685 va=1.0333 acc=0.985 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.918}
-2026-04-27 01:29:24,374 INFO Regime epoch 16/50 — tr=0.4683 va=1.0319 acc=0.986
-2026-04-27 01:29:24,445 INFO Regime epoch 17/50 — tr=0.4678 va=1.0324 acc=0.985
-2026-04-27 01:29:24,514 INFO Regime epoch 18/50 — tr=0.4678 va=1.0315 acc=0.985
-2026-04-27 01:29:24,588 INFO Regime epoch 19/50 — tr=0.4675 va=1.0301 acc=0.985
-2026-04-27 01:29:24,669 INFO Regime epoch 20/50 — tr=0.4673 va=1.0267 acc=0.986 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.92}
-2026-04-27 01:29:24,746 INFO Regime epoch 21/50 — tr=0.4674 va=1.0265 acc=0.986
-2026-04-27 01:29:24,820 INFO Regime epoch 22/50 — tr=0.4673 va=1.0252 acc=0.986
-2026-04-27 01:29:24,889 INFO Regime epoch 23/50 — tr=0.4671 va=1.0240 acc=0.986
-2026-04-27 01:29:24,961 INFO Regime epoch 24/50 — tr=0.4667 va=1.0231 acc=0.986
-2026-04-27 01:29:25,042 INFO Regime epoch 25/50 — tr=0.4663 va=1.0215 acc=0.986 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.925}
-2026-04-27 01:29:25,113 INFO Regime epoch 26/50 — tr=0.4661 va=1.0209 acc=0.986
-2026-04-27 01:29:25,182 INFO Regime epoch 27/50 — tr=0.4664 va=1.0210 acc=0.986
-2026-04-27 01:29:25,251 INFO Regime epoch 28/50 — tr=0.4660 va=1.0218 acc=0.987
-2026-04-27 01:29:25,322 INFO Regime epoch 29/50 — tr=0.4658 va=1.0179 acc=0.987
-2026-04-27 01:29:25,398 INFO Regime epoch 30/50 — tr=0.4659 va=1.0178 acc=0.987 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.926}
-2026-04-27 01:29:25,473 INFO Regime epoch 31/50 — tr=0.4660 va=1.0180 acc=0.987
-2026-04-27 01:29:25,546 INFO Regime epoch 32/50 — tr=0.4659 va=1.0156 acc=0.987
-2026-04-27 01:29:25,620 INFO Regime epoch 33/50 — tr=0.4657 va=1.0161 acc=0.987
-2026-04-27 01:29:25,694 INFO Regime epoch 34/50 — tr=0.4654 va=1.0157 acc=0.987
-2026-04-27 01:29:25,769 INFO Regime epoch 35/50 — tr=0.4655 va=1.0125 acc=0.987 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.929}
-2026-04-27 01:29:25,840 INFO Regime epoch 36/50 — tr=0.4655 va=1.0129 acc=0.988
-2026-04-27 01:29:25,913 INFO Regime epoch 37/50 — tr=0.4655 va=1.0111 acc=0.987
-2026-04-27 01:29:25,986 INFO Regime epoch 38/50 — tr=0.4655 va=1.0127 acc=0.987
-2026-04-27 01:29:26,054 INFO Regime epoch 39/50 — tr=0.4655 va=1.0106 acc=0.988
-2026-04-27 01:29:26,127 INFO Regime epoch 40/50 — tr=0.4652 va=1.0119 acc=0.987 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.929}
-2026-04-27 01:29:26,194 INFO Regime epoch 41/50 — tr=0.4654 va=1.0148 acc=0.987
-2026-04-27 01:29:26,268 INFO Regime epoch 42/50 — tr=0.4655 va=1.0122 acc=0.988
-2026-04-27 01:29:26,334 INFO Regime epoch 43/50 — tr=0.4654 va=1.0134 acc=0.987
-2026-04-27 01:29:26,400 INFO Regime epoch 44/50 — tr=0.4654 va=1.0137 acc=0.987
-2026-04-27 01:29:26,472 INFO Regime epoch 45/50 — tr=0.4653 va=1.0138 acc=0.988 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.931}
-2026-04-27 01:29:26,540 INFO Regime epoch 46/50 — tr=0.4655 va=1.0129 acc=0.987
-2026-04-27 01:29:26,605 INFO Regime epoch 47/50 — tr=0.4652 va=1.0118 acc=0.987
-2026-04-27 01:29:26,671 INFO Regime epoch 48/50 — tr=0.4650 va=1.0128 acc=0.987
-2026-04-27 01:29:26,740 INFO Regime epoch 49/50 — tr=0.4652 va=1.0120 acc=0.988
-2026-04-27 01:29:26,740 INFO Regime early stop at epoch 49 (no_improve=10)
-2026-04-27 01:29:26,751 INFO RegimeClassifier[mode=htf_bias] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
-2026-04-27 01:29:26,751 INFO RegimeClassifier[4H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
-2026-04-27 01:29:26,752 INFO Regime phase HTF train: 8.2s
-2026-04-27 01:29:26,882 INFO Regime HTF complete: acc=0.988, n=103290 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.931}
-2026-04-27 01:29:26,884 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:29:27,049 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
-2026-04-27 01:29:27,056 INFO Regime[4H mode=htf_bias] persistence (avg bars/run) on XAUUSD 4H:
+2026-04-27 05:34:05,587 INFO === STEP 7a: GRU + REGIME TRAINING ===
+2026-04-27 05:34:05,587 INFO --- Training regime ---
+2026-04-27 05:34:05,587 INFO Running retrain --model regime
+2026-04-27 05:34:05,780 INFO retrain environment: KAGGLE
+2026-04-27 05:34:07,381 INFO Device: CUDA (2 GPU(s))
+2026-04-27 05:34:07,392 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:34:07,392 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:34:07,392 INFO cuDNN benchmark=True, TF32 matmul=True
+2026-04-27 05:34:07,394 INFO PyTorch CPU threads: 4 intra / 2 interop
+2026-04-27 05:34:07,394 INFO Retrain data split: train
+2026-04-27 05:34:07,395 INFO === RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===
+2026-04-27 05:34:07,567 INFO NumExpr defaulting to 4 threads.
+2026-04-27 05:34:07,780 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
+2026-04-27 05:34:07,780 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:34:07,780 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:34:07,780 INFO Regime phase macro_correlations: 0.0s
+2026-04-27 05:34:07,780 INFO Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...
+2026-04-27 05:34:07,817 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
+2026-04-27 05:34:07,818 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,843 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,857 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,879 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,892 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,915 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,928 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,950 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,964 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,986 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:07,999 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,019 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,032 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,049 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,062 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,082 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,095 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,116 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,130 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,151 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:34:08,168 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:34:08,205 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:34:09,349 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
+2026-04-27 05:34:31,945 INFO GMM fitted on 58459 samples (mode=htf_bias) — cluster→regime: {2: 0, 0: 1, 1: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
+2026-04-27 05:34:31,946 INFO Regime HTF GMM 'dollar' fitted on 7 4H dfs (3-class bias) in 23.7s
+2026-04-27 05:34:31,946 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
+2026-04-27 05:34:41,785 INFO GMM fitted on 25054 samples (mode=htf_bias) — cluster→regime: {1: 0, 0: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
+2026-04-27 05:34:41,786 INFO Regime HTF GMM 'cross' fitted on 3 4H dfs (3-class bias) in 9.8s
+2026-04-27 05:34:41,786 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
+2026-04-27 05:34:49,372 INFO GMM fitted on 19766 samples (mode=htf_bias) — cluster→regime: {0: 0, 1: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
+2026-04-27 05:34:49,376 INFO Regime HTF GMM 'gold' fitted on 1 4H dfs (3-class bias) in 7.6s
+2026-04-27 05:34:49,376 INFO Regime phase GMM HTF total: 41.2s
+2026-04-27 05:34:49,376 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
+2026-04-27 05:35:58,446 INFO GMM fitted on 76337 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 3: 0, 0: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
+2026-04-27 05:35:58,449 INFO Regime LTF GMM 'dollar' fitted on 7 1H dfs (4-class behaviour) in 69.1s
+2026-04-27 05:35:58,452 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
+2026-04-27 05:36:28,559 INFO GMM fitted on 32715 samples (mode=ltf_behaviour) — cluster→regime: {0: 3, 3: 0, 2: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
+2026-04-27 05:36:28,566 INFO Regime LTF GMM 'cross' fitted on 3 1H dfs (4-class behaviour) in 30.1s
+2026-04-27 05:36:28,566 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
+2026-04-27 05:36:50,169 INFO GMM fitted on 10657 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 1: 0, 0: 2, 3: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
+2026-04-27 05:36:50,169 INFO Regime LTF GMM 'gold' fitted on 1 1H dfs (4-class behaviour) in 21.6s
+2026-04-27 05:36:50,169 INFO Regime phase GMM LTF total: 120.8s
+2026-04-27 05:36:50,268 INFO Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...
+2026-04-27 05:36:50,270 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,271 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,272 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,273 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,274 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,275 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,276 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,277 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,278 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,279 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,281 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:36:50,404 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:50,443 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:50,443 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:50,444 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:50,451 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:50,452 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:50,865 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
+2026-04-27 05:36:50,866 INFO Regime[4H mode=htf_bias]: collected AUDUSD — 8352 samples (group=dollar)
+2026-04-27 05:36:51,047 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,081 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,081 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,082 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,089 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,090 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:51,462 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
+2026-04-27 05:36:51,464 INFO Regime[4H mode=htf_bias]: collected EURGBP — 8352 samples (group=cross)
+2026-04-27 05:36:51,649 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,684 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,684 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,685 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,693 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:51,694 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:52,056 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
+2026-04-27 05:36:52,057 INFO Regime[4H mode=htf_bias]: collected EURJPY — 8352 samples (group=cross)
+2026-04-27 05:36:52,235 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,272 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,273 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,273 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,281 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,282 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:52,647 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
+2026-04-27 05:36:52,648 INFO Regime[4H mode=htf_bias]: collected EURUSD — 8352 samples (group=dollar)
+2026-04-27 05:36:52,833 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,869 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,870 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,870 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,878 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:52,879 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:53,245 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
+2026-04-27 05:36:53,246 INFO Regime[4H mode=htf_bias]: collected GBPJPY — 8353 samples (group=cross)
+2026-04-27 05:36:53,414 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:53,447 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:53,448 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:53,448 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:53,456 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:53,457 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:53,837 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
+2026-04-27 05:36:53,838 INFO Regime[4H mode=htf_bias]: collected GBPUSD — 8353 samples (group=dollar)
+2026-04-27 05:36:53,990 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:36:54,017 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:36:54,017 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:36:54,018 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:36:54,024 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:36:54,025 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:54,409 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
+2026-04-27 05:36:54,410 INFO Regime[4H mode=htf_bias]: collected NZDUSD — 8352 samples (group=dollar)
+2026-04-27 05:36:54,580 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:54,611 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:54,612 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:54,613 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:54,621 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:54,622 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:54,986 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
+2026-04-27 05:36:54,988 INFO Regime[4H mode=htf_bias]: collected USDCAD — 8352 samples (group=dollar)
+2026-04-27 05:36:55,150 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,182 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,183 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,183 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,192 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,193 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:55,560 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
+2026-04-27 05:36:55,561 INFO Regime[4H mode=htf_bias]: collected USDCHF — 8352 samples (group=dollar)
+2026-04-27 05:36:55,727 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,772 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,773 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,773 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,782 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:36:55,783 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:36:56,171 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
+2026-04-27 05:36:56,172 INFO Regime[4H mode=htf_bias]: collected USDJPY — 8353 samples (group=dollar)
+2026-04-27 05:36:56,444 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:36:56,503 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:36:56,504 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:36:56,504 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:36:56,514 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:36:56,516 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:36:57,315 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
+2026-04-27 05:36:57,317 INFO Regime[4H mode=htf_bias]: collected XAUUSD — 19767 samples (group=gold)
+2026-04-27 05:36:57,471 INFO Regime phase HTF dataset build: 7.2s (103290 samples)
+2026-04-27 05:36:57,472 INFO RegimeClassifier[mode=htf_bias]: dropped ambiguous labels below 0.40 (kept=38114 dropped=65176 classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728})
+2026-04-27 05:36:57,481 INFO RegimeClassifier[mode=htf_bias]: 38114 samples, classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728}, device=cuda
+2026-04-27 05:36:57,482 INFO RegimeClassifier: sample weights — mean=0.708  ambiguous(<0.4)=0.0%
+2026-04-27 05:36:57,772 INFO RegimeClassifier[mode=htf_bias]: cold start (no existing weights)
+2026-04-27 05:36:57,773 INFO RegimeClassifier: DataParallel across 2 GPUs
+2026-04-27 05:37:02,515 INFO Regime epoch  1/50 — tr=0.7517 va=2.1440 acc=0.342 per_class={'BIAS_UP': 0.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.006}
+2026-04-27 05:37:02,582 INFO Regime epoch  2/50 — tr=0.7455 va=2.0768 acc=0.351
+2026-04-27 05:37:02,647 INFO Regime epoch  3/50 — tr=0.7380 va=2.0580 acc=0.356
+2026-04-27 05:37:02,713 INFO Regime epoch  4/50 — tr=0.7224 va=2.0250 acc=0.375
+2026-04-27 05:37:02,784 INFO Regime epoch  5/50 — tr=0.6995 va=1.9680 acc=0.400 per_class={'BIAS_UP': 0.009, 'BIAS_DOWN': 0.941, 'BIAS_NEUTRAL': 0.414}
+2026-04-27 05:37:02,849 INFO Regime epoch  6/50 — tr=0.6708 va=1.8907 acc=0.442
+2026-04-27 05:37:02,919 INFO Regime epoch  7/50 — tr=0.6449 va=1.8019 acc=0.566
+2026-04-27 05:37:02,989 INFO Regime epoch  8/50 — tr=0.6159 va=1.7116 acc=0.678
+2026-04-27 05:37:03,064 INFO Regime epoch  9/50 — tr=0.5924 va=1.6206 acc=0.777
+2026-04-27 05:37:03,137 INFO Regime epoch 10/50 — tr=0.5715 va=1.5527 acc=0.845 per_class={'BIAS_UP': 0.826, 'BIAS_DOWN': 0.974, 'BIAS_NEUTRAL': 0.649}
+2026-04-27 05:37:03,202 INFO Regime epoch 11/50 — tr=0.5555 va=1.5006 acc=0.885
+2026-04-27 05:37:03,269 INFO Regime epoch 12/50 — tr=0.5430 va=1.4502 acc=0.905
+2026-04-27 05:37:03,335 INFO Regime epoch 13/50 — tr=0.5327 va=1.4075 acc=0.919
+2026-04-27 05:37:03,401 INFO Regime epoch 14/50 — tr=0.5254 va=1.3718 acc=0.928
+2026-04-27 05:37:03,473 INFO Regime epoch 15/50 — tr=0.5195 va=1.3431 acc=0.932 per_class={'BIAS_UP': 0.98, 'BIAS_DOWN': 0.99, 'BIAS_NEUTRAL': 0.694}
+2026-04-27 05:37:03,539 INFO Regime epoch 16/50 — tr=0.5134 va=1.3210 acc=0.935
+2026-04-27 05:37:03,604 INFO Regime epoch 17/50 — tr=0.5100 va=1.2979 acc=0.938
+2026-04-27 05:37:03,670 INFO Regime epoch 18/50 — tr=0.5070 va=1.2832 acc=0.941
+2026-04-27 05:37:03,736 INFO Regime epoch 19/50 — tr=0.5045 va=1.2680 acc=0.943
+2026-04-27 05:37:03,806 INFO Regime epoch 20/50 — tr=0.5018 va=1.2576 acc=0.945 per_class={'BIAS_UP': 0.99, 'BIAS_DOWN': 0.995, 'BIAS_NEUTRAL': 0.73}
+2026-04-27 05:37:03,871 INFO Regime epoch 21/50 — tr=0.4996 va=1.2437 acc=0.948
+2026-04-27 05:37:03,936 INFO Regime epoch 22/50 — tr=0.4986 va=1.2292 acc=0.952
+2026-04-27 05:37:04,002 INFO Regime epoch 23/50 — tr=0.4960 va=1.2235 acc=0.953
+2026-04-27 05:37:04,067 INFO Regime epoch 24/50 — tr=0.4950 va=1.2141 acc=0.955
+2026-04-27 05:37:04,139 INFO Regime epoch 25/50 — tr=0.4936 va=1.2093 acc=0.956 per_class={'BIAS_UP': 0.996, 'BIAS_DOWN': 0.995, 'BIAS_NEUTRAL': 0.774}
+2026-04-27 05:37:04,204 INFO Regime epoch 26/50 — tr=0.4919 va=1.2031 acc=0.958
+2026-04-27 05:37:04,270 INFO Regime epoch 27/50 — tr=0.4913 va=1.2001 acc=0.958
+2026-04-27 05:37:04,335 INFO Regime epoch 28/50 — tr=0.4909 va=1.1923 acc=0.960
+2026-04-27 05:37:04,401 INFO Regime epoch 29/50 — tr=0.4898 va=1.1854 acc=0.962
+2026-04-27 05:37:04,470 INFO Regime epoch 30/50 — tr=0.4886 va=1.1793 acc=0.963 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.997, 'BIAS_NEUTRAL': 0.808}
+2026-04-27 05:37:04,535 INFO Regime epoch 31/50 — tr=0.4885 va=1.1770 acc=0.964
+2026-04-27 05:37:04,600 INFO Regime epoch 32/50 — tr=0.4875 va=1.1775 acc=0.964
+2026-04-27 05:37:04,666 INFO Regime epoch 33/50 — tr=0.4874 va=1.1767 acc=0.964
+2026-04-27 05:37:04,733 INFO Regime epoch 34/50 — tr=0.4867 va=1.1724 acc=0.965
+2026-04-27 05:37:04,804 INFO Regime epoch 35/50 — tr=0.4857 va=1.1695 acc=0.965 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.998, 'BIAS_NEUTRAL': 0.816}
+2026-04-27 05:37:04,870 INFO Regime epoch 36/50 — tr=0.4854 va=1.1671 acc=0.966
+2026-04-27 05:37:04,936 INFO Regime epoch 37/50 — tr=0.4857 va=1.1638 acc=0.967
+2026-04-27 05:37:05,001 INFO Regime epoch 38/50 — tr=0.4848 va=1.1626 acc=0.967
+2026-04-27 05:37:05,066 INFO Regime epoch 39/50 — tr=0.4842 va=1.1606 acc=0.967
+2026-04-27 05:37:05,137 INFO Regime epoch 40/50 — tr=0.4846 va=1.1598 acc=0.968 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.826}
+2026-04-27 05:37:05,203 INFO Regime epoch 41/50 — tr=0.4846 va=1.1587 acc=0.968
+2026-04-27 05:37:05,275 INFO Regime epoch 42/50 — tr=0.4837 va=1.1569 acc=0.968
+2026-04-27 05:37:05,340 INFO Regime epoch 43/50 — tr=0.4846 va=1.1564 acc=0.968
+2026-04-27 05:37:05,407 INFO Regime epoch 44/50 — tr=0.4841 va=1.1568 acc=0.968
+2026-04-27 05:37:05,484 INFO Regime epoch 45/50 — tr=0.4838 va=1.1588 acc=0.968 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.826}
+2026-04-27 05:37:05,549 INFO Regime epoch 46/50 — tr=0.4836 va=1.1568 acc=0.968
+2026-04-27 05:37:05,615 INFO Regime epoch 47/50 — tr=0.4839 va=1.1598 acc=0.968
+2026-04-27 05:37:05,679 INFO Regime epoch 48/50 — tr=0.4836 va=1.1584 acc=0.968
+2026-04-27 05:37:05,753 INFO Regime epoch 49/50 — tr=0.4832 va=1.1576 acc=0.968
+2026-04-27 05:37:05,843 INFO Regime epoch 50/50 — tr=0.4839 va=1.1550 acc=0.968 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.829}
+2026-04-27 05:37:05,853 INFO RegimeClassifier[mode=htf_bias] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
+2026-04-27 05:37:05,853 INFO RegimeClassifier[4H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
+2026-04-27 05:37:05,854 INFO Regime phase HTF train: 8.4s
+2026-04-27 05:37:05,978 INFO Regime HTF complete: acc=0.968, n=103290 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.829}
+2026-04-27 05:37:05,980 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:06,129 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
+2026-04-27 05:37:06,141 INFO Regime[4H mode=htf_bias] persistence (avg bars/run) on XAUUSD 4H:
 {'BIAS_UP': 11.41578947368421, 'BIAS_DOWN': 10.635761589403973, 'BIAS_NEUTRAL': 17.960468521229867}
-2026-04-27 01:29:27,060 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (all labels):
+2026-04-27 05:37:06,145 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (all labels):
 {'BIAS_UP': {'n': 4338, 'mean': 0.00011110466582543088, 'mean_over_std': 0.027632581210502927}, 'BIAS_DOWN': {'n': 3212, 'mean': 6.063430222660252e-05, 'mean_over_std': 0.013898489590377157}, 'BIAS_NEUTRAL': {'n': 12266, 'mean': 1.2151554902814046e-05, 'mean_over_std': 0.0031957000513162357}}
-2026-04-27 01:29:27,061 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (clean labels conf>=0.40):
+2026-04-27 05:37:06,146 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (clean labels conf>=0.40):
 {'BIAS_UP': {'n': 3651, 'mean': 0.0002852242108836959, 'mean_over_std': 0.07015017232491755}, 'BIAS_DOWN': {'n': 2644, 'mean': -0.00014900749618981248, 'mean_over_std': -0.03333037041298237}, 'BIAS_NEUTRAL': {'n': 1376, 'mean': 9.595797941249082e-05, 'mean_over_std': 0.02492411099521803}}
-2026-04-27 01:29:27,061 INFO Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...
-2026-04-27 01:29:27,063 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,065 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,066 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,068 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,069 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,071 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,072 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,074 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,076 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,077 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,080 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:29:27,092 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,096 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,097 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,097 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,097 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,100 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:27,767 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
-2026-04-27 01:29:27,770 INFO Regime[1H mode=ltf_behaviour]: collected AUDUSD — 32688 samples (group=dollar)
-2026-04-27 01:29:27,910 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,912 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,913 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,913 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,914 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:27,916 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:28,523 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
-2026-04-27 01:29:28,526 INFO Regime[1H mode=ltf_behaviour]: collected EURGBP — 32688 samples (group=cross)
-2026-04-27 01:29:28,667 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:28,669 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:28,670 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:28,671 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:28,671 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:28,673 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:29,344 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
-2026-04-27 01:29:29,347 INFO Regime[1H mode=ltf_behaviour]: collected EURJPY — 32690 samples (group=cross)
-2026-04-27 01:29:29,493 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:29,495 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:29,496 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:29,497 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:29,497 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:29,499 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:30,123 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
-2026-04-27 01:29:30,127 INFO Regime[1H mode=ltf_behaviour]: collected EURUSD — 32689 samples (group=dollar)
-2026-04-27 01:29:30,261 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:30,264 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:30,264 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:30,265 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:30,265 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:30,267 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:30,874 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
-2026-04-27 01:29:30,877 INFO Regime[1H mode=ltf_behaviour]: collected GBPJPY — 32690 samples (group=cross)
-2026-04-27 01:29:31,019 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:31,022 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:31,023 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:31,023 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:31,023 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:31,026 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:31,647 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
-2026-04-27 01:29:31,650 INFO Regime[1H mode=ltf_behaviour]: collected GBPUSD — 32689 samples (group=dollar)
-2026-04-27 01:29:31,795 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:31,797 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:31,798 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:31,798 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:31,798 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:29:31,800 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:32,425 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
-2026-04-27 01:29:32,428 INFO Regime[1H mode=ltf_behaviour]: collected NZDUSD — 32689 samples (group=dollar)
-2026-04-27 01:29:32,569 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:32,571 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:32,572 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:32,572 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:32,573 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:32,574 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:33,186 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
-2026-04-27 01:29:33,189 INFO Regime[1H mode=ltf_behaviour]: collected USDCAD — 32690 samples (group=dollar)
-2026-04-27 01:29:33,332 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:33,335 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:33,335 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:33,336 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:33,336 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:33,338 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:33,952 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
-2026-04-27 01:29:33,955 INFO Regime[1H mode=ltf_behaviour]: collected USDCHF — 32691 samples (group=dollar)
-2026-04-27 01:29:34,103 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:34,105 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:34,106 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:34,106 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:34,107 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:29:34,109 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:29:34,725 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
-2026-04-27 01:29:34,728 INFO Regime[1H mode=ltf_behaviour]: collected USDJPY — 32693 samples (group=dollar)
-2026-04-27 01:29:34,879 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:34,883 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:34,884 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:34,885 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:34,885 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:29:34,889 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:29:36,216 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
-2026-04-27 01:29:36,222 INFO Regime[1H mode=ltf_behaviour]: collected XAUUSD — 74574 samples (group=gold)
-2026-04-27 01:29:36,534 INFO Regime phase LTF dataset build: 9.5s (401471 samples)
-2026-04-27 01:29:36,535 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/regime_ltf.pkl_20260427_012936
-2026-04-27 01:29:36,540 INFO RegimeClassifier[mode=ltf_behaviour] loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl (device=cuda, features=18, n_classes=4)
-2026-04-27 01:29:36,543 INFO RegimeClassifier[mode=ltf_behaviour]: dropped ambiguous labels below 0.40 (kept=299185 dropped=102286 classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127})
-2026-04-27 01:29:36,610 INFO RegimeClassifier[mode=ltf_behaviour]: 299185 samples, classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127}, device=cuda
-2026-04-27 01:29:36,611 INFO RegimeClassifier: sample weights — mean=0.693  ambiguous(<0.4)=0.0%
-2026-04-27 01:29:36,611 INFO RegimeClassifier[mode=ltf_behaviour]: warm start from existing weights
-2026-04-27 01:29:36,611 INFO RegimeClassifier: DataParallel across 2 GPUs
-2026-04-27 01:29:37,201 INFO Regime epoch  1/50 — tr=0.6198 va=1.2245 acc=0.835 per_class={'TRENDING': 0.811, 'RANGING': 0.77, 'CONSOLIDATING': 0.867, 'VOLATILE': 0.897}
-2026-04-27 01:29:37,709 INFO Regime epoch  2/50 — tr=0.6199 va=1.2264 acc=0.836
-2026-04-27 01:29:38,229 INFO Regime epoch  3/50 — tr=0.6197 va=1.2269 acc=0.837
-2026-04-27 01:29:38,750 INFO Regime epoch  4/50 — tr=0.6198 va=1.2245 acc=0.837
-2026-04-27 01:29:39,329 INFO Regime epoch  5/50 — tr=0.6198 va=1.2280 acc=0.836 per_class={'TRENDING': 0.815, 'RANGING': 0.77, 'CONSOLIDATING': 0.867, 'VOLATILE': 0.896}
-2026-04-27 01:29:39,862 INFO Regime epoch  6/50 — tr=0.6194 va=1.2235 acc=0.835
-2026-04-27 01:29:40,378 INFO Regime epoch  7/50 — tr=0.6194 va=1.2271 acc=0.838
-2026-04-27 01:29:40,891 INFO Regime epoch  8/50 — tr=0.6195 va=1.2237 acc=0.839
-2026-04-27 01:29:41,398 INFO Regime epoch  9/50 — tr=0.6195 va=1.2246 acc=0.839
-2026-04-27 01:29:41,976 INFO Regime epoch 10/50 — tr=0.6189 va=1.2248 acc=0.838 per_class={'TRENDING': 0.819, 'RANGING': 0.77, 'CONSOLIDATING': 0.864, 'VOLATILE': 0.898}
-2026-04-27 01:29:42,480 INFO Regime epoch 11/50 — tr=0.6190 va=1.2243 acc=0.839
-2026-04-27 01:29:42,996 INFO Regime epoch 12/50 — tr=0.6186 va=1.2213 acc=0.839
-2026-04-27 01:29:43,516 INFO Regime epoch 13/50 — tr=0.6185 va=1.2247 acc=0.837
-2026-04-27 01:29:44,036 INFO Regime epoch 14/50 — tr=0.6184 va=1.2230 acc=0.839
-2026-04-27 01:29:44,591 INFO Regime epoch 15/50 — tr=0.6184 va=1.2202 acc=0.840 per_class={'TRENDING': 0.824, 'RANGING': 0.772, 'CONSOLIDATING': 0.869, 'VOLATILE': 0.893}
-2026-04-27 01:29:45,123 INFO Regime epoch 16/50 — tr=0.6182 va=1.2160 acc=0.837
-2026-04-27 01:29:45,654 INFO Regime epoch 17/50 — tr=0.6183 va=1.2220 acc=0.840
-2026-04-27 01:29:46,194 INFO Regime epoch 18/50 — tr=0.6179 va=1.2205 acc=0.840
-2026-04-27 01:29:46,740 INFO Regime epoch 19/50 — tr=0.6182 va=1.2183 acc=0.839
-2026-04-27 01:29:47,284 INFO Regime epoch 20/50 — tr=0.6180 va=1.2186 acc=0.841 per_class={'TRENDING': 0.826, 'RANGING': 0.767, 'CONSOLIDATING': 0.875, 'VOLATILE': 0.89}
-2026-04-27 01:29:47,818 INFO Regime epoch 21/50 — tr=0.6180 va=1.2191 acc=0.837
-2026-04-27 01:29:48,352 INFO Regime epoch 22/50 — tr=0.6176 va=1.2155 acc=0.840
-2026-04-27 01:29:48,873 INFO Regime epoch 23/50 — tr=0.6177 va=1.2157 acc=0.839
-2026-04-27 01:29:49,427 INFO Regime epoch 24/50 — tr=0.6173 va=1.2165 acc=0.839
-2026-04-27 01:29:49,997 INFO Regime epoch 25/50 — tr=0.6175 va=1.2193 acc=0.840 per_class={'TRENDING': 0.825, 'RANGING': 0.769, 'CONSOLIDATING': 0.871, 'VOLATILE': 0.892}
-2026-04-27 01:29:50,541 INFO Regime epoch 26/50 — tr=0.6177 va=1.2164 acc=0.840
-2026-04-27 01:29:51,054 INFO Regime epoch 27/50 — tr=0.6171 va=1.2184 acc=0.840
-2026-04-27 01:29:51,568 INFO Regime epoch 28/50 — tr=0.6172 va=1.2171 acc=0.840
-2026-04-27 01:29:52,082 INFO Regime epoch 29/50 — tr=0.6171 va=1.2165 acc=0.840
-2026-04-27 01:29:52,650 INFO Regime epoch 30/50 — tr=0.6170 va=1.2158 acc=0.840 per_class={'TRENDING': 0.824, 'RANGING': 0.772, 'CONSOLIDATING': 0.868, 'VOLATILE': 0.894}
-2026-04-27 01:29:53,147 INFO Regime epoch 31/50 — tr=0.6170 va=1.2167 acc=0.842
-2026-04-27 01:29:53,672 INFO Regime epoch 32/50 — tr=0.6168 va=1.2151 acc=0.841
-2026-04-27 01:29:54,178 INFO Regime epoch 33/50 — tr=0.6170 va=1.2144 acc=0.841
-2026-04-27 01:29:54,702 INFO Regime epoch 34/50 — tr=0.6165 va=1.2156 acc=0.840
-2026-04-27 01:29:55,287 INFO Regime epoch 35/50 — tr=0.6168 va=1.2174 acc=0.840 per_class={'TRENDING': 0.823, 'RANGING': 0.775, 'CONSOLIDATING': 0.862, 'VOLATILE': 0.897}
-2026-04-27 01:29:55,812 INFO Regime epoch 36/50 — tr=0.6170 va=1.2103 acc=0.839
-2026-04-27 01:29:56,328 INFO Regime epoch 37/50 — tr=0.6166 va=1.2155 acc=0.841
-2026-04-27 01:29:56,845 INFO Regime epoch 38/50 — tr=0.6168 va=1.2124 acc=0.841
-2026-04-27 01:29:57,349 INFO Regime epoch 39/50 — tr=0.6168 va=1.2166 acc=0.842
-2026-04-27 01:29:57,890 INFO Regime epoch 40/50 — tr=0.6165 va=1.2139 acc=0.840 per_class={'TRENDING': 0.825, 'RANGING': 0.774, 'CONSOLIDATING': 0.869, 'VOLATILE': 0.889}
-2026-04-27 01:29:58,391 INFO Regime epoch 41/50 — tr=0.6167 va=1.2155 acc=0.840
-2026-04-27 01:29:58,929 INFO Regime epoch 42/50 — tr=0.6166 va=1.2155 acc=0.842
-2026-04-27 01:29:59,521 INFO Regime epoch 43/50 — tr=0.6167 va=1.2131 acc=0.839
-2026-04-27 01:30:00,025 INFO Regime epoch 44/50 — tr=0.6166 va=1.2144 acc=0.840
-2026-04-27 01:30:00,598 INFO Regime epoch 45/50 — tr=0.6166 va=1.2186 acc=0.838 per_class={'TRENDING': 0.817, 'RANGING': 0.777, 'CONSOLIDATING': 0.851, 'VOLATILE': 0.906}
-2026-04-27 01:30:01,133 INFO Regime epoch 46/50 — tr=0.6166 va=1.2168 acc=0.841
-2026-04-27 01:30:01,133 INFO Regime early stop at epoch 46 (no_improve=10)
-2026-04-27 01:30:01,175 INFO RegimeClassifier[mode=ltf_behaviour] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
-2026-04-27 01:30:01,175 INFO RegimeClassifier[1H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
-2026-04-27 01:30:01,178 INFO Regime phase LTF train: 24.6s
-2026-04-27 01:30:01,318 INFO Regime LTF complete: acc=0.839, n=401471 per_class={'TRENDING': 0.82, 'RANGING': 0.778, 'CONSOLIDATING': 0.863, 'VOLATILE': 0.895}
-2026-04-27 01:30:01,321 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:01,852 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
-2026-04-27 01:30:01,858 INFO Regime[1H mode=ltf_behaviour] persistence (avg bars/run) on XAUUSD 1H:
+2026-04-27 05:37:06,146 INFO Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...
+2026-04-27 05:37:06,148 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,149 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,151 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,152 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,154 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,156 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,157 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,158 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,160 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,161 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,164 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:06,174 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,178 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,178 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,179 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,179 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,182 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:06,782 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
+2026-04-27 05:37:06,785 INFO Regime[1H mode=ltf_behaviour]: collected AUDUSD — 32688 samples (group=dollar)
+2026-04-27 05:37:06,915 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,917 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,918 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,919 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,919 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:06,921 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:07,499 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
+2026-04-27 05:37:07,501 INFO Regime[1H mode=ltf_behaviour]: collected EURGBP — 32688 samples (group=cross)
+2026-04-27 05:37:07,637 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:07,639 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:07,640 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:07,641 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:07,641 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:07,643 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:08,244 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
+2026-04-27 05:37:08,247 INFO Regime[1H mode=ltf_behaviour]: collected EURJPY — 32690 samples (group=cross)
+2026-04-27 05:37:08,379 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:08,381 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:08,382 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:08,382 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:08,383 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:08,385 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:08,961 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
+2026-04-27 05:37:08,964 INFO Regime[1H mode=ltf_behaviour]: collected EURUSD — 32689 samples (group=dollar)
+2026-04-27 05:37:09,097 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,099 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,100 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,100 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,101 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,103 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:09,681 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
+2026-04-27 05:37:09,684 INFO Regime[1H mode=ltf_behaviour]: collected GBPJPY — 32690 samples (group=cross)
+2026-04-27 05:37:09,820 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,822 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,823 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,823 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,824 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:09,826 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:10,414 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
+2026-04-27 05:37:10,417 INFO Regime[1H mode=ltf_behaviour]: collected GBPUSD — 32689 samples (group=dollar)
+2026-04-27 05:37:10,547 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:10,549 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:10,550 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:10,550 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:10,550 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:10,552 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:11,138 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
+2026-04-27 05:37:11,141 INFO Regime[1H mode=ltf_behaviour]: collected NZDUSD — 32689 samples (group=dollar)
+2026-04-27 05:37:11,276 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,278 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,279 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,280 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,280 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,282 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:11,861 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
+2026-04-27 05:37:11,863 INFO Regime[1H mode=ltf_behaviour]: collected USDCAD — 32690 samples (group=dollar)
+2026-04-27 05:37:11,994 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,996 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,997 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,998 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:11,998 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:12,000 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:12,578 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
+2026-04-27 05:37:12,581 INFO Regime[1H mode=ltf_behaviour]: collected USDCHF — 32691 samples (group=dollar)
+2026-04-27 05:37:12,714 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:12,716 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:12,717 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:12,717 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:12,717 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:12,720 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:13,287 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
+2026-04-27 05:37:13,289 INFO Regime[1H mode=ltf_behaviour]: collected USDJPY — 32693 samples (group=dollar)
+2026-04-27 05:37:13,438 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:13,442 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:13,443 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:13,443 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:13,444 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:13,447 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:14,700 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
+2026-04-27 05:37:14,705 INFO Regime[1H mode=ltf_behaviour]: collected XAUUSD — 74574 samples (group=gold)
+2026-04-27 05:37:14,998 INFO Regime phase LTF dataset build: 8.9s (401471 samples)
+2026-04-27 05:37:15,001 INFO RegimeClassifier[mode=ltf_behaviour]: dropped ambiguous labels below 0.40 (kept=299185 dropped=102286 classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127})
+2026-04-27 05:37:15,059 INFO RegimeClassifier[mode=ltf_behaviour]: 299185 samples, classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127}, device=cuda
+2026-04-27 05:37:15,060 INFO RegimeClassifier: sample weights — mean=0.693  ambiguous(<0.4)=0.0%
+2026-04-27 05:37:15,062 INFO RegimeClassifier[mode=ltf_behaviour]: cold start (no existing weights)
+2026-04-27 05:37:15,062 INFO RegimeClassifier: DataParallel across 2 GPUs
+2026-04-27 05:37:15,648 INFO Regime epoch  1/50 — tr=0.8965 va=2.1560 acc=0.284 per_class={'TRENDING': 0.11, 'RANGING': 0.121, 'CONSOLIDATING': 0.37, 'VOLATILE': 0.657}
+2026-04-27 05:37:16,158 INFO Regime epoch  2/50 — tr=0.8687 va=2.0615 acc=0.378
+2026-04-27 05:37:16,638 INFO Regime epoch  3/50 — tr=0.8263 va=1.9388 acc=0.471
+2026-04-27 05:37:17,119 INFO Regime epoch  4/50 — tr=0.7767 va=1.7947 acc=0.559
+2026-04-27 05:37:17,648 INFO Regime epoch  5/50 — tr=0.7366 va=1.6661 acc=0.611 per_class={'TRENDING': 0.445, 'RANGING': 0.401, 'CONSOLIDATING': 0.747, 'VOLATILE': 0.964}
+2026-04-27 05:37:18,147 INFO Regime epoch  6/50 — tr=0.7106 va=1.5759 acc=0.639
+2026-04-27 05:37:18,644 INFO Regime epoch  7/50 — tr=0.6941 va=1.5181 acc=0.663
+2026-04-27 05:37:19,139 INFO Regime epoch  8/50 — tr=0.6828 va=1.4854 acc=0.682
+2026-04-27 05:37:19,653 INFO Regime epoch  9/50 — tr=0.6747 va=1.4631 acc=0.698
+2026-04-27 05:37:20,180 INFO Regime epoch 10/50 — tr=0.6678 va=1.4316 acc=0.711 per_class={'TRENDING': 0.587, 'RANGING': 0.659, 'CONSOLIDATING': 0.747, 'VOLATILE': 0.954}
+2026-04-27 05:37:20,691 INFO Regime epoch 11/50 — tr=0.6629 va=1.4135 acc=0.729
+2026-04-27 05:37:21,182 INFO Regime epoch 12/50 — tr=0.6589 va=1.3969 acc=0.737
+2026-04-27 05:37:21,674 INFO Regime epoch 13/50 — tr=0.6549 va=1.3737 acc=0.751
+2026-04-27 05:37:22,171 INFO Regime epoch 14/50 — tr=0.6520 va=1.3635 acc=0.758
+2026-04-27 05:37:22,728 INFO Regime epoch 15/50 — tr=0.6495 va=1.3503 acc=0.767 per_class={'TRENDING': 0.696, 'RANGING': 0.714, 'CONSOLIDATING': 0.764, 'VOLATILE': 0.934}
+2026-04-27 05:37:23,233 INFO Regime epoch 16/50 — tr=0.6470 va=1.3398 acc=0.775
+2026-04-27 05:37:23,719 INFO Regime epoch 17/50 — tr=0.6450 va=1.3235 acc=0.780
+2026-04-27 05:37:24,219 INFO Regime epoch 18/50 — tr=0.6428 va=1.3202 acc=0.787
+2026-04-27 05:37:24,714 INFO Regime epoch 19/50 — tr=0.6413 va=1.3108 acc=0.789
+2026-04-27 05:37:25,249 INFO Regime epoch 20/50 — tr=0.6398 va=1.3010 acc=0.795 per_class={'TRENDING': 0.753, 'RANGING': 0.747, 'CONSOLIDATING': 0.774, 'VOLATILE': 0.919}
+2026-04-27 05:37:25,776 INFO Regime epoch 21/50 — tr=0.6385 va=1.2999 acc=0.797
+2026-04-27 05:37:26,302 INFO Regime epoch 22/50 — tr=0.6374 va=1.2869 acc=0.799
+2026-04-27 05:37:26,805 INFO Regime epoch 23/50 — tr=0.6365 va=1.2824 acc=0.804
+2026-04-27 05:37:27,285 INFO Regime epoch 24/50 — tr=0.6353 va=1.2783 acc=0.804
+2026-04-27 05:37:27,812 INFO Regime epoch 25/50 — tr=0.6343 va=1.2775 acc=0.807 per_class={'TRENDING': 0.769, 'RANGING': 0.748, 'CONSOLIDATING': 0.805, 'VOLATILE': 0.915}
+2026-04-27 05:37:28,309 INFO Regime epoch 26/50 — tr=0.6336 va=1.2738 acc=0.808
+2026-04-27 05:37:28,793 INFO Regime epoch 27/50 — tr=0.6323 va=1.2704 acc=0.812
+2026-04-27 05:37:29,282 INFO Regime epoch 28/50 — tr=0.6318 va=1.2698 acc=0.812
+2026-04-27 05:37:29,771 INFO Regime epoch 29/50 — tr=0.6312 va=1.2645 acc=0.812
+2026-04-27 05:37:30,314 INFO Regime epoch 30/50 — tr=0.6305 va=1.2589 acc=0.813 per_class={'TRENDING': 0.778, 'RANGING': 0.761, 'CONSOLIDATING': 0.811, 'VOLATILE': 0.913}
+2026-04-27 05:37:30,811 INFO Regime epoch 31/50 — tr=0.6302 va=1.2612 acc=0.815
+2026-04-27 05:37:31,291 INFO Regime epoch 32/50 — tr=0.6294 va=1.2576 acc=0.817
+2026-04-27 05:37:31,775 INFO Regime epoch 33/50 — tr=0.6290 va=1.2546 acc=0.815
+2026-04-27 05:37:32,267 INFO Regime epoch 34/50 — tr=0.6286 va=1.2571 acc=0.819
+2026-04-27 05:37:32,806 INFO Regime epoch 35/50 — tr=0.6283 va=1.2563 acc=0.821 per_class={'TRENDING': 0.792, 'RANGING': 0.756, 'CONSOLIDATING': 0.836, 'VOLATILE': 0.903}
+2026-04-27 05:37:33,294 INFO Regime epoch 36/50 — tr=0.6279 va=1.2522 acc=0.817
+2026-04-27 05:37:33,778 INFO Regime epoch 37/50 — tr=0.6278 va=1.2535 acc=0.820
+2026-04-27 05:37:34,266 INFO Regime epoch 38/50 — tr=0.6276 va=1.2496 acc=0.818
+2026-04-27 05:37:34,785 INFO Regime epoch 39/50 — tr=0.6272 va=1.2538 acc=0.821
+2026-04-27 05:37:35,316 INFO Regime epoch 40/50 — tr=0.6271 va=1.2538 acc=0.820 per_class={'TRENDING': 0.788, 'RANGING': 0.763, 'CONSOLIDATING': 0.82, 'VOLATILE': 0.914}
+2026-04-27 05:37:35,850 INFO Regime epoch 41/50 — tr=0.6269 va=1.2510 acc=0.819
+2026-04-27 05:37:36,364 INFO Regime epoch 42/50 — tr=0.6268 va=1.2540 acc=0.821
+2026-04-27 05:37:36,855 INFO Regime epoch 43/50 — tr=0.6269 va=1.2525 acc=0.821
+2026-04-27 05:37:37,356 INFO Regime epoch 44/50 — tr=0.6264 va=1.2488 acc=0.822
+2026-04-27 05:37:37,891 INFO Regime epoch 45/50 — tr=0.6267 va=1.2510 acc=0.824 per_class={'TRENDING': 0.796, 'RANGING': 0.763, 'CONSOLIDATING': 0.836, 'VOLATILE': 0.904}
+2026-04-27 05:37:38,389 INFO Regime epoch 46/50 — tr=0.6267 va=1.2526 acc=0.823
+2026-04-27 05:37:38,869 INFO Regime epoch 47/50 — tr=0.6266 va=1.2473 acc=0.821
+2026-04-27 05:37:39,361 INFO Regime epoch 48/50 — tr=0.6267 va=1.2501 acc=0.824
+2026-04-27 05:37:39,852 INFO Regime epoch 49/50 — tr=0.6265 va=1.2537 acc=0.821
+2026-04-27 05:37:40,387 INFO Regime epoch 50/50 — tr=0.6268 va=1.2522 acc=0.822 per_class={'TRENDING': 0.793, 'RANGING': 0.76, 'CONSOLIDATING': 0.83, 'VOLATILE': 0.91}
+2026-04-27 05:37:40,426 INFO RegimeClassifier[mode=ltf_behaviour] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
+2026-04-27 05:37:40,426 INFO RegimeClassifier[1H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
+2026-04-27 05:37:40,429 INFO Regime phase LTF train: 25.4s
+2026-04-27 05:37:40,554 INFO Regime LTF complete: acc=0.821, n=401471 per_class={'TRENDING': 0.789, 'RANGING': 0.767, 'CONSOLIDATING': 0.827, 'VOLATILE': 0.91}
+2026-04-27 05:37:40,557 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:41,061 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
+2026-04-27 05:37:41,066 INFO Regime[1H mode=ltf_behaviour] persistence (avg bars/run) on XAUUSD 1H:
 {'TRENDING': 9.355291913830783, 'RANGING': 6.096303199751476, 'CONSOLIDATING': 5.598885793871866, 'VOLATILE': 6.771351107094442}
-2026-04-27 01:30:01,868 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (all labels):
+2026-04-27 05:37:41,075 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (all labels):
 {'TRENDING': {'n': 29965, 'mean': 2.149062259083323e-05, 'mean_over_std': 0.011155601434349563}, 'RANGING': {'n': 19623, 'mean': -3.254493608872846e-06, 'mean_over_std': -0.001761415548292494}, 'CONSOLIDATING': {'n': 10050, 'mean': -3.039756158146958e-06, 'mean_over_std': -0.001792488091618151}, 'VOLATILE': {'n': 14985, 'mean': 1.8102764458593193e-05, 'mean_over_std': 0.006974696291378742}}
-2026-04-27 01:30:01,868 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (clean labels conf>=0.40):
+2026-04-27 05:37:41,076 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (clean labels conf>=0.40):
 {'TRENDING': {'n': 26145, 'mean': 2.874435605138053e-05, 'mean_over_std': 0.01595450632691917}, 'RANGING': {'n': 7858, 'mean': 1.7829776785521727e-05, 'mean_over_std': 0.011851561804467463}, 'CONSOLIDATING': {'n': 8543, 'mean': 7.845231961250924e-06, 'mean_over_std': 0.004915839521549481}, 'VOLATILE': {'n': 13636, 'mean': 5.480114267306668e-06, 'mean_over_std': 0.0020378119917389375}}
-2026-04-27 01:30:01,869 INFO Regime retrain total: 223.2s (504761 samples)
-2026-04-27 01:30:01,886 INFO GRU: 2 CUDA device(s) available — using GPU
-2026-04-27 01:30:01,886 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:30:01,886 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:30:01,887 INFO === VectorStore: building similarity indices (parallel feature build) ===
-2026-04-27 01:30:01,887 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
-2026-04-27 01:30:01,887 INFO Retrain complete. Total wall-clock: 223.2s
-2026-04-27 01:30:04,412 INFO Model regime: SUCCESS
-2026-04-27 01:30:04,412 INFO --- Training gru ---
-2026-04-27 01:30:04,413 INFO Running retrain --model gru
-2026-04-27 01:30:04,702 INFO retrain environment: KAGGLE
-2026-04-27 01:30:06,373 INFO Device: CUDA (2 GPU(s))
-2026-04-27 01:30:06,384 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:30:06,384 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:30:06,384 INFO cuDNN benchmark=True, TF32 matmul=True
-2026-04-27 01:30:06,384 INFO PyTorch CPU threads: 4 intra / 2 interop
-2026-04-27 01:30:06,385 INFO Retrain data split: train
-2026-04-27 01:30:06,386 INFO === GRU-LSTM retrain (timeframes: ['5M', '15M', '1H', '4H']) ===
-2026-04-27 01:30:06,536 INFO NumExpr defaulting to 4 threads.
-2026-04-27 01:30:06,738 INFO GRU: 2 CUDA device(s) available — using GPU
-2026-04-27 01:30:06,738 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:30:06,738 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:30:07,024 INFO GRULSTMPredictor loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt (device=cuda)
-2026-04-27 01:30:07,024 INFO GRU phase macro_correlations: 0.0s
-2026-04-27 01:30:07,024 INFO GRU multi-symbol training (Kaggle mode): 11 symbols × ['5M', '15M', '1H', '4H']
-2026-04-27 01:30:07,026 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/gru_lstm_20260427_013007
-2026-04-27 01:30:07,030 INFO GRU feature contract unchanged (input_size=74) — incremental retrain
-2026-04-27 01:30:07,182 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:07,205 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:07,220 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:07,228 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:07,230 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
-2026-04-27 01:30:07,230 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:30:07,230 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:30:07,230 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
-2026-04-27 01:30:07,231 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:07,322 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
-2026-04-27 01:30:07,324 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:07,574 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
-2026-04-27 01:30:07,604 INFO Loaded AUDUSD/5M split=train: 392782 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:07,893 INFO Loaded AUDUSD/15M split=train: 130944 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:08,025 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:08,131 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:08,347 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:08,367 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:08,382 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:08,389 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:08,390 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:08,478 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
-2026-04-27 01:30:08,480 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:08,733 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
-2026-04-27 01:30:08,749 INFO Loaded EURGBP/5M split=train: 392761 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:09,038 INFO Loaded EURGBP/15M split=train: 130945 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:09,186 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:09,296 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:09,492 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:09,514 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:09,529 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:09,536 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:09,537 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:09,619 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
-2026-04-27 01:30:09,621 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:09,868 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
-2026-04-27 01:30:09,886 INFO Loaded EURJPY/5M split=train: 392828 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:10,163 INFO Loaded EURJPY/15M split=train: 130956 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:10,296 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:10,396 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:10,589 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:10,610 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:10,624 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:10,632 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:10,632 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:10,717 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
-2026-04-27 01:30:10,719 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:10,970 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
-2026-04-27 01:30:10,994 INFO Loaded EURUSD/5M split=train: 392826 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:11,281 INFO Loaded EURUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:11,412 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:11,517 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:11,708 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:11,731 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:11,747 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:11,755 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:11,756 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:11,841 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
-2026-04-27 01:30:11,843 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:12,097 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
-2026-04-27 01:30:12,112 INFO Loaded GBPJPY/5M split=train: 392739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:12,404 INFO Loaded GBPJPY/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:12,539 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:12,645 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:12,856 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:12,878 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:12,894 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:12,902 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:12,903 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:12,997 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
-2026-04-27 01:30:12,999 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:13,265 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
-2026-04-27 01:30:13,281 INFO Loaded GBPUSD/5M split=train: 392811 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:13,565 INFO Loaded GBPUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:13,701 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:13,805 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:13,986 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:30:14,004 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:30:14,019 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:30:14,026 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:30:14,026 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:14,112 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
-2026-04-27 01:30:14,114 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:14,375 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
-2026-04-27 01:30:14,388 INFO Loaded NZDUSD/5M split=train: 392773 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:14,658 INFO Loaded NZDUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:14,788 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:14,892 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:15,080 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:15,099 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:15,114 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:15,121 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:15,122 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:15,209 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
-2026-04-27 01:30:15,211 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:15,467 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
-2026-04-27 01:30:15,486 INFO Loaded USDCAD/5M split=train: 392802 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:15,760 INFO Loaded USDCAD/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:15,902 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:16,014 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:16,215 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:16,235 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:16,249 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:16,257 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:16,258 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:16,345 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
-2026-04-27 01:30:16,347 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:16,604 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
-2026-04-27 01:30:16,620 INFO Loaded USDCHF/5M split=train: 392805 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:16,910 INFO Loaded USDCHF/15M split=train: 130957 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:17,041 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:17,141 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:17,337 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:17,358 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:17,373 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:17,380 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:30:17,381 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:17,468 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
-2026-04-27 01:30:17,470 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:17,720 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
-2026-04-27 01:30:17,736 INFO Loaded USDJPY/5M split=train: 392901 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:18,014 INFO Loaded USDJPY/15M split=train: 130972 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:18,150 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:18,251 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:30:18,570 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:30:18,595 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:30:18,612 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:30:18,622 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:30:18,623 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:18,792 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
-2026-04-27 01:30:18,795 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:19,406 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
-2026-04-27 01:30:19,455 INFO Loaded XAUUSD/5M split=train: 882017 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:20,001 INFO Loaded XAUUSD/15M split=train: 295079 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:20,219 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:20,363 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:30:20,490 INFO train_multi: 44 segments, ~6069276 total bars
-2026-04-27 01:30:20,490 INFO train_multi: training ALL 44 segments across TFs ['5M', '15M', '1H', '4H'] in one combined pass
-2026-04-27 01:30:20,490 INFO train_multi: building combined dataset for TF=ALL (44 segments)
-2026-04-27 01:31:11,072 INFO train_multi TF=ALL: 6067956 sequences across 44 segments
-2026-04-27 01:31:11,073 INFO train_multi TF=ALL: estimated peak RAM = 10656 MB (train=479966 val=120011 n_feat=74 seq_len=30)
-2026-04-27 01:31:12,414 INFO train_multi TF=ALL: train=479966 val=120011 (5335 MB tensors)
-2026-04-27 01:31:16,570 INFO train_multi TF=ALL: warm-start detected — using CosineAnnealingLR (lr=3e-05, patience=12)
-2026-04-27 01:31:30,764 INFO train_multi TF=ALL epoch 1/50 train=0.5884 val=0.6113
-2026-04-27 01:31:30,768 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:31:30,768 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:31:30,768 INFO train_multi TF=ALL: new best val=0.6113 — saved
-2026-04-27 01:31:42,891 INFO train_multi TF=ALL epoch 2/50 train=0.5883 val=0.6109
-2026-04-27 01:31:42,895 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:31:42,895 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:31:42,896 INFO train_multi TF=ALL: new best val=0.6109 — saved
-2026-04-27 01:31:55,011 INFO train_multi TF=ALL epoch 3/50 train=0.5885 val=0.6111
-2026-04-27 01:32:07,077 INFO train_multi TF=ALL epoch 4/50 train=0.5882 val=0.6113
-2026-04-27 01:32:19,111 INFO train_multi TF=ALL epoch 5/50 train=0.5876 val=0.6110
-2026-04-27 01:32:31,379 INFO train_multi TF=ALL epoch 6/50 train=0.5877 val=0.6110
-2026-04-27 01:32:43,590 INFO train_multi TF=ALL epoch 7/50 train=0.5874 val=0.6114
-2026-04-27 01:32:55,745 INFO train_multi TF=ALL epoch 8/50 train=0.5872 val=0.6112
-2026-04-27 01:33:07,978 INFO train_multi TF=ALL epoch 9/50 train=0.5871 val=0.6116
-2026-04-27 01:33:20,132 INFO train_multi TF=ALL epoch 10/50 train=0.5868 val=0.6113
-2026-04-27 01:33:32,357 INFO train_multi TF=ALL epoch 11/50 train=0.5868 val=0.6114
-2026-04-27 01:33:44,467 INFO train_multi TF=ALL epoch 12/50 train=0.5869 val=0.6114
-2026-04-27 01:33:56,653 INFO train_multi TF=ALL epoch 13/50 train=0.5866 val=0.6108
-2026-04-27 01:33:56,658 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:33:56,658 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:33:56,658 INFO train_multi TF=ALL: new best val=0.6108 — saved
-2026-04-27 01:34:08,737 INFO train_multi TF=ALL epoch 14/50 train=0.5864 val=0.6108
-2026-04-27 01:34:20,893 INFO train_multi TF=ALL epoch 15/50 train=0.5863 val=0.6127
-2026-04-27 01:34:32,997 INFO train_multi TF=ALL epoch 16/50 train=0.5861 val=0.6110
-2026-04-27 01:34:45,239 INFO train_multi TF=ALL epoch 17/50 train=0.5858 val=0.6117
-2026-04-27 01:34:57,392 INFO train_multi TF=ALL epoch 18/50 train=0.5861 val=0.6113
-2026-04-27 01:35:09,561 INFO train_multi TF=ALL epoch 19/50 train=0.5859 val=0.6117
-2026-04-27 01:35:21,596 INFO train_multi TF=ALL epoch 20/50 train=0.5858 val=0.6117
-2026-04-27 01:35:33,682 INFO train_multi TF=ALL epoch 21/50 train=0.5857 val=0.6119
-2026-04-27 01:35:45,725 INFO train_multi TF=ALL epoch 22/50 train=0.5853 val=0.6120
-2026-04-27 01:35:57,783 INFO train_multi TF=ALL epoch 23/50 train=0.5853 val=0.6120
-2026-04-27 01:36:09,826 INFO train_multi TF=ALL epoch 24/50 train=0.5852 val=0.6118
-2026-04-27 01:36:21,788 INFO train_multi TF=ALL epoch 25/50 train=0.5849 val=0.6122
-2026-04-27 01:36:21,789 INFO train_multi TF=ALL early stop at epoch 25
-2026-04-27 01:36:21,927 INFO === VectorStore: building similarity indices (parallel feature build) ===
-2026-04-27 01:36:21,927 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
-2026-04-27 01:36:21,927 INFO Retrain complete. Total wall-clock: 375.5s
-2026-04-27 01:36:23,973 INFO Model gru: SUCCESS
-2026-04-27 01:36:23,974 INFO   [OK] gru_lstm → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:36:23,974 INFO   [OK] regime_htf → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
-2026-04-27 01:36:23,974 INFO   [OK] regime_ltf → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
-2026-04-27 01:36:23,974 INFO   [OK] quality_scorer → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/quality_scorer.pkl
-2026-04-27 01:36:23,974 INFO   [OK] rl_ppo → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/rl_ppo/model.zip
-2026-04-27 01:36:23,974 INFO All Step 7a weights present in canonical location: /kaggle/working/Multi-Bot/trading-system/trading-engine/weights
-2026-04-27 01:36:23,975 INFO Saved 21 retrain records to metrics/
+2026-04-27 05:37:41,076 INFO Regime retrain total: 213.7s (504761 samples)
+2026-04-27 05:37:41,092 INFO GRU: 2 CUDA device(s) available — using GPU
+2026-04-27 05:37:41,092 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:37:41,092 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:37:41,092 INFO === VectorStore: building similarity indices (parallel feature build) ===
+2026-04-27 05:37:41,093 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
+2026-04-27 05:37:41,093 INFO Retrain complete. Total wall-clock: 213.7s
+2026-04-27 05:37:43,602 INFO Model regime: SUCCESS
+2026-04-27 05:37:43,602 INFO --- Training gru ---
+2026-04-27 05:37:43,603 INFO Running retrain --model gru
+2026-04-27 05:37:43,840 INFO retrain environment: KAGGLE
+2026-04-27 05:37:45,443 INFO Device: CUDA (2 GPU(s))
+2026-04-27 05:37:45,454 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:37:45,455 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:37:45,455 INFO cuDNN benchmark=True, TF32 matmul=True
+2026-04-27 05:37:45,455 INFO PyTorch CPU threads: 4 intra / 2 interop
+2026-04-27 05:37:45,456 INFO Retrain data split: train
+2026-04-27 05:37:45,457 INFO === GRU-LSTM retrain (timeframes: ['5M', '15M', '1H', '4H']) ===
+2026-04-27 05:37:45,620 INFO NumExpr defaulting to 4 threads.
+2026-04-27 05:37:45,831 INFO GRU: 2 CUDA device(s) available — using GPU
+2026-04-27 05:37:45,832 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:37:45,832 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:37:45,832 INFO GRU phase macro_correlations: 0.0s
+2026-04-27 05:37:45,832 INFO GRU multi-symbol training (Kaggle mode): 11 symbols × ['5M', '15M', '1H', '4H']
+2026-04-27 05:37:45,832 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/gru_lstm_20260427_053745
+2026-04-27 05:37:45,835 WARNING WeightsManifest: no manifest at /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json — assuming compatible (run a full retrain to generate one)
+2026-04-27 05:37:45,980 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:46,000 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:46,014 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:46,021 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:46,022 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
+2026-04-27 05:37:46,022 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:37:46,022 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:37:46,023 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
+2026-04-27 05:37:46,024 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:46,108 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
+2026-04-27 05:37:46,109 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:46,332 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
+2026-04-27 05:37:46,363 INFO Loaded AUDUSD/5M split=train: 392782 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:46,629 INFO Loaded AUDUSD/15M split=train: 130944 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:46,748 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:46,838 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:47,029 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:47,046 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:47,060 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:47,066 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:47,067 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:47,149 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
+2026-04-27 05:37:47,151 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:47,396 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
+2026-04-27 05:37:47,412 INFO Loaded EURGBP/5M split=train: 392761 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:47,669 INFO Loaded EURGBP/15M split=train: 130945 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:47,789 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:47,878 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:48,061 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:48,081 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:48,095 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:48,102 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:48,103 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:48,179 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
+2026-04-27 05:37:48,180 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:48,410 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
+2026-04-27 05:37:48,426 INFO Loaded EURJPY/5M split=train: 392828 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:48,701 INFO Loaded EURJPY/15M split=train: 130956 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:48,834 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:48,929 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:49,111 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:49,130 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:49,144 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:49,151 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:49,151 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:49,228 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
+2026-04-27 05:37:49,229 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:49,452 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
+2026-04-27 05:37:49,474 INFO Loaded EURUSD/5M split=train: 392826 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:49,738 INFO Loaded EURUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:49,860 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:49,953 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:50,135 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:50,155 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:50,169 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:50,176 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:50,177 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:50,257 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
+2026-04-27 05:37:50,259 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:50,492 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
+2026-04-27 05:37:50,506 INFO Loaded GBPJPY/5M split=train: 392739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:50,767 INFO Loaded GBPJPY/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:50,895 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:50,995 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:51,178 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:51,196 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:51,210 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:51,216 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:51,217 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:51,302 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
+2026-04-27 05:37:51,304 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:51,542 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
+2026-04-27 05:37:51,558 INFO Loaded GBPUSD/5M split=train: 392811 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:51,820 INFO Loaded GBPUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:51,946 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:52,042 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:52,212 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:52,229 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:52,242 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:52,250 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:37:52,251 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:52,336 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
+2026-04-27 05:37:52,338 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:52,576 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
+2026-04-27 05:37:52,588 INFO Loaded NZDUSD/5M split=train: 392773 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:52,841 INFO Loaded NZDUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:52,962 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:53,055 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:53,229 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:53,247 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:53,260 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:53,267 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:53,268 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:53,347 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
+2026-04-27 05:37:53,348 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:53,584 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
+2026-04-27 05:37:53,602 INFO Loaded USDCAD/5M split=train: 392802 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:53,857 INFO Loaded USDCAD/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:53,979 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:54,070 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:54,242 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:54,259 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:54,274 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:54,281 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:54,281 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:54,360 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
+2026-04-27 05:37:54,361 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:54,593 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
+2026-04-27 05:37:54,608 INFO Loaded USDCHF/5M split=train: 392805 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:54,874 INFO Loaded USDCHF/15M split=train: 130957 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:54,997 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:55,091 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:55,267 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:55,286 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:55,300 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:55,307 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:37:55,308 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:55,383 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
+2026-04-27 05:37:55,386 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:55,609 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
+2026-04-27 05:37:55,624 INFO Loaded USDJPY/5M split=train: 392901 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:55,918 INFO Loaded USDJPY/15M split=train: 130972 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:56,042 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:56,130 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:37:56,425 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:56,454 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:56,472 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:56,483 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:37:56,484 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:56,669 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
+2026-04-27 05:37:56,672 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:57,193 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
+2026-04-27 05:37:57,239 INFO Loaded XAUUSD/5M split=train: 882017 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:57,775 INFO Loaded XAUUSD/15M split=train: 295079 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:57,962 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:58,087 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:37:58,195 INFO train_multi: 44 segments, ~6069276 total bars
+2026-04-27 05:37:58,458 INFO GRULSTMPredictor: DataParallel across 2 GPUs ['Tesla T4', 'Tesla T4']
+2026-04-27 05:37:58,458 INFO GRULSTMPredictor: model built (PyTorch, device=cuda)
+2026-04-27 05:37:58,459 INFO train_multi: training ALL 44 segments across TFs ['5M', '15M', '1H', '4H'] in one combined pass
+2026-04-27 05:37:58,459 INFO train_multi: building combined dataset for TF=ALL (44 segments)
+2026-04-27 05:38:45,248 INFO train_multi TF=ALL: 6067956 sequences across 44 segments
+2026-04-27 05:38:45,248 INFO train_multi TF=ALL: estimated peak RAM = 10656 MB (train=479966 val=120011 n_feat=74 seq_len=30)
+2026-04-27 05:38:46,582 INFO train_multi TF=ALL: train=479966 val=120011 (5335 MB tensors)
+2026-04-27 05:38:50,667 INFO train_multi TF=ALL: cold-start — using OneCycleLR (max_lr=3e-04, patience=18, min_epochs=22)
+2026-04-27 05:39:04,591 INFO train_multi TF=ALL epoch 1/50 train=0.8877 val=0.8816
+2026-04-27 05:39:04,601 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:39:04,601 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:39:04,602 INFO train_multi TF=ALL: new best val=0.8816 — saved
+2026-04-27 05:39:16,487 INFO train_multi TF=ALL epoch 2/50 train=0.8719 val=0.8521
+2026-04-27 05:39:16,491 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:39:16,491 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:39:16,491 INFO train_multi TF=ALL: new best val=0.8521 — saved
+2026-04-27 05:39:28,306 INFO train_multi TF=ALL epoch 3/50 train=0.7729 val=0.6888
+2026-04-27 05:39:28,311 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:39:28,311 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:39:28,311 INFO train_multi TF=ALL: new best val=0.6888 — saved
+2026-04-27 05:39:40,231 INFO train_multi TF=ALL epoch 4/50 train=0.6906 val=0.6880
+2026-04-27 05:39:40,235 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:39:40,236 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:39:40,236 INFO train_multi TF=ALL: new best val=0.6880 — saved
+2026-04-27 05:39:52,154 INFO train_multi TF=ALL epoch 5/50 train=0.6900 val=0.6880
+2026-04-27 05:39:52,158 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:39:52,158 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:39:52,158 INFO train_multi TF=ALL: new best val=0.6880 — saved
+2026-04-27 05:40:04,119 INFO train_multi TF=ALL epoch 6/50 train=0.6895 val=0.6880
+2026-04-27 05:40:04,124 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:40:04,124 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:40:04,124 INFO train_multi TF=ALL: new best val=0.6880 — saved
+2026-04-27 05:40:16,039 INFO train_multi TF=ALL epoch 7/50 train=0.6891 val=0.6879
+2026-04-27 05:40:16,043 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:40:16,043 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:40:16,043 INFO train_multi TF=ALL: new best val=0.6879 — saved
+2026-04-27 05:40:27,881 INFO train_multi TF=ALL epoch 8/50 train=0.6889 val=0.6879
+2026-04-27 05:40:39,711 INFO train_multi TF=ALL epoch 9/50 train=0.6888 val=0.6879
+2026-04-27 05:40:39,715 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:40:39,715 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:40:39,715 INFO train_multi TF=ALL: new best val=0.6879 — saved
+2026-04-27 05:40:51,557 INFO train_multi TF=ALL epoch 10/50 train=0.6887 val=0.6878
+2026-04-27 05:40:51,561 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:40:51,561 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:40:51,561 INFO train_multi TF=ALL: new best val=0.6878 — saved
+2026-04-27 05:41:03,547 INFO train_multi TF=ALL epoch 11/50 train=0.6886 val=0.6878
+2026-04-27 05:41:03,551 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:41:03,551 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:41:03,551 INFO train_multi TF=ALL: new best val=0.6878 — saved
+2026-04-27 05:41:15,382 INFO train_multi TF=ALL epoch 12/50 train=0.6883 val=0.6877
+2026-04-27 05:41:15,387 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:41:15,387 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:41:15,387 INFO train_multi TF=ALL: new best val=0.6877 — saved
+2026-04-27 05:41:27,342 INFO train_multi TF=ALL epoch 13/50 train=0.6877 val=0.6869
+2026-04-27 05:41:27,346 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:41:27,346 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:41:27,346 INFO train_multi TF=ALL: new best val=0.6869 — saved
+2026-04-27 05:41:39,237 INFO train_multi TF=ALL epoch 14/50 train=0.6844 val=0.6794
+2026-04-27 05:41:39,241 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:41:39,241 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:41:39,241 INFO train_multi TF=ALL: new best val=0.6794 — saved
+2026-04-27 05:41:51,175 INFO train_multi TF=ALL epoch 15/50 train=0.6742 val=0.6664
+2026-04-27 05:41:51,179 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:41:51,180 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:41:51,180 INFO train_multi TF=ALL: new best val=0.6664 — saved
+2026-04-27 05:42:03,195 INFO train_multi TF=ALL epoch 16/50 train=0.6583 val=0.6462
+2026-04-27 05:42:03,200 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:42:03,200 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:42:03,200 INFO train_multi TF=ALL: new best val=0.6462 — saved
+2026-04-27 05:42:15,187 INFO train_multi TF=ALL epoch 17/50 train=0.6440 val=0.6334
+2026-04-27 05:42:15,192 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:42:15,192 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:42:15,192 INFO train_multi TF=ALL: new best val=0.6334 — saved
+2026-04-27 05:42:27,258 INFO train_multi TF=ALL epoch 18/50 train=0.6353 val=0.6287
+2026-04-27 05:42:27,263 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:42:27,263 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:42:27,263 INFO train_multi TF=ALL: new best val=0.6287 — saved
+2026-04-27 05:42:39,190 INFO train_multi TF=ALL epoch 19/50 train=0.6287 val=0.6265
+2026-04-27 05:42:39,195 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:42:39,195 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:42:39,195 INFO train_multi TF=ALL: new best val=0.6265 — saved
+2026-04-27 05:42:51,222 INFO train_multi TF=ALL epoch 20/50 train=0.6241 val=0.6227
+2026-04-27 05:42:51,227 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:42:51,227 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:42:51,227 INFO train_multi TF=ALL: new best val=0.6227 — saved
+2026-04-27 05:43:03,251 INFO train_multi TF=ALL epoch 21/50 train=0.6203 val=0.6211
+2026-04-27 05:43:03,256 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:43:03,256 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:43:03,256 INFO train_multi TF=ALL: new best val=0.6211 — saved
+2026-04-27 05:43:15,225 INFO train_multi TF=ALL epoch 22/50 train=0.6174 val=0.6195
+2026-04-27 05:43:15,229 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:43:15,230 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:43:15,230 INFO train_multi TF=ALL: new best val=0.6195 — saved
+2026-04-27 05:43:27,273 INFO train_multi TF=ALL epoch 23/50 train=0.6144 val=0.6179
+2026-04-27 05:43:27,278 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:43:27,278 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:43:27,278 INFO train_multi TF=ALL: new best val=0.6179 — saved
+2026-04-27 05:43:39,339 INFO train_multi TF=ALL epoch 24/50 train=0.6123 val=0.6183
+2026-04-27 05:43:51,347 INFO train_multi TF=ALL epoch 25/50 train=0.6100 val=0.6159
+2026-04-27 05:43:51,352 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:43:51,352 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:43:51,352 INFO train_multi TF=ALL: new best val=0.6159 — saved
+2026-04-27 05:44:03,383 INFO train_multi TF=ALL epoch 26/50 train=0.6084 val=0.6167
+2026-04-27 05:44:15,363 INFO train_multi TF=ALL epoch 27/50 train=0.6068 val=0.6176
+2026-04-27 05:44:27,454 INFO train_multi TF=ALL epoch 28/50 train=0.6052 val=0.6162
+2026-04-27 05:44:39,399 INFO train_multi TF=ALL epoch 29/50 train=0.6035 val=0.6172
+2026-04-27 05:44:51,349 INFO train_multi TF=ALL epoch 30/50 train=0.6019 val=0.6173
+2026-04-27 05:45:03,285 INFO train_multi TF=ALL epoch 31/50 train=0.6003 val=0.6144
+2026-04-27 05:45:03,289 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:45:03,289 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:45:03,289 INFO train_multi TF=ALL: new best val=0.6144 — saved
+2026-04-27 05:45:15,270 INFO train_multi TF=ALL epoch 32/50 train=0.5991 val=0.6109
+2026-04-27 05:45:15,275 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:45:15,275 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:45:15,275 INFO train_multi TF=ALL: new best val=0.6109 — saved
+2026-04-27 05:45:27,249 INFO train_multi TF=ALL epoch 33/50 train=0.5980 val=0.6116
+2026-04-27 05:45:39,199 INFO train_multi TF=ALL epoch 34/50 train=0.5967 val=0.6145
+2026-04-27 05:45:51,110 INFO train_multi TF=ALL epoch 35/50 train=0.5957 val=0.6087
+2026-04-27 05:45:51,114 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:45:51,114 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:45:51,114 INFO train_multi TF=ALL: new best val=0.6087 — saved
+2026-04-27 05:46:03,165 INFO train_multi TF=ALL epoch 36/50 train=0.5943 val=0.6133
+2026-04-27 05:46:15,083 INFO train_multi TF=ALL epoch 37/50 train=0.5932 val=0.6096
+2026-04-27 05:46:27,025 INFO train_multi TF=ALL epoch 38/50 train=0.5921 val=0.6136
+2026-04-27 05:46:38,930 INFO train_multi TF=ALL epoch 39/50 train=0.5908 val=0.6117
+2026-04-27 05:46:50,860 INFO train_multi TF=ALL epoch 40/50 train=0.5898 val=0.6117
+2026-04-27 05:47:02,852 INFO train_multi TF=ALL epoch 41/50 train=0.5882 val=0.6142
+2026-04-27 05:47:14,835 INFO train_multi TF=ALL epoch 42/50 train=0.5870 val=0.6139
+2026-04-27 05:47:26,823 INFO train_multi TF=ALL epoch 43/50 train=0.5859 val=0.6130
+2026-04-27 05:47:38,763 INFO train_multi TF=ALL epoch 44/50 train=0.5849 val=0.6123
+2026-04-27 05:47:50,636 INFO train_multi TF=ALL epoch 45/50 train=0.5838 val=0.6130
+2026-04-27 05:48:02,678 INFO train_multi TF=ALL epoch 46/50 train=0.5823 val=0.6113
+2026-04-27 05:48:14,624 INFO train_multi TF=ALL epoch 47/50 train=0.5812 val=0.6123
+2026-04-27 05:48:26,575 INFO train_multi TF=ALL epoch 48/50 train=0.5800 val=0.6172
+2026-04-27 05:48:38,563 INFO train_multi TF=ALL epoch 49/50 train=0.5787 val=0.6129
+2026-04-27 05:48:50,703 INFO train_multi TF=ALL epoch 50/50 train=0.5779 val=0.6149
+2026-04-27 05:48:50,840 INFO === VectorStore: building similarity indices (parallel feature build) ===
+2026-04-27 05:48:50,840 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
+2026-04-27 05:48:50,840 INFO Retrain complete. Total wall-clock: 665.4s
+2026-04-27 05:48:52,777 INFO Model gru: SUCCESS
+2026-04-27 05:48:52,777 INFO   [OK] gru_lstm → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:48:52,777 INFO   [OK] regime_htf → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
+2026-04-27 05:48:52,777 INFO   [OK] regime_ltf → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
+2026-04-27 05:48:52,777 INFO   [DEFERRED] quality_scorer → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/quality_scorer.pkl (expected after Round 1)
+2026-04-27 05:48:52,777 INFO   [DEFERRED] rl_ppo → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/rl_ppo/model.zip (expected after Round 1)
+2026-04-27 05:48:52,777 INFO All Step 7a weights present in canonical location: /kaggle/working/Multi-Bot/trading-system/trading-engine/weights
+2026-04-27 05:48:52,778 INFO Deferred until post-Round-1 journal retrain: ['quality_scorer', 'rl_ppo']
+2026-04-27 05:48:52,779 INFO Saved 33 retrain records to metrics/
 
 === TRAINING COMPLETE ===
   regime: SUCCESS
@@ -667,748 +759,740 @@ All scripts and inputs verified.
 === Round 1: Backtest on validation window (last 2yr of training data) ===
   Cleared journal for fresh Round 1 run
   START Round 1 - Backtest (val)
-2026-04-27 01:36:24,746 INFO === STEP 6: BACKTEST (round1) ===
-2026-04-27 01:36:24,747 INFO BT_WINDOW=round1 — val-window backtest: 2021-08-05 → 2023-08-04 (test set protected)
-2026-04-27 01:36:24,748 INFO ================================================================
+2026-04-27 05:48:53,406 INFO === STEP 6: BACKTEST (round1) ===
+2026-04-27 05:48:53,407 INFO BT_WINDOW=round1 — val-window backtest: 2021-08-05 → 2023-08-04 (test set protected)
+2026-04-27 05:48:53,408 INFO ================================================================
   ROUND 1 / 3
 ================================================================
-2026-04-27 01:36:24,748 INFO Round 1 — running backtest: 2021-08-05 → 2023-08-04 (ml_trader, shared ML cache)
-2026-04-27 01:38:38,466 WARNING ml_trader: portfolio drawdown 8.6% — halting all trading
+2026-04-27 05:48:53,408 INFO Round 1 — running backtest: 2021-08-05 → 2023-08-04 (ml_trader, shared ML cache)
+2026-04-27 05:48:55,836 WARNING QualityScorer unavailable (weights missing or load failed)
+2026-04-27 05:51:02,770 WARNING ml_trader: portfolio drawdown 8.1% after trade exit — halting all trading
 
-Backtest results → /kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260427_013626.json
+Backtest results → /kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260427_054855.json
 Trader                                   Trades      WR     PF   Return   TP1%   TP2%      DD  Sharpe
 ---------------------------------------------------------------------------------------------------------
-ML-Native Execution (GRU + EV)               60  28.3%   1.00   -0.1% 28.3% 10.0%   8.6%   -0.01
-  gate_diagnostics: bars=15249 no_signal=227 quality_block=0 session_skip=5000 density=3 pm_reject=0 daily_skip=9878 cooldown=80 daily_halt_events=15 enforce_daily_halt=True
-  no_signal_reasons: htf_bias_conflict=186, weak_gru_direction=35, trend_pullback_conflict=6
+ML-Native Execution (GRU + EV)               22  13.6%   0.52   -5.1% 13.6%  0.0%   8.1%   -3.94
+  gate_diagnostics: bars=5289 no_signal=19 quality_block=0 session_skip=1872 density=0 pm_reject=0 daily_skip=3366 cooldown=10 daily_halt_events=5 enforce_daily_halt=True
+  no_signal_reasons: weak_gru_direction=9, htf_bias_conflict=6, trend_pullback_conflict=4
 
 Calibration Summary:
-  all          [WARN] Non-monotonic calibration: 3/5 pairs violated. Consider retraining QualityScorer
-  ml_trader    [WARN] Non-monotonic calibration: 3/5 pairs violated. Consider retraining QualityScorer
-2026-04-27 01:38:39,164 INFO Round 1 backtest — 60 trades | avg WR=28.3% | avg PF=1.00 | avg Sharpe=-0.01
-2026-04-27 01:38:39,164 INFO   ml_trader: 60 trades | WR=28.3% | PF=1.00 | Return=-0.1% | DD=8.6% | Sharpe=-0.01
+  all          [OK] Calibration OK — p_win correlates with actual win rate.
+  ml_trader    [OK] Calibration OK — p_win correlates with actual win rate.
+2026-04-27 05:51:03,389 INFO Round 1 backtest — 22 trades | avg WR=13.6% | avg PF=0.52 | avg Sharpe=-3.94
+2026-04-27 05:51:03,389 INFO   ml_trader: 22 trades | WR=13.6% | PF=0.52 | Return=-5.1% | DD=8.1% | Sharpe=-3.94
 INFO  Loading: /kaggle/working/Multi-Bot/trading-system/backtesting/results/backtest_round_1.json
-INFO  Total trades: 60
-INFO  Diagnostics CSV → /kaggle/working/Multi-Bot/trading-system/trading-engine/logs/backtest_diagnostics.csv (60 rows)
-
-──────────────────────────────────────────────────────────────
-CHECK 1: TRADE FREQUENCY  (trades/day/symbol)
-──────────────────────────────────────────────────────────────
-  AUDUSD          8 trades     8 days   1.00/day
-  EURGBP         10 trades    10 days   1.00/day
-  EURJPY          8 trades     8 days   1.00/day
-  EURUSD          6 trades     6 days   1.00/day
-  GBPJPY          5 trades     5 days   1.00/day
-  GBPUSD          2 trades     2 days   1.00/day
-  NZDUSD          4 trades     3 days   1.33/day
-  USDCAD          6 trades     5 days   1.20/day
-  USDCHF          4 trades     4 days   1.00/day
-  USDJPY          3 trades     3 days   1.00/day
-  XAUUSD          4 trades     4 days   1.00/day
-  ✓  All symbols within normal range.
+INFO  Total trades: 22
+/usr/local/lib/python3.12/dist-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.12/dist-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+INFO  Diagnostics CSV → /kaggle/working/Multi-Bot/trading-system/trading-engine/logs/backtest_diagnostics.csv (22 rows)
+2026-04-27 05:51:03,616 INFO Round 1: wrote 22 journal entries (total in file: 22)
   DONE  Round 1 - Backtest (val)
   Saved Round 1 result → round1_summary.json
-  Journal after Round 1: 60 entries
+  Journal after Round 1: 22 entries
 
 === Round 1 → Quality + RL retrain skipped (validation journal is not train data) ===
 
 === Round 2: BLIND backtest on test window (unseen 2yr) ===
   START Round 2 - Blind backtest (test)
-2026-04-27 01:38:39,453 INFO Round 1: wrote 60 journal entries (total in file: 60)
-2026-04-27 01:38:40,078 INFO === STEP 6: BACKTEST (round2) ===
-2026-04-27 01:38:40,079 INFO BT_WINDOW=round2 — BLIND backtest: 2023-08-07 → 2025-08-05 (test set)
-2026-04-27 01:38:40,079 INFO ================================================================
+2026-04-27 05:51:04,220 INFO === STEP 6: BACKTEST (round2) ===
+2026-04-27 05:51:04,221 INFO BT_WINDOW=round2 — BLIND backtest: 2023-08-07 → 2025-08-05 (test set)
+2026-04-27 05:51:04,221 INFO ================================================================
   ROUND 2 / 3
 ================================================================
-2026-04-27 01:38:40,079 INFO Round 2 — running backtest: 2023-08-07 → 2025-08-05 (ml_trader, shared ML cache)
-2026-04-27 01:40:55,168 WARNING ml_trader: portfolio drawdown 8.9% — halting all trading
-2026-04-27 01:40:55,854 INFO Round 2 backtest — 22 trades | avg WR=27.3% | avg PF=1.48 | avg Sharpe=2.26
-2026-04-27 01:40:55,854 INFO   ml_trader: 22 trades | WR=27.3% | PF=1.48 | Return=5.1% | DD=8.9% | Sharpe=2.26
+2026-04-27 05:51:04,221 INFO Round 2 — running backtest: 2023-08-07 → 2025-08-05 (ml_trader, shared ML cache)
+2026-04-27 05:51:06,632 WARNING QualityScorer unavailable (weights missing or load failed)
+2026-04-27 05:53:15,047 WARNING ml_trader: portfolio drawdown 8.1% after trade exit — halting all trading
+2026-04-27 05:53:15,660 INFO Round 2 backtest — 27 trades | avg WR=22.2% | avg PF=1.16 | avg Sharpe=0.87
+2026-04-27 05:53:15,660 INFO   ml_trader: 27 trades | WR=22.2% | PF=1.16 | Return=1.9% | DD=8.1% | Sharpe=0.87
 INFO  Loading: /kaggle/working/Multi-Bot/trading-system/backtesting/results/backtest_round_2.json
-INFO  Total trades: 22
-INFO  Diagnostics CSV → /kaggle/working/Multi-Bot/trading-system/trading-engine/logs/backtest_diagnostics.csv (22 rows)
-2026-04-27 01:40:56,128 INFO Round 2: wrote 22 journal entries (total in file: 82)
+INFO  Total trades: 27
+/usr/local/lib/python3.12/dist-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.12/dist-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+INFO  Diagnostics CSV → /kaggle/working/Multi-Bot/trading-system/trading-engine/logs/backtest_diagnostics.csv (27 rows)
+2026-04-27 05:53:15,939 INFO Round 2: wrote 27 journal entries (total in file: 49)
   DONE  Round 2 - Blind backtest (test)
   Saved Round 2 result → round2_summary.json
-  Journal after Round 2: 82 entries
+  Journal after Round 2: 49 entries
 
 === Round 2 → Quality + RL retrain skipped (blind-test journal is not train data) ===
 
 === Round 3: Incremental retrain on train split only ===
   START Retrain gru [train-split retrain]
-2026-04-27 01:40:56,431 INFO retrain environment: KAGGLE
-2026-04-27 01:40:58,116 INFO Device: CUDA (2 GPU(s))
-2026-04-27 01:40:58,126 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:40:58,127 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:40:58,127 INFO cuDNN benchmark=True, TF32 matmul=True
-2026-04-27 01:40:58,127 INFO PyTorch CPU threads: 4 intra / 2 interop
-2026-04-27 01:40:58,127 INFO Retrain data split: train
-2026-04-27 01:40:58,128 INFO === GRU-LSTM retrain (timeframes: ['5M', '15M', '1H', '4H']) ===
-2026-04-27 01:40:58,282 INFO NumExpr defaulting to 4 threads.
-2026-04-27 01:40:58,489 INFO GRU: 2 CUDA device(s) available — using GPU
-2026-04-27 01:40:58,489 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:40:58,489 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:40:58,735 INFO GRULSTMPredictor loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt (device=cuda)
-2026-04-27 01:40:58,735 INFO GRU phase macro_correlations: 0.0s
-2026-04-27 01:40:58,735 INFO GRU multi-symbol training (Kaggle mode): 11 symbols × ['5M', '15M', '1H', '4H']
-2026-04-27 01:40:58,737 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/gru_lstm_20260427_014058
-2026-04-27 01:40:58,741 INFO GRU feature contract unchanged (input_size=74) — incremental retrain
-2026-04-27 01:40:58,907 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:40:58,928 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:40:58,943 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:40:58,951 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:40:58,952 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
-2026-04-27 01:40:58,952 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:40:58,952 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:40:58,953 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
-2026-04-27 01:40:58,954 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:40:59,041 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
-2026-04-27 01:40:59,043 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:40:59,334 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
-2026-04-27 01:40:59,365 INFO Loaded AUDUSD/5M split=train: 392782 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:40:59,651 INFO Loaded AUDUSD/15M split=train: 130944 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:40:59,784 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:40:59,887 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:00,103 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:00,121 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:00,136 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:00,143 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:00,144 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:00,233 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
-2026-04-27 01:41:00,235 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:00,480 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
-2026-04-27 01:41:00,495 INFO Loaded EURGBP/5M split=train: 392761 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:00,773 INFO Loaded EURGBP/15M split=train: 130945 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:00,907 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:01,008 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:01,205 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:01,227 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:01,243 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:01,251 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:01,252 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:01,341 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
-2026-04-27 01:41:01,343 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:01,600 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
-2026-04-27 01:41:01,618 INFO Loaded EURJPY/5M split=train: 392828 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:01,900 INFO Loaded EURJPY/15M split=train: 130956 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:02,038 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:02,144 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:02,344 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:02,365 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:02,380 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:02,388 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:02,389 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:02,473 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
-2026-04-27 01:41:02,475 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:02,724 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
-2026-04-27 01:41:02,748 INFO Loaded EURUSD/5M split=train: 392826 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:03,028 INFO Loaded EURUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:03,161 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:03,269 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:03,461 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:03,481 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:03,495 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:03,503 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:03,504 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:03,587 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
-2026-04-27 01:41:03,590 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:03,835 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
-2026-04-27 01:41:03,852 INFO Loaded GBPJPY/5M split=train: 392739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:04,131 INFO Loaded GBPJPY/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:04,273 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:04,378 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:04,570 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:04,591 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:04,605 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:04,613 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:04,614 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:04,700 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
-2026-04-27 01:41:04,701 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:04,954 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
-2026-04-27 01:41:04,970 INFO Loaded GBPUSD/5M split=train: 392811 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:05,254 INFO Loaded GBPUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:05,387 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:05,487 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:05,663 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:41:05,680 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:41:05,695 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:41:05,701 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:41:05,702 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:05,786 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
-2026-04-27 01:41:05,787 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:06,049 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
-2026-04-27 01:41:06,062 INFO Loaded NZDUSD/5M split=train: 392773 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:06,329 INFO Loaded NZDUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:06,453 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:06,552 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:06,753 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:06,773 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:06,788 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:06,796 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:06,797 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:06,880 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
-2026-04-27 01:41:06,882 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:07,128 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
-2026-04-27 01:41:07,146 INFO Loaded USDCAD/5M split=train: 392802 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:07,418 INFO Loaded USDCAD/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:07,554 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:07,657 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:07,850 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:07,870 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:07,884 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:07,891 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:07,892 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:07,973 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
-2026-04-27 01:41:07,974 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:08,224 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
-2026-04-27 01:41:08,240 INFO Loaded USDCHF/5M split=train: 392805 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:08,511 INFO Loaded USDCHF/15M split=train: 130957 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:08,644 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:08,746 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:08,941 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:08,963 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:08,978 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:08,985 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:41:08,986 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:09,073 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
-2026-04-27 01:41:09,075 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:09,363 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
-2026-04-27 01:41:09,378 INFO Loaded USDJPY/5M split=train: 392901 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:09,658 INFO Loaded USDJPY/15M split=train: 130972 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:09,794 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:09,897 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:41:10,202 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:41:10,226 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:41:10,244 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:41:10,255 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:41:10,256 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:41:10,431 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
-2026-04-27 01:41:10,434 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:41:10,956 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
-2026-04-27 01:41:11,004 INFO Loaded XAUUSD/5M split=train: 882017 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:41:11,558 INFO Loaded XAUUSD/15M split=train: 295079 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:41:11,763 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:41:11,899 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:41:12,019 INFO train_multi: 44 segments, ~6069276 total bars
-2026-04-27 01:41:12,019 INFO train_multi: training ALL 44 segments across TFs ['5M', '15M', '1H', '4H'] in one combined pass
-2026-04-27 01:41:12,019 INFO train_multi: building combined dataset for TF=ALL (44 segments)
-2026-04-27 01:42:02,099 INFO train_multi TF=ALL: 6067956 sequences across 44 segments
-2026-04-27 01:42:02,100 INFO train_multi TF=ALL: estimated peak RAM = 10656 MB (train=479966 val=120011 n_feat=74 seq_len=30)
-2026-04-27 01:42:03,424 INFO train_multi TF=ALL: train=479966 val=120011 (5335 MB tensors)
-2026-04-27 01:42:07,658 INFO train_multi TF=ALL: warm-start detected — using CosineAnnealingLR (lr=3e-05, patience=12)
-2026-04-27 01:42:21,501 INFO train_multi TF=ALL epoch 1/50 train=0.5866 val=0.6122
-2026-04-27 01:42:21,505 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:42:21,505 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:42:21,506 INFO train_multi TF=ALL: new best val=0.6122 — saved
-2026-04-27 01:42:33,630 INFO train_multi TF=ALL epoch 2/50 train=0.5861 val=0.6117
-2026-04-27 01:42:33,635 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:42:33,635 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:42:33,636 INFO train_multi TF=ALL: new best val=0.6117 — saved
-2026-04-27 01:42:45,739 INFO train_multi TF=ALL epoch 3/50 train=0.5859 val=0.6118
-2026-04-27 01:42:57,987 INFO train_multi TF=ALL epoch 4/50 train=0.5858 val=0.6115
-2026-04-27 01:42:57,991 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:42:57,992 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:42:57,992 INFO train_multi TF=ALL: new best val=0.6115 — saved
-2026-04-27 01:43:10,042 INFO train_multi TF=ALL epoch 5/50 train=0.5860 val=0.6114
-2026-04-27 01:43:10,047 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
-2026-04-27 01:43:10,047 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
-2026-04-27 01:43:10,047 INFO train_multi TF=ALL: new best val=0.6114 — saved
-2026-04-27 01:43:22,025 INFO train_multi TF=ALL epoch 6/50 train=0.5854 val=0.6121
-2026-04-27 01:43:34,055 INFO train_multi TF=ALL epoch 7/50 train=0.5854 val=0.6118
-2026-04-27 01:43:46,049 INFO train_multi TF=ALL epoch 8/50 train=0.5853 val=0.6116
-2026-04-27 01:43:58,137 INFO train_multi TF=ALL epoch 9/50 train=0.5854 val=0.6124
-2026-04-27 01:44:10,403 INFO train_multi TF=ALL epoch 10/50 train=0.5849 val=0.6118
-2026-04-27 01:44:22,521 INFO train_multi TF=ALL epoch 11/50 train=0.5848 val=0.6124
-2026-04-27 01:44:34,650 INFO train_multi TF=ALL epoch 12/50 train=0.5849 val=0.6122
-2026-04-27 01:44:46,817 INFO train_multi TF=ALL epoch 13/50 train=0.5846 val=0.6116
-2026-04-27 01:44:58,877 INFO train_multi TF=ALL epoch 14/50 train=0.5845 val=0.6120
-2026-04-27 01:45:11,053 INFO train_multi TF=ALL epoch 15/50 train=0.5845 val=0.6125
-2026-04-27 01:45:23,064 INFO train_multi TF=ALL epoch 16/50 train=0.5844 val=0.6126
-2026-04-27 01:45:35,184 INFO train_multi TF=ALL epoch 17/50 train=0.5841 val=0.6119
-2026-04-27 01:45:35,184 INFO train_multi TF=ALL early stop at epoch 17
-2026-04-27 01:45:35,327 INFO === VectorStore: building similarity indices (parallel feature build) ===
-2026-04-27 01:45:35,328 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
-2026-04-27 01:45:35,328 INFO Retrain complete. Total wall-clock: 277.2s
+2026-04-27 05:53:16,271 INFO retrain environment: KAGGLE
+2026-04-27 05:53:17,875 INFO Device: CUDA (2 GPU(s))
+2026-04-27 05:53:17,885 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:53:17,885 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:53:17,885 INFO cuDNN benchmark=True, TF32 matmul=True
+2026-04-27 05:53:17,886 INFO PyTorch CPU threads: 4 intra / 2 interop
+2026-04-27 05:53:17,886 INFO Retrain data split: train
+2026-04-27 05:53:17,887 INFO === GRU-LSTM retrain (timeframes: ['5M', '15M', '1H', '4H']) ===
+2026-04-27 05:53:18,031 INFO NumExpr defaulting to 4 threads.
+2026-04-27 05:53:18,225 INFO GRU: 2 CUDA device(s) available — using GPU
+2026-04-27 05:53:18,225 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:53:18,225 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:53:18,466 INFO GRULSTMPredictor loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt (device=cuda)
+2026-04-27 05:53:18,466 INFO GRU phase macro_correlations: 0.0s
+2026-04-27 05:53:18,466 INFO GRU multi-symbol training (Kaggle mode): 11 symbols × ['5M', '15M', '1H', '4H']
+2026-04-27 05:53:18,468 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/gru_lstm_20260427_055318
+2026-04-27 05:53:18,471 INFO GRU feature contract unchanged (input_size=74) — incremental retrain
+2026-04-27 05:53:18,616 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:18,636 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:18,649 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:18,656 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:18,657 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
+2026-04-27 05:53:18,658 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:53:18,658 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:53:18,658 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
+2026-04-27 05:53:18,659 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:18,742 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
+2026-04-27 05:53:18,743 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:18,993 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
+2026-04-27 05:53:19,024 INFO Loaded AUDUSD/5M split=train: 392782 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:19,296 INFO Loaded AUDUSD/15M split=train: 130944 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:19,422 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:19,519 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:19,718 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:19,737 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:19,751 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:19,758 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:19,759 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:19,840 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
+2026-04-27 05:53:19,842 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:20,090 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
+2026-04-27 05:53:20,105 INFO Loaded EURGBP/5M split=train: 392761 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:20,375 INFO Loaded EURGBP/15M split=train: 130945 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:20,504 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:20,600 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:20,779 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:20,799 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:20,815 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:20,823 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:20,823 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:20,911 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
+2026-04-27 05:53:20,913 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:21,169 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
+2026-04-27 05:53:21,186 INFO Loaded EURJPY/5M split=train: 392828 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:21,452 INFO Loaded EURJPY/15M split=train: 130956 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:21,577 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:21,673 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:21,855 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:21,875 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:21,888 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:21,895 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:21,896 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:21,979 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
+2026-04-27 05:53:21,981 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:22,233 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
+2026-04-27 05:53:22,256 INFO Loaded EURUSD/5M split=train: 392826 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:22,525 INFO Loaded EURUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:22,652 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:22,748 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:22,924 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:22,943 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:22,958 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:22,965 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:22,966 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:23,048 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
+2026-04-27 05:53:23,050 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:23,316 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
+2026-04-27 05:53:23,332 INFO Loaded GBPJPY/5M split=train: 392739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:23,611 INFO Loaded GBPJPY/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:23,738 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:23,832 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:24,013 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:24,031 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:24,046 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:24,053 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:24,053 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:24,136 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
+2026-04-27 05:53:24,138 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:24,387 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
+2026-04-27 05:53:24,404 INFO Loaded GBPUSD/5M split=train: 392811 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:24,684 INFO Loaded GBPUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:24,817 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:24,915 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:25,078 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:53:25,095 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:53:25,107 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:53:25,114 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
+2026-04-27 05:53:25,114 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:25,195 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
+2026-04-27 05:53:25,196 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:25,440 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
+2026-04-27 05:53:25,456 INFO Loaded NZDUSD/5M split=train: 392773 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:25,741 INFO Loaded NZDUSD/15M split=train: 130951 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:25,887 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:25,987 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:26,165 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:26,184 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:26,198 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:26,205 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:26,206 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:26,287 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
+2026-04-27 05:53:26,289 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:26,527 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
+2026-04-27 05:53:26,545 INFO Loaded USDCAD/5M split=train: 392802 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:26,799 INFO Loaded USDCAD/15M split=train: 130953 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:26,927 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:27,021 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:27,217 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:27,236 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:27,250 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:27,257 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:27,258 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:27,340 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
+2026-04-27 05:53:27,341 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:27,589 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
+2026-04-27 05:53:27,605 INFO Loaded USDCHF/5M split=train: 392805 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:27,877 INFO Loaded USDCHF/15M split=train: 130957 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:28,003 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:28,097 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:28,284 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:28,305 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:28,319 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:28,326 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 05:53:28,327 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:28,413 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
+2026-04-27 05:53:28,415 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:28,666 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
+2026-04-27 05:53:28,683 INFO Loaded USDJPY/5M split=train: 392901 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:28,944 INFO Loaded USDJPY/15M split=train: 130972 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:29,073 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:29,174 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:53:29,458 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:53:29,485 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:53:29,502 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:53:29,514 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
+2026-04-27 05:53:29,515 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:53:29,686 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
+2026-04-27 05:53:29,689 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:53:30,214 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
+2026-04-27 05:53:30,260 INFO Loaded XAUUSD/5M split=train: 882017 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:53:30,785 INFO Loaded XAUUSD/15M split=train: 295079 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:53:30,985 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:53:31,117 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:53:31,231 INFO train_multi: 44 segments, ~6069276 total bars
+2026-04-27 05:53:31,231 INFO train_multi: training ALL 44 segments across TFs ['5M', '15M', '1H', '4H'] in one combined pass
+2026-04-27 05:53:31,231 INFO train_multi: building combined dataset for TF=ALL (44 segments)
+2026-04-27 05:54:20,285 INFO train_multi TF=ALL: 6067956 sequences across 44 segments
+2026-04-27 05:54:20,285 INFO train_multi TF=ALL: estimated peak RAM = 10656 MB (train=479966 val=120011 n_feat=74 seq_len=30)
+2026-04-27 05:54:21,621 INFO train_multi TF=ALL: train=479966 val=120011 (5335 MB tensors)
+2026-04-27 05:54:25,821 INFO train_multi TF=ALL: warm-start detected — using CosineAnnealingLR (lr=3e-05, patience=12)
+2026-04-27 05:54:39,381 INFO train_multi TF=ALL epoch 1/50 train=0.5931 val=0.6110
+2026-04-27 05:54:39,385 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:54:39,385 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:54:39,385 INFO train_multi TF=ALL: new best val=0.6110 — saved
+2026-04-27 05:54:51,326 INFO train_multi TF=ALL epoch 2/50 train=0.5931 val=0.6109
+2026-04-27 05:54:51,330 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:54:51,330 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:54:51,330 INFO train_multi TF=ALL: new best val=0.6109 — saved
+2026-04-27 05:55:03,353 INFO train_multi TF=ALL epoch 3/50 train=0.5924 val=0.6105
+2026-04-27 05:55:03,358 INFO WeightsManifest written → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/weights_manifest.json
+2026-04-27 05:55:03,358 INFO GRULSTMPredictor saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/gru_lstm/model.pt
+2026-04-27 05:55:03,358 INFO train_multi TF=ALL: new best val=0.6105 — saved
+2026-04-27 05:55:15,284 INFO train_multi TF=ALL epoch 4/50 train=0.5925 val=0.6106
+2026-04-27 05:55:27,295 INFO train_multi TF=ALL epoch 5/50 train=0.5922 val=0.6111
+2026-04-27 05:55:39,150 INFO train_multi TF=ALL epoch 6/50 train=0.5920 val=0.6113
+2026-04-27 05:55:51,129 INFO train_multi TF=ALL epoch 7/50 train=0.5920 val=0.6112
+2026-04-27 05:56:03,082 INFO train_multi TF=ALL epoch 8/50 train=0.5917 val=0.6115
+2026-04-27 05:56:15,011 INFO train_multi TF=ALL epoch 9/50 train=0.5916 val=0.6120
+2026-04-27 05:56:27,100 INFO train_multi TF=ALL epoch 10/50 train=0.5915 val=0.6118
+2026-04-27 05:56:39,131 INFO train_multi TF=ALL epoch 11/50 train=0.5917 val=0.6121
+2026-04-27 05:56:51,106 INFO train_multi TF=ALL epoch 12/50 train=0.5911 val=0.6116
+2026-04-27 05:57:03,245 INFO train_multi TF=ALL epoch 13/50 train=0.5911 val=0.6119
+2026-04-27 05:57:15,222 INFO train_multi TF=ALL epoch 14/50 train=0.5907 val=0.6113
+2026-04-27 05:57:27,189 INFO train_multi TF=ALL epoch 15/50 train=0.5905 val=0.6114
+2026-04-27 05:57:27,190 INFO train_multi TF=ALL early stop at epoch 15
+2026-04-27 05:57:27,325 INFO === VectorStore: building similarity indices (parallel feature build) ===
+2026-04-27 05:57:27,326 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
+2026-04-27 05:57:27,326 INFO Retrain complete. Total wall-clock: 249.4s
   DONE  Retrain gru [train-split retrain]
   START Retrain regime [train-split retrain]
-2026-04-27 01:45:37,578 INFO retrain environment: KAGGLE
-2026-04-27 01:45:39,246 INFO Device: CUDA (2 GPU(s))
-2026-04-27 01:45:39,255 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:45:39,256 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:45:39,256 INFO cuDNN benchmark=True, TF32 matmul=True
-2026-04-27 01:45:39,256 INFO PyTorch CPU threads: 4 intra / 2 interop
-2026-04-27 01:45:39,256 INFO Retrain data split: train
-2026-04-27 01:45:39,257 INFO === RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===
-2026-04-27 01:45:39,412 INFO NumExpr defaulting to 4 threads.
-2026-04-27 01:45:39,611 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
-2026-04-27 01:45:39,612 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:45:39,612 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:45:39,612 INFO Regime phase macro_correlations: 0.0s
-2026-04-27 01:45:39,612 INFO Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...
-2026-04-27 01:45:39,651 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
-2026-04-27 01:45:39,652 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,681 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,696 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,720 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,736 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,761 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,776 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,799 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,814 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,837 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,851 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,874 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,888 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,906 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,921 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,945 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,960 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,981 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:39,996 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:40,020 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:45:40,037 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:45:40,076 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:45:40,849 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
-2026-04-27 01:46:05,394 INFO GMM fitted on 58459 samples (mode=htf_bias) — cluster→regime: {2: 0, 0: 1, 1: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
-2026-04-27 01:46:05,396 INFO Regime HTF GMM 'dollar' fitted on 7 4H dfs (3-class bias) in 25.3s
-2026-04-27 01:46:05,396 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
-2026-04-27 01:46:16,666 INFO GMM fitted on 25054 samples (mode=htf_bias) — cluster→regime: {1: 0, 0: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
-2026-04-27 01:46:16,667 INFO Regime HTF GMM 'cross' fitted on 3 4H dfs (3-class bias) in 11.3s
-2026-04-27 01:46:16,670 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
-2026-04-27 01:46:25,111 INFO GMM fitted on 19766 samples (mode=htf_bias) — cluster→regime: {0: 0, 1: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
-2026-04-27 01:46:25,111 INFO Regime HTF GMM 'gold' fitted on 1 4H dfs (3-class bias) in 8.4s
-2026-04-27 01:46:25,111 INFO Regime phase GMM HTF total: 45.0s
-2026-04-27 01:46:25,112 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
-2026-04-27 01:47:41,250 INFO GMM fitted on 76337 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 3: 0, 0: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
-2026-04-27 01:47:41,254 INFO Regime LTF GMM 'dollar' fitted on 7 1H dfs (4-class behaviour) in 76.1s
-2026-04-27 01:47:41,255 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
-2026-04-27 01:48:14,475 INFO GMM fitted on 32715 samples (mode=ltf_behaviour) — cluster→regime: {0: 3, 3: 0, 2: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
-2026-04-27 01:48:14,477 INFO Regime LTF GMM 'cross' fitted on 3 1H dfs (4-class behaviour) in 33.2s
-2026-04-27 01:48:14,477 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
-2026-04-27 01:48:38,169 INFO GMM fitted on 10657 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 1: 0, 0: 2, 3: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
-2026-04-27 01:48:38,171 INFO Regime LTF GMM 'gold' fitted on 1 1H dfs (4-class behaviour) in 23.7s
-2026-04-27 01:48:38,171 INFO Regime phase GMM LTF total: 133.1s
-2026-04-27 01:48:38,289 INFO Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...
-2026-04-27 01:48:38,291 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,292 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,293 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,295 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,295 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,296 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,297 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,298 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,299 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,300 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,302 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:48:38,430 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:38,474 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:38,475 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:38,475 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:38,484 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:38,485 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:38,931 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
-2026-04-27 01:48:38,932 INFO Regime[4H mode=htf_bias]: collected AUDUSD — 8352 samples (group=dollar)
-2026-04-27 01:48:39,131 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,178 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,179 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,180 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,189 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,190 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:39,600 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
-2026-04-27 01:48:39,601 INFO Regime[4H mode=htf_bias]: collected EURGBP — 8352 samples (group=cross)
-2026-04-27 01:48:39,813 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,851 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,852 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,853 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,861 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:39,862 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:40,274 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
-2026-04-27 01:48:40,275 INFO Regime[4H mode=htf_bias]: collected EURJPY — 8352 samples (group=cross)
-2026-04-27 01:48:40,467 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:40,503 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:40,504 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:40,504 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:40,512 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:40,513 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:40,913 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
-2026-04-27 01:48:40,914 INFO Regime[4H mode=htf_bias]: collected EURUSD — 8352 samples (group=dollar)
-2026-04-27 01:48:41,111 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,148 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,149 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,150 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,158 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,159 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:41,577 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
-2026-04-27 01:48:41,578 INFO Regime[4H mode=htf_bias]: collected GBPJPY — 8353 samples (group=cross)
-2026-04-27 01:48:41,767 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,801 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,802 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,803 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,811 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:41,812 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:42,225 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
-2026-04-27 01:48:42,227 INFO Regime[4H mode=htf_bias]: collected GBPUSD — 8353 samples (group=dollar)
-2026-04-27 01:48:42,398 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:42,427 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:42,428 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:42,428 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:42,435 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:42,436 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:42,839 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
-2026-04-27 01:48:42,840 INFO Regime[4H mode=htf_bias]: collected NZDUSD — 8352 samples (group=dollar)
-2026-04-27 01:48:43,023 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,059 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,060 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,060 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,069 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,070 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:43,495 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
-2026-04-27 01:48:43,496 INFO Regime[4H mode=htf_bias]: collected USDCAD — 8352 samples (group=dollar)
-2026-04-27 01:48:43,685 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,720 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,721 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,721 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,730 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:43,731 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:44,147 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
-2026-04-27 01:48:44,149 INFO Regime[4H mode=htf_bias]: collected USDCHF — 8352 samples (group=dollar)
-2026-04-27 01:48:44,342 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:44,381 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:44,382 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:44,383 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:44,392 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:44,393 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:44,801 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
-2026-04-27 01:48:44,803 INFO Regime[4H mode=htf_bias]: collected USDJPY — 8353 samples (group=dollar)
-2026-04-27 01:48:45,094 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:48:45,155 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:48:45,156 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:48:45,157 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:48:45,168 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:48:45,169 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:48:46,062 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
-2026-04-27 01:48:46,064 INFO Regime[4H mode=htf_bias]: collected XAUUSD — 19767 samples (group=gold)
-2026-04-27 01:48:46,261 INFO Regime phase HTF dataset build: 8.0s (103290 samples)
-2026-04-27 01:48:46,261 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/regime_htf.pkl_20260427_014846
-2026-04-27 01:48:46,465 INFO RegimeClassifier[mode=htf_bias] loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl (device=cuda, features=34, n_classes=3)
-2026-04-27 01:48:46,466 INFO RegimeClassifier[mode=htf_bias]: dropped ambiguous labels below 0.40 (kept=38114 dropped=65176 classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728})
-2026-04-27 01:48:46,476 INFO RegimeClassifier[mode=htf_bias]: 38114 samples, classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728}, device=cuda
-2026-04-27 01:48:46,476 INFO RegimeClassifier: sample weights — mean=0.708  ambiguous(<0.4)=0.0%
-2026-04-27 01:48:46,476 INFO RegimeClassifier[mode=htf_bias]: warm start from existing weights
-2026-04-27 01:48:46,476 INFO RegimeClassifier: DataParallel across 2 GPUs
-2026-04-27 01:48:48,887 INFO Regime epoch  1/50 — tr=0.4651 va=1.0124 acc=0.987 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.93}
-2026-04-27 01:48:48,962 INFO Regime epoch  2/50 — tr=0.4652 va=1.0127 acc=0.987
-2026-04-27 01:48:49,034 INFO Regime epoch  3/50 — tr=0.4654 va=1.0136 acc=0.987
-2026-04-27 01:48:49,107 INFO Regime epoch  4/50 — tr=0.4651 va=1.0129 acc=0.987
-2026-04-27 01:48:49,220 INFO Regime epoch  5/50 — tr=0.4654 va=1.0117 acc=0.987 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.929}
-2026-04-27 01:48:49,297 INFO Regime epoch  6/50 — tr=0.4652 va=1.0118 acc=0.987
-2026-04-27 01:48:49,372 INFO Regime epoch  7/50 — tr=0.4654 va=1.0088 acc=0.988
-2026-04-27 01:48:49,446 INFO Regime epoch  8/50 — tr=0.4647 va=1.0076 acc=0.987
-2026-04-27 01:48:49,518 INFO Regime epoch  9/50 — tr=0.4646 va=1.0054 acc=0.988
-2026-04-27 01:48:49,597 INFO Regime epoch 10/50 — tr=0.4645 va=1.0039 acc=0.988 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.932}
-2026-04-27 01:48:49,669 INFO Regime epoch 11/50 — tr=0.4646 va=1.0044 acc=0.988
-2026-04-27 01:48:49,741 INFO Regime epoch 12/50 — tr=0.4642 va=1.0038 acc=0.988
-2026-04-27 01:48:49,812 INFO Regime epoch 13/50 — tr=0.4643 va=0.9992 acc=0.988
-2026-04-27 01:48:49,885 INFO Regime epoch 14/50 — tr=0.4639 va=0.9986 acc=0.989
-2026-04-27 01:48:49,966 INFO Regime epoch 15/50 — tr=0.4639 va=0.9967 acc=0.988 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.933}
-2026-04-27 01:48:50,040 INFO Regime epoch 16/50 — tr=0.4635 va=0.9954 acc=0.989
-2026-04-27 01:48:50,116 INFO Regime epoch 17/50 — tr=0.4635 va=0.9929 acc=0.989
-2026-04-27 01:48:50,188 INFO Regime epoch 18/50 — tr=0.4635 va=0.9913 acc=0.989
-2026-04-27 01:48:50,262 INFO Regime epoch 19/50 — tr=0.4632 va=0.9901 acc=0.989
-2026-04-27 01:48:50,347 INFO Regime epoch 20/50 — tr=0.4632 va=0.9909 acc=0.989 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.941}
-2026-04-27 01:48:50,422 INFO Regime epoch 21/50 — tr=0.4627 va=0.9904 acc=0.990
-2026-04-27 01:48:50,497 INFO Regime epoch 22/50 — tr=0.4630 va=0.9914 acc=0.990
-2026-04-27 01:48:50,568 INFO Regime epoch 23/50 — tr=0.4630 va=0.9885 acc=0.989
-2026-04-27 01:48:50,642 INFO Regime epoch 24/50 — tr=0.4626 va=0.9867 acc=0.989
-2026-04-27 01:48:50,727 INFO Regime epoch 25/50 — tr=0.4624 va=0.9880 acc=0.989 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.941}
-2026-04-27 01:48:50,805 INFO Regime epoch 26/50 — tr=0.4623 va=0.9867 acc=0.990
-2026-04-27 01:48:50,882 INFO Regime epoch 27/50 — tr=0.4626 va=0.9844 acc=0.990
-2026-04-27 01:48:50,958 INFO Regime epoch 28/50 — tr=0.4621 va=0.9860 acc=0.990
-2026-04-27 01:48:51,031 INFO Regime epoch 29/50 — tr=0.4624 va=0.9845 acc=0.990
-2026-04-27 01:48:51,107 INFO Regime epoch 30/50 — tr=0.4623 va=0.9827 acc=0.990 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.947}
-2026-04-27 01:48:51,178 INFO Regime epoch 31/50 — tr=0.4624 va=0.9810 acc=0.990
-2026-04-27 01:48:51,253 INFO Regime epoch 32/50 — tr=0.4621 va=0.9804 acc=0.990
-2026-04-27 01:48:51,324 INFO Regime epoch 33/50 — tr=0.4622 va=0.9811 acc=0.990
-2026-04-27 01:48:51,398 INFO Regime epoch 34/50 — tr=0.4622 va=0.9817 acc=0.990
-2026-04-27 01:48:51,477 INFO Regime epoch 35/50 — tr=0.4618 va=0.9810 acc=0.990 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.945}
-2026-04-27 01:48:51,547 INFO Regime epoch 36/50 — tr=0.4619 va=0.9820 acc=0.990
-2026-04-27 01:48:51,623 INFO Regime epoch 37/50 — tr=0.4618 va=0.9824 acc=0.991
-2026-04-27 01:48:51,701 INFO Regime epoch 38/50 — tr=0.4617 va=0.9794 acc=0.991
-2026-04-27 01:48:51,779 INFO Regime epoch 39/50 — tr=0.4618 va=0.9811 acc=0.991
-2026-04-27 01:48:51,862 INFO Regime epoch 40/50 — tr=0.4621 va=0.9812 acc=0.991 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.95}
-2026-04-27 01:48:51,942 INFO Regime epoch 41/50 — tr=0.4617 va=0.9800 acc=0.991
-2026-04-27 01:48:52,018 INFO Regime epoch 42/50 — tr=0.4618 va=0.9796 acc=0.991
-2026-04-27 01:48:52,093 INFO Regime epoch 43/50 — tr=0.4615 va=0.9797 acc=0.991
-2026-04-27 01:48:52,173 INFO Regime epoch 44/50 — tr=0.4616 va=0.9797 acc=0.991
-2026-04-27 01:48:52,258 INFO Regime epoch 45/50 — tr=0.4615 va=0.9781 acc=0.991 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.95}
-2026-04-27 01:48:52,338 INFO Regime epoch 46/50 — tr=0.4617 va=0.9784 acc=0.990
-2026-04-27 01:48:52,414 INFO Regime epoch 47/50 — tr=0.4618 va=0.9789 acc=0.991
-2026-04-27 01:48:52,485 INFO Regime epoch 48/50 — tr=0.4618 va=0.9785 acc=0.991
-2026-04-27 01:48:52,558 INFO Regime epoch 49/50 — tr=0.4619 va=0.9798 acc=0.990
-2026-04-27 01:48:52,636 INFO Regime epoch 50/50 — tr=0.4618 va=0.9790 acc=0.991 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.948}
-2026-04-27 01:48:52,645 INFO RegimeClassifier[mode=htf_bias] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
-2026-04-27 01:48:52,646 INFO RegimeClassifier[4H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
-2026-04-27 01:48:52,646 INFO Regime phase HTF train: 6.2s
-2026-04-27 01:48:52,786 INFO Regime HTF complete: acc=0.991, n=103290 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.95}
-2026-04-27 01:48:52,788 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:48:52,967 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
-2026-04-27 01:48:52,970 INFO Regime[4H mode=htf_bias] persistence (avg bars/run) on XAUUSD 4H:
+2026-04-27 05:57:29,426 INFO retrain environment: KAGGLE
+2026-04-27 05:57:31,012 INFO Device: CUDA (2 GPU(s))
+2026-04-27 05:57:31,021 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:57:31,021 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:57:31,021 INFO cuDNN benchmark=True, TF32 matmul=True
+2026-04-27 05:57:31,022 INFO PyTorch CPU threads: 4 intra / 2 interop
+2026-04-27 05:57:31,022 INFO Retrain data split: train
+2026-04-27 05:57:31,023 INFO === RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===
+2026-04-27 05:57:31,167 INFO NumExpr defaulting to 4 threads.
+2026-04-27 05:57:31,361 INFO RegimeClassifier: 2 GPU(s) available — training on CUDA
+2026-04-27 05:57:31,361 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 05:57:31,361 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 05:57:31,362 INFO Regime phase macro_correlations: 0.0s
+2026-04-27 05:57:31,362 INFO Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...
+2026-04-27 05:57:31,398 INFO Split boundaries loaded — train≤2021-08-05  val≤2023-08-04  test≤2025-08-05
+2026-04-27 05:57:31,399 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,426 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,440 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,461 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,476 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,498 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,512 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,534 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,548 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,570 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,584 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,606 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,620 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,640 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,655 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,678 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,692 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,714 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,729 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,751 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 05:57:31,768 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:57:31,806 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 05:57:32,590 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
+2026-04-27 05:57:56,215 INFO GMM fitted on 58459 samples (mode=htf_bias) — cluster→regime: {2: 0, 0: 1, 1: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
+2026-04-27 05:57:56,217 INFO Regime HTF GMM 'dollar' fitted on 7 4H dfs (3-class bias) in 24.4s
+2026-04-27 05:57:56,217 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
+2026-04-27 05:58:06,488 INFO GMM fitted on 25054 samples (mode=htf_bias) — cluster→regime: {1: 0, 0: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
+2026-04-27 05:58:06,493 INFO Regime HTF GMM 'cross' fitted on 3 4H dfs (3-class bias) in 10.3s
+2026-04-27 05:58:06,493 INFO GMM fit: timeframe=4H mode=htf_bias → n_bar=50 n_components=3
+2026-04-27 05:58:14,476 INFO GMM fitted on 19766 samples (mode=htf_bias) — cluster→regime: {0: 0, 1: 1, 2: 2} dist: {'BIAS_UP': 1, 'BIAS_DOWN': 1, 'BIAS_NEUTRAL': 1}
+2026-04-27 05:58:14,480 INFO Regime HTF GMM 'gold' fitted on 1 4H dfs (3-class bias) in 8.0s
+2026-04-27 05:58:14,480 INFO Regime phase GMM HTF total: 42.7s
+2026-04-27 05:58:14,481 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
+2026-04-27 05:59:26,288 INFO GMM fitted on 76337 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 3: 0, 0: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
+2026-04-27 05:59:26,291 INFO Regime LTF GMM 'dollar' fitted on 7 1H dfs (4-class behaviour) in 71.8s
+2026-04-27 05:59:26,292 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
+2026-04-27 05:59:58,217 INFO GMM fitted on 32715 samples (mode=ltf_behaviour) — cluster→regime: {0: 3, 3: 0, 2: 2, 1: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
+2026-04-27 05:59:58,221 INFO Regime LTF GMM 'cross' fitted on 3 1H dfs (4-class behaviour) in 31.9s
+2026-04-27 05:59:58,222 INFO GMM fit: timeframe=1H mode=ltf_behaviour → n_bar=24 n_components=4
+2026-04-27 06:00:20,497 INFO GMM fitted on 10657 samples (mode=ltf_behaviour) — cluster→regime: {2: 3, 1: 0, 0: 2, 3: 1} dist: {'TRENDING': 1, 'RANGING': 1, 'CONSOLIDATING': 1, 'VOLATILE': 1}
+2026-04-27 06:00:20,498 INFO Regime LTF GMM 'gold' fitted on 1 1H dfs (4-class behaviour) in 22.3s
+2026-04-27 06:00:20,498 INFO Regime phase GMM LTF total: 126.0s
+2026-04-27 06:00:20,601 INFO Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...
+2026-04-27 06:00:20,603 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,604 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,605 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,607 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,607 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,609 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,610 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,611 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,612 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,613 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:20,615 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 06:00:20,737 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:20,779 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:20,780 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:20,781 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:20,790 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:20,791 INFO Loaded AUDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:21,212 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1465, 'BIAS_DOWN': 1510, 'BIAS_NEUTRAL': 5427}  ambiguous=5175 (total=8402)  short_runs_zeroed=591
+2026-04-27 06:00:21,213 INFO Regime[4H mode=htf_bias]: collected AUDUSD — 8352 samples (group=dollar)
+2026-04-27 06:00:21,390 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:21,429 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:21,430 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:21,430 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:21,438 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:21,439 INFO Loaded EURGBP/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:21,809 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1511, 'BIAS_DOWN': 1252, 'BIAS_NEUTRAL': 5639}  ambiguous=5684 (total=8402)  short_runs_zeroed=726
+2026-04-27 06:00:21,811 INFO Regime[4H mode=htf_bias]: collected EURGBP — 8352 samples (group=cross)
+2026-04-27 06:00:21,996 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,031 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,032 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,033 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,041 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,041 INFO Loaded EURJPY/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:22,410 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1437, 'BIAS_DOWN': 1457, 'BIAS_NEUTRAL': 5508}  ambiguous=5360 (total=8402)  short_runs_zeroed=675
+2026-04-27 06:00:22,411 INFO Regime[4H mode=htf_bias]: collected EURJPY — 8352 samples (group=cross)
+2026-04-27 06:00:22,580 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,612 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,613 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,613 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,621 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:22,622 INFO Loaded EURUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:22,988 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1523, 'BIAS_DOWN': 1428, 'BIAS_NEUTRAL': 5451}  ambiguous=5266 (total=8402)  short_runs_zeroed=681
+2026-04-27 06:00:22,989 INFO Regime[4H mode=htf_bias]: collected EURUSD — 8352 samples (group=dollar)
+2026-04-27 06:00:23,175 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,209 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,210 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,211 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,218 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,219 INFO Loaded GBPJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:23,593 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1384, 'BIAS_DOWN': 1626, 'BIAS_NEUTRAL': 5393}  ambiguous=5134 (total=8403)  short_runs_zeroed=577
+2026-04-27 06:00:23,595 INFO Regime[4H mode=htf_bias]: collected GBPJPY — 8353 samples (group=cross)
+2026-04-27 06:00:23,761 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,795 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,796 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,796 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,804 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:23,805 INFO Loaded GBPUSD/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:24,174 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1547, 'BIAS_DOWN': 1440, 'BIAS_NEUTRAL': 5416}  ambiguous=5307 (total=8403)  short_runs_zeroed=774
+2026-04-27 06:00:24,175 INFO Regime[4H mode=htf_bias]: collected GBPUSD — 8353 samples (group=dollar)
+2026-04-27 06:00:24,334 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:24,362 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:24,363 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:24,364 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:24,371 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:24,372 INFO Loaded NZDUSD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:24,745 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1483, 'BIAS_DOWN': 1454, 'BIAS_NEUTRAL': 5465}  ambiguous=5312 (total=8402)  short_runs_zeroed=629
+2026-04-27 06:00:24,746 INFO Regime[4H mode=htf_bias]: collected NZDUSD — 8352 samples (group=dollar)
+2026-04-27 06:00:24,920 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:24,953 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:24,954 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:24,954 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:24,962 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:24,963 INFO Loaded USDCAD/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:25,338 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1285, 'BIAS_DOWN': 1704, 'BIAS_NEUTRAL': 5413}  ambiguous=5199 (total=8402)  short_runs_zeroed=615
+2026-04-27 06:00:25,339 INFO Regime[4H mode=htf_bias]: collected USDCAD — 8352 samples (group=dollar)
+2026-04-27 06:00:25,519 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:25,554 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:25,555 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:25,555 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:25,563 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:25,564 INFO Loaded USDCHF/4H split=train: 8402 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:25,975 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1344, 'BIAS_DOWN': 1614, 'BIAS_NEUTRAL': 5444}  ambiguous=5368 (total=8402)  short_runs_zeroed=616
+2026-04-27 06:00:25,976 INFO Regime[4H mode=htf_bias]: collected USDCHF — 8352 samples (group=dollar)
+2026-04-27 06:00:26,155 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:26,189 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:26,190 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:26,190 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:26,198 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:26,198 INFO Loaded USDJPY/4H split=train: 8403 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:26,562 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 1305, 'BIAS_DOWN': 1589, 'BIAS_NEUTRAL': 5509}  ambiguous=5275 (total=8403)  short_runs_zeroed=589
+2026-04-27 06:00:26,563 INFO Regime[4H mode=htf_bias]: collected USDJPY — 8353 samples (group=dollar)
+2026-04-27 06:00:26,835 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:26,891 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:26,893 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:26,893 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:26,903 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:26,905 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 06:00:27,710 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
+2026-04-27 06:00:27,712 INFO Regime[4H mode=htf_bias]: collected XAUUSD — 19767 samples (group=gold)
+2026-04-27 06:00:27,879 INFO Regime phase HTF dataset build: 7.3s (103290 samples)
+2026-04-27 06:00:27,879 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/regime_htf.pkl_20260427_060027
+2026-04-27 06:00:28,081 INFO RegimeClassifier[mode=htf_bias] loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl (device=cuda, features=34, n_classes=3)
+2026-04-27 06:00:28,082 INFO RegimeClassifier[mode=htf_bias]: dropped ambiguous labels below 0.40 (kept=38114 dropped=65176 classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728})
+2026-04-27 06:00:28,092 INFO RegimeClassifier[mode=htf_bias]: 38114 samples, classes={'BIAS_UP': 15218, 'BIAS_DOWN': 15168, 'BIAS_NEUTRAL': 7728}, device=cuda
+2026-04-27 06:00:28,093 INFO RegimeClassifier: sample weights — mean=0.708  ambiguous(<0.4)=0.0%
+2026-04-27 06:00:28,093 INFO RegimeClassifier[mode=htf_bias]: warm start from existing weights
+2026-04-27 06:00:28,093 INFO RegimeClassifier: DataParallel across 2 GPUs
+2026-04-27 06:00:30,334 INFO Regime epoch  1/50 — tr=0.4837 va=1.1539 acc=0.968 per_class={'BIAS_UP': 0.999, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.83}
+2026-04-27 06:00:30,403 INFO Regime epoch  2/50 — tr=0.4833 va=1.1559 acc=0.968
+2026-04-27 06:00:30,471 INFO Regime epoch  3/50 — tr=0.4831 va=1.1539 acc=0.968
+2026-04-27 06:00:30,539 INFO Regime epoch  4/50 — tr=0.4837 va=1.1550 acc=0.968
+2026-04-27 06:00:30,617 INFO Regime epoch  5/50 — tr=0.4829 va=1.1512 acc=0.968 per_class={'BIAS_UP': 0.998, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.826}
+2026-04-27 06:00:30,691 INFO Regime epoch  6/50 — tr=0.4832 va=1.1504 acc=0.968
+2026-04-27 06:00:30,765 INFO Regime epoch  7/50 — tr=0.4822 va=1.1486 acc=0.969
+2026-04-27 06:00:30,837 INFO Regime epoch  8/50 — tr=0.4819 va=1.1476 acc=0.969
+2026-04-27 06:00:30,905 INFO Regime epoch  9/50 — tr=0.4815 va=1.1418 acc=0.969
+2026-04-27 06:00:30,981 INFO Regime epoch 10/50 — tr=0.4813 va=1.1414 acc=0.970 per_class={'BIAS_UP': 0.999, 'BIAS_DOWN': 0.999, 'BIAS_NEUTRAL': 0.836}
+2026-04-27 06:00:31,049 INFO Regime epoch 11/50 — tr=0.4805 va=1.1374 acc=0.970
+2026-04-27 06:00:31,118 INFO Regime epoch 12/50 — tr=0.4797 va=1.1332 acc=0.971
+2026-04-27 06:00:31,186 INFO Regime epoch 13/50 — tr=0.4792 va=1.1340 acc=0.972
+2026-04-27 06:00:31,254 INFO Regime epoch 14/50 — tr=0.4792 va=1.1304 acc=0.972
+2026-04-27 06:00:31,326 INFO Regime epoch 15/50 — tr=0.4783 va=1.1266 acc=0.972 per_class={'BIAS_UP': 0.999, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.846}
+2026-04-27 06:00:31,394 INFO Regime epoch 16/50 — tr=0.4773 va=1.1260 acc=0.972
+2026-04-27 06:00:31,466 INFO Regime epoch 17/50 — tr=0.4777 va=1.1218 acc=0.973
+2026-04-27 06:00:31,540 INFO Regime epoch 18/50 — tr=0.4774 va=1.1186 acc=0.974
+2026-04-27 06:00:31,613 INFO Regime epoch 19/50 — tr=0.4771 va=1.1157 acc=0.974
+2026-04-27 06:00:31,686 INFO Regime epoch 20/50 — tr=0.4766 va=1.1148 acc=0.974 per_class={'BIAS_UP': 0.999, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.858}
+2026-04-27 06:00:31,760 INFO Regime epoch 21/50 — tr=0.4756 va=1.1127 acc=0.974
+2026-04-27 06:00:31,837 INFO Regime epoch 22/50 — tr=0.4757 va=1.1119 acc=0.975
+2026-04-27 06:00:31,910 INFO Regime epoch 23/50 — tr=0.4752 va=1.1107 acc=0.975
+2026-04-27 06:00:31,984 INFO Regime epoch 24/50 — tr=0.4752 va=1.1068 acc=0.975
+2026-04-27 06:00:32,060 INFO Regime epoch 25/50 — tr=0.4752 va=1.1063 acc=0.975 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.864}
+2026-04-27 06:00:32,134 INFO Regime epoch 26/50 — tr=0.4747 va=1.1041 acc=0.976
+2026-04-27 06:00:32,209 INFO Regime epoch 27/50 — tr=0.4742 va=1.1043 acc=0.976
+2026-04-27 06:00:32,282 INFO Regime epoch 28/50 — tr=0.4743 va=1.1012 acc=0.977
+2026-04-27 06:00:32,351 INFO Regime epoch 29/50 — tr=0.4738 va=1.1004 acc=0.977
+2026-04-27 06:00:32,424 INFO Regime epoch 30/50 — tr=0.4734 va=1.1001 acc=0.977 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.872}
+2026-04-27 06:00:32,496 INFO Regime epoch 31/50 — tr=0.4739 va=1.0973 acc=0.978
+2026-04-27 06:00:32,563 INFO Regime epoch 32/50 — tr=0.4739 va=1.0958 acc=0.978
+2026-04-27 06:00:32,634 INFO Regime epoch 33/50 — tr=0.4736 va=1.0957 acc=0.978
+2026-04-27 06:00:32,705 INFO Regime epoch 34/50 — tr=0.4735 va=1.0955 acc=0.978
+2026-04-27 06:00:32,781 INFO Regime epoch 35/50 — tr=0.4732 va=1.0935 acc=0.978 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.877}
+2026-04-27 06:00:32,850 INFO Regime epoch 36/50 — tr=0.4727 va=1.0930 acc=0.979
+2026-04-27 06:00:32,919 INFO Regime epoch 37/50 — tr=0.4726 va=1.0932 acc=0.978
+2026-04-27 06:00:32,987 INFO Regime epoch 38/50 — tr=0.4727 va=1.0918 acc=0.978
+2026-04-27 06:00:33,058 INFO Regime epoch 39/50 — tr=0.4734 va=1.0904 acc=0.979
+2026-04-27 06:00:33,134 INFO Regime epoch 40/50 — tr=0.4728 va=1.0891 acc=0.979 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.884}
+2026-04-27 06:00:33,203 INFO Regime epoch 41/50 — tr=0.4724 va=1.0912 acc=0.979
+2026-04-27 06:00:33,269 INFO Regime epoch 42/50 — tr=0.4725 va=1.0899 acc=0.979
+2026-04-27 06:00:33,337 INFO Regime epoch 43/50 — tr=0.4729 va=1.0907 acc=0.979
+2026-04-27 06:00:33,405 INFO Regime epoch 44/50 — tr=0.4724 va=1.0923 acc=0.979
+2026-04-27 06:00:33,479 INFO Regime epoch 45/50 — tr=0.4724 va=1.0916 acc=0.979 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.883}
+2026-04-27 06:00:33,548 INFO Regime epoch 46/50 — tr=0.4724 va=1.0919 acc=0.979
+2026-04-27 06:00:33,619 INFO Regime epoch 47/50 — tr=0.4728 va=1.0933 acc=0.978
+2026-04-27 06:00:33,684 INFO Regime epoch 48/50 — tr=0.4724 va=1.0917 acc=0.978
+2026-04-27 06:00:33,751 INFO Regime epoch 49/50 — tr=0.4721 va=1.0934 acc=0.979
+2026-04-27 06:00:33,825 INFO Regime epoch 50/50 — tr=0.4724 va=1.0930 acc=0.978 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.88}
+2026-04-27 06:00:33,825 INFO Regime early stop at epoch 50 (no_improve=10)
+2026-04-27 06:00:33,833 INFO RegimeClassifier[mode=htf_bias] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
+2026-04-27 06:00:33,833 INFO RegimeClassifier[4H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_htf.pkl
+2026-04-27 06:00:33,834 INFO Regime phase HTF train: 5.8s
+2026-04-27 06:00:33,955 INFO Regime HTF complete: acc=0.979, n=103290 per_class={'BIAS_UP': 1.0, 'BIAS_DOWN': 1.0, 'BIAS_NEUTRAL': 0.884}
+2026-04-27 06:00:33,957 INFO Loaded XAUUSD/4H split=train: 19817 bars (2009-03-15 → 2021-08-05)
+2026-04-27 06:00:34,113 INFO Rule labels HTF_BIAS [4H]: {'BIAS_UP': 4338, 'BIAS_DOWN': 3212, 'BIAS_NEUTRAL': 12267}  ambiguous=12096 (total=19817)  short_runs_zeroed=1542
+2026-04-27 06:00:34,116 INFO Regime[4H mode=htf_bias] persistence (avg bars/run) on XAUUSD 4H:
 {'BIAS_UP': 11.41578947368421, 'BIAS_DOWN': 10.635761589403973, 'BIAS_NEUTRAL': 17.960468521229867}
-2026-04-27 01:48:52,974 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (all labels):
+2026-04-27 06:00:34,120 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (all labels):
 {'BIAS_UP': {'n': 4338, 'mean': 0.00011110466582543088, 'mean_over_std': 0.027632581210502927}, 'BIAS_DOWN': {'n': 3212, 'mean': 6.063430222660252e-05, 'mean_over_std': 0.013898489590377157}, 'BIAS_NEUTRAL': {'n': 12266, 'mean': 1.2151554902814046e-05, 'mean_over_std': 0.0031957000513162357}}
-2026-04-27 01:48:52,975 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (clean labels conf>=0.40):
+2026-04-27 06:00:34,120 INFO Regime[4H mode=htf_bias] return separation on XAUUSD 4H (clean labels conf>=0.40):
 {'BIAS_UP': {'n': 3651, 'mean': 0.0002852242108836959, 'mean_over_std': 0.07015017232491755}, 'BIAS_DOWN': {'n': 2644, 'mean': -0.00014900749618981248, 'mean_over_std': -0.03333037041298237}, 'BIAS_NEUTRAL': {'n': 1376, 'mean': 9.595797941249082e-05, 'mean_over_std': 0.02492411099521803}}
-2026-04-27 01:48:52,975 INFO Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...
-2026-04-27 01:48:52,977 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,979 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,980 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,982 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,984 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,986 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,987 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,989 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,991 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,992 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:52,995 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:48:53,007 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,010 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,011 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,011 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,012 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,014 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:53,712 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
-2026-04-27 01:48:53,715 INFO Regime[1H mode=ltf_behaviour]: collected AUDUSD — 32688 samples (group=dollar)
-2026-04-27 01:48:53,865 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,868 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,869 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,869 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,869 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:53,872 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:54,545 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
-2026-04-27 01:48:54,548 INFO Regime[1H mode=ltf_behaviour]: collected EURGBP — 32688 samples (group=cross)
-2026-04-27 01:48:54,705 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:54,707 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:54,708 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:54,708 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:54,709 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:54,711 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:55,372 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
-2026-04-27 01:48:55,375 INFO Regime[1H mode=ltf_behaviour]: collected EURJPY — 32690 samples (group=cross)
-2026-04-27 01:48:55,524 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:55,528 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:55,528 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:55,529 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:55,529 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:55,531 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:56,184 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
-2026-04-27 01:48:56,187 INFO Regime[1H mode=ltf_behaviour]: collected EURUSD — 32689 samples (group=dollar)
-2026-04-27 01:48:56,340 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:56,342 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:56,343 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:56,343 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:56,344 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:56,346 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:56,997 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
-2026-04-27 01:48:57,000 INFO Regime[1H mode=ltf_behaviour]: collected GBPJPY — 32690 samples (group=cross)
-2026-04-27 01:48:57,147 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:57,151 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:57,152 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:57,153 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:57,153 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:57,155 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:57,816 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
-2026-04-27 01:48:57,819 INFO Regime[1H mode=ltf_behaviour]: collected GBPUSD — 32689 samples (group=dollar)
-2026-04-27 01:48:57,967 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:57,969 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:57,970 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:57,970 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:57,970 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
-2026-04-27 01:48:57,972 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:58,617 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
-2026-04-27 01:48:58,620 INFO Regime[1H mode=ltf_behaviour]: collected NZDUSD — 32689 samples (group=dollar)
-2026-04-27 01:48:58,767 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:58,769 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:58,770 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:58,771 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:58,771 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:58,773 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:48:59,468 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
-2026-04-27 01:48:59,471 INFO Regime[1H mode=ltf_behaviour]: collected USDCAD — 32690 samples (group=dollar)
-2026-04-27 01:48:59,621 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:59,624 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:59,625 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:59,625 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:59,626 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:48:59,628 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:49:00,270 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
-2026-04-27 01:49:00,273 INFO Regime[1H mode=ltf_behaviour]: collected USDCHF — 32691 samples (group=dollar)
-2026-04-27 01:49:00,423 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:49:00,425 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:49:00,426 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:49:00,427 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:49:00,427 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
-2026-04-27 01:49:00,429 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
-2026-04-27 01:49:01,079 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
-2026-04-27 01:49:01,082 INFO Regime[1H mode=ltf_behaviour]: collected USDJPY — 32693 samples (group=dollar)
-2026-04-27 01:49:01,238 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:49:01,242 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:49:01,243 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:49:01,243 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:49:01,244 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
-2026-04-27 01:49:01,247 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:49:02,643 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
-2026-04-27 01:49:02,650 INFO Regime[1H mode=ltf_behaviour]: collected XAUUSD — 74574 samples (group=gold)
-2026-04-27 01:49:02,983 INFO Regime phase LTF dataset build: 10.0s (401471 samples)
-2026-04-27 01:49:02,984 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/regime_ltf.pkl_20260427_014902
-2026-04-27 01:49:02,989 INFO RegimeClassifier[mode=ltf_behaviour] loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl (device=cuda, features=18, n_classes=4)
-2026-04-27 01:49:02,992 INFO RegimeClassifier[mode=ltf_behaviour]: dropped ambiguous labels below 0.40 (kept=299185 dropped=102286 classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127})
-2026-04-27 01:49:03,053 INFO RegimeClassifier[mode=ltf_behaviour]: 299185 samples, classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127}, device=cuda
-2026-04-27 01:49:03,054 INFO RegimeClassifier: sample weights — mean=0.693  ambiguous(<0.4)=0.0%
-2026-04-27 01:49:03,054 INFO RegimeClassifier[mode=ltf_behaviour]: warm start from existing weights
-2026-04-27 01:49:03,054 INFO RegimeClassifier: DataParallel across 2 GPUs
-2026-04-27 01:49:03,657 INFO Regime epoch  1/50 — tr=0.6170 va=1.2146 acc=0.841 per_class={'TRENDING': 0.827, 'RANGING': 0.772, 'CONSOLIDATING': 0.869, 'VOLATILE': 0.891}
-2026-04-27 01:49:04,190 INFO Regime epoch  2/50 — tr=0.6168 va=1.2135 acc=0.840
-2026-04-27 01:49:04,744 INFO Regime epoch  3/50 — tr=0.6168 va=1.2130 acc=0.842
-2026-04-27 01:49:05,290 INFO Regime epoch  4/50 — tr=0.6166 va=1.2161 acc=0.842
-2026-04-27 01:49:05,896 INFO Regime epoch  5/50 — tr=0.6166 va=1.2150 acc=0.841 per_class={'TRENDING': 0.824, 'RANGING': 0.778, 'CONSOLIDATING': 0.862, 'VOLATILE': 0.895}
-2026-04-27 01:49:06,423 INFO Regime epoch  6/50 — tr=0.6167 va=1.2123 acc=0.840
-2026-04-27 01:49:06,958 INFO Regime epoch  7/50 — tr=0.6168 va=1.2146 acc=0.842
-2026-04-27 01:49:07,511 INFO Regime epoch  8/50 — tr=0.6165 va=1.2157 acc=0.844
-2026-04-27 01:49:08,050 INFO Regime epoch  9/50 — tr=0.6165 va=1.2143 acc=0.841
-2026-04-27 01:49:08,653 INFO Regime epoch 10/50 — tr=0.6164 va=1.2128 acc=0.841 per_class={'TRENDING': 0.825, 'RANGING': 0.775, 'CONSOLIDATING': 0.868, 'VOLATILE': 0.892}
-2026-04-27 01:49:09,214 INFO Regime epoch 11/50 — tr=0.6163 va=1.2132 acc=0.840
-2026-04-27 01:49:09,745 INFO Regime epoch 12/50 — tr=0.6166 va=1.2120 acc=0.840
-2026-04-27 01:49:10,271 INFO Regime epoch 13/50 — tr=0.6161 va=1.2119 acc=0.841
-2026-04-27 01:49:10,807 INFO Regime epoch 14/50 — tr=0.6159 va=1.2108 acc=0.842
-2026-04-27 01:49:11,388 INFO Regime epoch 15/50 — tr=0.6161 va=1.2132 acc=0.841 per_class={'TRENDING': 0.823, 'RANGING': 0.778, 'CONSOLIDATING': 0.864, 'VOLATILE': 0.897}
-2026-04-27 01:49:11,934 INFO Regime epoch 16/50 — tr=0.6158 va=1.2121 acc=0.841
-2026-04-27 01:49:12,493 INFO Regime epoch 17/50 — tr=0.6158 va=1.2096 acc=0.841
-2026-04-27 01:49:13,074 INFO Regime epoch 18/50 — tr=0.6157 va=1.2109 acc=0.841
-2026-04-27 01:49:13,622 INFO Regime epoch 19/50 — tr=0.6155 va=1.2118 acc=0.842
-2026-04-27 01:49:14,230 INFO Regime epoch 20/50 — tr=0.6156 va=1.2106 acc=0.841 per_class={'TRENDING': 0.826, 'RANGING': 0.78, 'CONSOLIDATING': 0.861, 'VOLATILE': 0.895}
-2026-04-27 01:49:14,775 INFO Regime epoch 21/50 — tr=0.6154 va=1.2080 acc=0.842
-2026-04-27 01:49:15,317 INFO Regime epoch 22/50 — tr=0.6151 va=1.2096 acc=0.842
-2026-04-27 01:49:15,886 INFO Regime epoch 23/50 — tr=0.6152 va=1.2098 acc=0.843
-2026-04-27 01:49:16,432 INFO Regime epoch 24/50 — tr=0.6150 va=1.2135 acc=0.843
-2026-04-27 01:49:17,039 INFO Regime epoch 25/50 — tr=0.6150 va=1.2107 acc=0.843 per_class={'TRENDING': 0.829, 'RANGING': 0.779, 'CONSOLIDATING': 0.861, 'VOLATILE': 0.895}
-2026-04-27 01:49:17,606 INFO Regime epoch 26/50 — tr=0.6153 va=1.2104 acc=0.841
-2026-04-27 01:49:18,172 INFO Regime epoch 27/50 — tr=0.6151 va=1.2085 acc=0.842
-2026-04-27 01:49:18,721 INFO Regime epoch 28/50 — tr=0.6148 va=1.2097 acc=0.844
-2026-04-27 01:49:19,298 INFO Regime epoch 29/50 — tr=0.6151 va=1.2048 acc=0.843
-2026-04-27 01:49:19,910 INFO Regime epoch 30/50 — tr=0.6151 va=1.2052 acc=0.842 per_class={'TRENDING': 0.827, 'RANGING': 0.78, 'CONSOLIDATING': 0.863, 'VOLATILE': 0.891}
-2026-04-27 01:49:20,473 INFO Regime epoch 31/50 — tr=0.6146 va=1.2051 acc=0.841
-2026-04-27 01:49:21,034 INFO Regime epoch 32/50 — tr=0.6147 va=1.2101 acc=0.843
-2026-04-27 01:49:21,612 INFO Regime epoch 33/50 — tr=0.6148 va=1.2111 acc=0.842
-2026-04-27 01:49:22,175 INFO Regime epoch 34/50 — tr=0.6149 va=1.2067 acc=0.842
-2026-04-27 01:49:22,762 INFO Regime epoch 35/50 — tr=0.6150 va=1.2078 acc=0.842 per_class={'TRENDING': 0.829, 'RANGING': 0.783, 'CONSOLIDATING': 0.853, 'VOLATILE': 0.896}
-2026-04-27 01:49:23,300 INFO Regime epoch 36/50 — tr=0.6147 va=1.2063 acc=0.843
-2026-04-27 01:49:23,868 INFO Regime epoch 37/50 — tr=0.6145 va=1.2073 acc=0.843
-2026-04-27 01:49:24,405 INFO Regime epoch 38/50 — tr=0.6148 va=1.2045 acc=0.842
-2026-04-27 01:49:24,964 INFO Regime epoch 39/50 — tr=0.6147 va=1.2080 acc=0.844
-2026-04-27 01:49:25,566 INFO Regime epoch 40/50 — tr=0.6147 va=1.2028 acc=0.840 per_class={'TRENDING': 0.822, 'RANGING': 0.777, 'CONSOLIDATING': 0.869, 'VOLATILE': 0.89}
-2026-04-27 01:49:26,118 INFO Regime epoch 41/50 — tr=0.6148 va=1.2067 acc=0.841
-2026-04-27 01:49:26,681 INFO Regime epoch 42/50 — tr=0.6148 va=1.2045 acc=0.842
-2026-04-27 01:49:27,217 INFO Regime epoch 43/50 — tr=0.6145 va=1.2071 acc=0.841
-2026-04-27 01:49:27,788 INFO Regime epoch 44/50 — tr=0.6147 va=1.2087 acc=0.844
-2026-04-27 01:49:28,394 INFO Regime epoch 45/50 — tr=0.6146 va=1.2085 acc=0.842 per_class={'TRENDING': 0.826, 'RANGING': 0.781, 'CONSOLIDATING': 0.861, 'VOLATILE': 0.894}
-2026-04-27 01:49:28,974 INFO Regime epoch 46/50 — tr=0.6148 va=1.2067 acc=0.842
-2026-04-27 01:49:29,548 INFO Regime epoch 47/50 — tr=0.6146 va=1.2058 acc=0.842
-2026-04-27 01:49:30,075 INFO Regime epoch 48/50 — tr=0.6147 va=1.2074 acc=0.841
-2026-04-27 01:49:30,602 INFO Regime epoch 49/50 — tr=0.6147 va=1.2094 acc=0.842
-2026-04-27 01:49:31,200 INFO Regime epoch 50/50 — tr=0.6146 va=1.2057 acc=0.844 per_class={'TRENDING': 0.833, 'RANGING': 0.778, 'CONSOLIDATING': 0.868, 'VOLATILE': 0.887}
-2026-04-27 01:49:31,200 INFO Regime early stop at epoch 50 (no_improve=10)
-2026-04-27 01:49:31,243 INFO RegimeClassifier[mode=ltf_behaviour] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
-2026-04-27 01:49:31,243 INFO RegimeClassifier[1H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
-2026-04-27 01:49:31,246 INFO Regime phase LTF train: 28.3s
-2026-04-27 01:49:31,390 INFO Regime LTF complete: acc=0.840, n=401471 per_class={'TRENDING': 0.822, 'RANGING': 0.777, 'CONSOLIDATING': 0.869, 'VOLATILE': 0.89}
-2026-04-27 01:49:31,394 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
-2026-04-27 01:49:31,955 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
-2026-04-27 01:49:31,960 INFO Regime[1H mode=ltf_behaviour] persistence (avg bars/run) on XAUUSD 1H:
+2026-04-27 06:00:34,121 INFO Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...
+2026-04-27 06:00:34,123 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,125 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,126 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,128 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,129 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,131 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,132 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,134 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,136 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,137 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,140 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 06:00:34,151 INFO Loaded AUDUSD/5M split=all: 704678 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,155 INFO Loaded AUDUSD/15M split=all: 234948 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,155 INFO Loaded AUDUSD/1H split=all: 58741 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,156 INFO Loaded AUDUSD/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,156 INFO Loaded AUDUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,158 INFO Loaded AUDUSD/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:34,786 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13046, 'RANGING': 8399, 'CONSOLIDATING': 4410, 'VOLATILE': 6883}  ambiguous=9161 (total=32738)  short_runs_zeroed=4986
+2026-04-27 06:00:34,789 INFO Regime[1H mode=ltf_behaviour]: collected AUDUSD — 32688 samples (group=dollar)
+2026-04-27 06:00:34,925 INFO Loaded EURGBP/5M split=all: 704756 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,927 INFO Loaded EURGBP/15M split=all: 234979 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,928 INFO Loaded EURGBP/1H split=all: 58748 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,928 INFO Loaded EURGBP/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,929 INFO Loaded EURGBP/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:34,931 INFO Loaded EURGBP/1H split=train: 32738 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:35,549 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12945, 'RANGING': 9013, 'CONSOLIDATING': 4150, 'VOLATILE': 6630}  ambiguous=8659 (total=32738)  short_runs_zeroed=4347
+2026-04-27 06:00:35,552 INFO Regime[1H mode=ltf_behaviour]: collected EURGBP — 32688 samples (group=cross)
+2026-04-27 06:00:35,688 INFO Loaded EURJPY/5M split=all: 704417 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:35,690 INFO Loaded EURJPY/15M split=all: 234916 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:35,691 INFO Loaded EURJPY/1H split=all: 58735 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:35,691 INFO Loaded EURJPY/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:35,692 INFO Loaded EURJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:35,694 INFO Loaded EURJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:36,323 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12559, 'RANGING': 8639, 'CONSOLIDATING': 4711, 'VOLATILE': 6831}  ambiguous=8676 (total=32740)  short_runs_zeroed=4399
+2026-04-27 06:00:36,326 INFO Regime[1H mode=ltf_behaviour]: collected EURJPY — 32690 samples (group=cross)
+2026-04-27 06:00:36,460 INFO Loaded EURUSD/5M split=all: 704977 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:36,462 INFO Loaded EURUSD/15M split=all: 235026 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:36,463 INFO Loaded EURUSD/1H split=all: 58760 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:36,463 INFO Loaded EURUSD/4H split=all: 15258 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:36,464 INFO Loaded EURUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:36,466 INFO Loaded EURUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:37,053 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13098, 'RANGING': 8495, 'CONSOLIDATING': 4264, 'VOLATILE': 6882}  ambiguous=8202 (total=32739)  short_runs_zeroed=3955
+2026-04-27 06:00:37,056 INFO Regime[1H mode=ltf_behaviour]: collected EURUSD — 32689 samples (group=dollar)
+2026-04-27 06:00:37,200 INFO Loaded GBPJPY/5M split=all: 704330 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,202 INFO Loaded GBPJPY/15M split=all: 234918 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,203 INFO Loaded GBPJPY/1H split=all: 58736 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,203 INFO Loaded GBPJPY/4H split=all: 15259 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,204 INFO Loaded GBPJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,206 INFO Loaded GBPJPY/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:37,801 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13031, 'RANGING': 8429, 'CONSOLIDATING': 4358, 'VOLATILE': 6922}  ambiguous=8551 (total=32740)  short_runs_zeroed=4397
+2026-04-27 06:00:37,804 INFO Regime[1H mode=ltf_behaviour]: collected GBPJPY — 32690 samples (group=cross)
+2026-04-27 06:00:37,941 INFO Loaded GBPUSD/5M split=all: 704770 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,944 INFO Loaded GBPUSD/15M split=all: 234968 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,944 INFO Loaded GBPUSD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,945 INFO Loaded GBPUSD/4H split=all: 15256 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,945 INFO Loaded GBPUSD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:37,947 INFO Loaded GBPUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:38,538 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13541, 'RANGING': 8392, 'CONSOLIDATING': 4176, 'VOLATILE': 6630}  ambiguous=8016 (total=32739)  short_runs_zeroed=3724
+2026-04-27 06:00:38,541 INFO Regime[1H mode=ltf_behaviour]: collected GBPUSD — 32689 samples (group=dollar)
+2026-04-27 06:00:38,671 INFO Loaded NZDUSD/5M split=all: 523942 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:38,673 INFO Loaded NZDUSD/15M split=all: 174689 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:38,674 INFO Loaded NZDUSD/1H split=all: 43675 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:38,674 INFO Loaded NZDUSD/4H split=all: 11210 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:38,674 INFO Loaded NZDUSD/1D split=all: 1965 bars (2016-01-04 → 2025-08-05)
+2026-04-27 06:00:38,676 INFO Loaded NZDUSD/1H split=train: 32739 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:39,259 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13234, 'RANGING': 8307, 'CONSOLIDATING': 4424, 'VOLATILE': 6774}  ambiguous=8604 (total=32739)  short_runs_zeroed=4898
+2026-04-27 06:00:39,262 INFO Regime[1H mode=ltf_behaviour]: collected NZDUSD — 32689 samples (group=dollar)
+2026-04-27 06:00:39,397 INFO Loaded USDCAD/5M split=all: 704701 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:39,399 INFO Loaded USDCAD/15M split=all: 234962 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:39,400 INFO Loaded USDCAD/1H split=all: 58746 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:39,400 INFO Loaded USDCAD/4H split=all: 15255 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:39,401 INFO Loaded USDCAD/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:39,403 INFO Loaded USDCAD/1H split=train: 32740 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:40,006 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13326, 'RANGING': 8606, 'CONSOLIDATING': 3935, 'VOLATILE': 6873}  ambiguous=7757 (total=32740)  short_runs_zeroed=3880
+2026-04-27 06:00:40,009 INFO Regime[1H mode=ltf_behaviour]: collected USDCAD — 32690 samples (group=dollar)
+2026-04-27 06:00:40,140 INFO Loaded USDCHF/5M split=all: 704572 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,145 INFO Loaded USDCHF/15M split=all: 234958 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,146 INFO Loaded USDCHF/1H split=all: 58747 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,146 INFO Loaded USDCHF/4H split=all: 15257 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,146 INFO Loaded USDCHF/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,148 INFO Loaded USDCHF/1H split=train: 32741 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:40,729 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 12380, 'RANGING': 9410, 'CONSOLIDATING': 4358, 'VOLATILE': 6593}  ambiguous=8293 (total=32741)  short_runs_zeroed=3896
+2026-04-27 06:00:40,732 INFO Regime[1H mode=ltf_behaviour]: collected USDCHF — 32691 samples (group=dollar)
+2026-04-27 06:00:40,870 INFO Loaded USDJPY/5M split=all: 704798 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,872 INFO Loaded USDJPY/15M split=all: 234955 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,873 INFO Loaded USDJPY/1H split=all: 58740 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,874 INFO Loaded USDJPY/4H split=all: 15254 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,874 INFO Loaded USDJPY/1D split=all: 2648 bars (2016-01-04 → 2026-02-27)
+2026-04-27 06:00:40,876 INFO Loaded USDJPY/1H split=train: 32743 bars (2016-01-04 → 2021-08-05)
+2026-04-27 06:00:41,479 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 13172, 'RANGING': 8282, 'CONSOLIDATING': 4697, 'VOLATILE': 6592}  ambiguous=8252 (total=32743)  short_runs_zeroed=4275
+2026-04-27 06:00:41,482 INFO Regime[1H mode=ltf_behaviour]: collected USDJPY — 32693 samples (group=dollar)
+2026-04-27 06:00:41,636 INFO Loaded XAUUSD/5M split=all: 1201053 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:41,639 INFO Loaded XAUUSD/15M split=all: 401431 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:41,641 INFO Loaded XAUUSD/1H split=all: 101228 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:41,641 INFO Loaded XAUUSD/4H split=all: 27183 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:41,641 INFO Loaded XAUUSD/1D split=all: 5296 bars (2009-03-15 → 2026-03-20)
+2026-04-27 06:00:41,645 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 06:00:43,018 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
+2026-04-27 06:00:43,023 INFO Regime[1H mode=ltf_behaviour]: collected XAUUSD — 74574 samples (group=gold)
+2026-04-27 06:00:43,311 INFO Regime phase LTF dataset build: 9.2s (401471 samples)
+2026-04-27 06:00:43,312 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/regime_ltf.pkl_20260427_060043
+2026-04-27 06:00:43,317 INFO RegimeClassifier[mode=ltf_behaviour] loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl (device=cuda, features=18, n_classes=4)
+2026-04-27 06:00:43,320 INFO RegimeClassifier[mode=ltf_behaviour]: dropped ambiguous labels below 0.40 (kept=299185 dropped=102286 classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127})
+2026-04-27 06:00:43,379 INFO RegimeClassifier[mode=ltf_behaviour]: 299185 samples, classes={'TRENDING': 139297, 'RANGING': 40562, 'CONSOLIDATING': 45199, 'VOLATILE': 74127}, device=cuda
+2026-04-27 06:00:43,380 INFO RegimeClassifier: sample weights — mean=0.693  ambiguous(<0.4)=0.0%
+2026-04-27 06:00:43,380 INFO RegimeClassifier[mode=ltf_behaviour]: warm start from existing weights
+2026-04-27 06:00:43,380 INFO RegimeClassifier: DataParallel across 2 GPUs
+2026-04-27 06:00:43,974 INFO Regime epoch  1/50 — tr=0.6266 va=1.2482 acc=0.821 per_class={'TRENDING': 0.79, 'RANGING': 0.764, 'CONSOLIDATING': 0.829, 'VOLATILE': 0.91}
+2026-04-27 06:00:44,471 INFO Regime epoch  2/50 — tr=0.6267 va=1.2501 acc=0.820
+2026-04-27 06:00:44,996 INFO Regime epoch  3/50 — tr=0.6266 va=1.2513 acc=0.821
+2026-04-27 06:00:45,509 INFO Regime epoch  4/50 — tr=0.6263 va=1.2488 acc=0.820
+2026-04-27 06:00:46,096 INFO Regime epoch  5/50 — tr=0.6261 va=1.2501 acc=0.823 per_class={'TRENDING': 0.795, 'RANGING': 0.765, 'CONSOLIDATING': 0.821, 'VOLATILE': 0.912}
+2026-04-27 06:00:46,612 INFO Regime epoch  6/50 — tr=0.6263 va=1.2476 acc=0.824
+2026-04-27 06:00:47,123 INFO Regime epoch  7/50 — tr=0.6261 va=1.2459 acc=0.820
+2026-04-27 06:00:47,628 INFO Regime epoch  8/50 — tr=0.6260 va=1.2467 acc=0.823
+2026-04-27 06:00:48,127 INFO Regime epoch  9/50 — tr=0.6256 va=1.2459 acc=0.825
+2026-04-27 06:00:48,689 INFO Regime epoch 10/50 — tr=0.6254 va=1.2459 acc=0.825 per_class={'TRENDING': 0.795, 'RANGING': 0.765, 'CONSOLIDATING': 0.834, 'VOLATILE': 0.911}
+2026-04-27 06:00:49,207 INFO Regime epoch 11/50 — tr=0.6251 va=1.2401 acc=0.822
+2026-04-27 06:00:49,732 INFO Regime epoch 12/50 — tr=0.6250 va=1.2415 acc=0.826
+2026-04-27 06:00:50,235 INFO Regime epoch 13/50 — tr=0.6247 va=1.2374 acc=0.827
+2026-04-27 06:00:50,731 INFO Regime epoch 14/50 — tr=0.6244 va=1.2415 acc=0.828
+2026-04-27 06:00:51,287 INFO Regime epoch 15/50 — tr=0.6241 va=1.2414 acc=0.827 per_class={'TRENDING': 0.799, 'RANGING': 0.763, 'CONSOLIDATING': 0.843, 'VOLATILE': 0.906}
+2026-04-27 06:00:51,792 INFO Regime epoch 16/50 — tr=0.6238 va=1.2421 acc=0.828
+2026-04-27 06:00:52,307 INFO Regime epoch 17/50 — tr=0.6239 va=1.2401 acc=0.826
+2026-04-27 06:00:52,826 INFO Regime epoch 18/50 — tr=0.6233 va=1.2357 acc=0.826
+2026-04-27 06:00:53,338 INFO Regime epoch 19/50 — tr=0.6232 va=1.2424 acc=0.829
+2026-04-27 06:00:53,871 INFO Regime epoch 20/50 — tr=0.6232 va=1.2373 acc=0.829 per_class={'TRENDING': 0.802, 'RANGING': 0.766, 'CONSOLIDATING': 0.846, 'VOLATILE': 0.904}
+2026-04-27 06:00:54,369 INFO Regime epoch 21/50 — tr=0.6227 va=1.2368 acc=0.828
+2026-04-27 06:00:54,863 INFO Regime epoch 22/50 — tr=0.6229 va=1.2331 acc=0.831
+2026-04-27 06:00:55,357 INFO Regime epoch 23/50 — tr=0.6225 va=1.2396 acc=0.830
+2026-04-27 06:00:55,891 INFO Regime epoch 24/50 — tr=0.6227 va=1.2338 acc=0.828
+2026-04-27 06:00:56,417 INFO Regime epoch 25/50 — tr=0.6220 va=1.2354 acc=0.829 per_class={'TRENDING': 0.801, 'RANGING': 0.766, 'CONSOLIDATING': 0.851, 'VOLATILE': 0.906}
+2026-04-27 06:00:56,914 INFO Regime epoch 26/50 — tr=0.6221 va=1.2333 acc=0.831
+2026-04-27 06:00:57,437 INFO Regime epoch 27/50 — tr=0.6220 va=1.2351 acc=0.832
+2026-04-27 06:00:57,947 INFO Regime epoch 28/50 — tr=0.6219 va=1.2333 acc=0.833
+2026-04-27 06:00:58,456 INFO Regime epoch 29/50 — tr=0.6216 va=1.2374 acc=0.832
+2026-04-27 06:00:59,004 INFO Regime epoch 30/50 — tr=0.6218 va=1.2356 acc=0.830 per_class={'TRENDING': 0.803, 'RANGING': 0.766, 'CONSOLIDATING': 0.845, 'VOLATILE': 0.911}
+2026-04-27 06:00:59,512 INFO Regime epoch 31/50 — tr=0.6216 va=1.2337 acc=0.831
+2026-04-27 06:01:00,003 INFO Regime epoch 32/50 — tr=0.6217 va=1.2320 acc=0.829
+2026-04-27 06:01:00,487 INFO Regime epoch 33/50 — tr=0.6217 va=1.2349 acc=0.831
+2026-04-27 06:01:00,993 INFO Regime epoch 34/50 — tr=0.6215 va=1.2340 acc=0.832
+2026-04-27 06:01:01,531 INFO Regime epoch 35/50 — tr=0.6216 va=1.2357 acc=0.833 per_class={'TRENDING': 0.808, 'RANGING': 0.768, 'CONSOLIDATING': 0.849, 'VOLATILE': 0.907}
+2026-04-27 06:01:02,071 INFO Regime epoch 36/50 — tr=0.6215 va=1.2322 acc=0.832
+2026-04-27 06:01:02,604 INFO Regime epoch 37/50 — tr=0.6213 va=1.2313 acc=0.830
+2026-04-27 06:01:03,096 INFO Regime epoch 38/50 — tr=0.6212 va=1.2293 acc=0.832
+2026-04-27 06:01:03,617 INFO Regime epoch 39/50 — tr=0.6215 va=1.2312 acc=0.832
+2026-04-27 06:01:04,177 INFO Regime epoch 40/50 — tr=0.6213 va=1.2295 acc=0.833 per_class={'TRENDING': 0.808, 'RANGING': 0.765, 'CONSOLIDATING': 0.859, 'VOLATILE': 0.902}
+2026-04-27 06:01:04,713 INFO Regime epoch 41/50 — tr=0.6213 va=1.2355 acc=0.833
+2026-04-27 06:01:05,218 INFO Regime epoch 42/50 — tr=0.6212 va=1.2326 acc=0.832
+2026-04-27 06:01:05,760 INFO Regime epoch 43/50 — tr=0.6212 va=1.2290 acc=0.833
+2026-04-27 06:01:06,282 INFO Regime epoch 44/50 — tr=0.6212 va=1.2299 acc=0.832
+2026-04-27 06:01:06,824 INFO Regime epoch 45/50 — tr=0.6210 va=1.2325 acc=0.834 per_class={'TRENDING': 0.81, 'RANGING': 0.765, 'CONSOLIDATING': 0.86, 'VOLATILE': 0.901}
+2026-04-27 06:01:07,336 INFO Regime epoch 46/50 — tr=0.6213 va=1.2312 acc=0.831
+2026-04-27 06:01:07,843 INFO Regime epoch 47/50 — tr=0.6210 va=1.2338 acc=0.834
+2026-04-27 06:01:08,339 INFO Regime epoch 48/50 — tr=0.6211 va=1.2342 acc=0.831
+2026-04-27 06:01:08,855 INFO Regime epoch 49/50 — tr=0.6211 va=1.2317 acc=0.832
+2026-04-27 06:01:09,406 INFO Regime epoch 50/50 — tr=0.6210 va=1.2290 acc=0.833 per_class={'TRENDING': 0.809, 'RANGING': 0.77, 'CONSOLIDATING': 0.853, 'VOLATILE': 0.904}
+2026-04-27 06:01:09,446 INFO RegimeClassifier[mode=ltf_behaviour] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
+2026-04-27 06:01:09,447 INFO RegimeClassifier[1H] saved to /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/regime_ltf.pkl
+2026-04-27 06:01:09,449 INFO Regime phase LTF train: 26.1s
+2026-04-27 06:01:09,574 INFO Regime LTF complete: acc=0.833, n=401471 per_class={'TRENDING': 0.809, 'RANGING': 0.77, 'CONSOLIDATING': 0.853, 'VOLATILE': 0.904}
+2026-04-27 06:01:09,577 INFO Loaded XAUUSD/1H split=train: 74624 bars (2009-03-15 → 2021-08-05)
+2026-04-27 06:01:10,088 INFO Rule labels LTF_BEHAVIOUR [1H]: {'TRENDING': 29965, 'RANGING': 19624, 'CONSOLIDATING': 10050, 'VOLATILE': 14985}  ambiguous=18441 (total=74624)  short_runs_zeroed=9134
+2026-04-27 06:01:10,092 INFO Regime[1H mode=ltf_behaviour] persistence (avg bars/run) on XAUUSD 1H:
 {'TRENDING': 9.355291913830783, 'RANGING': 6.096303199751476, 'CONSOLIDATING': 5.598885793871866, 'VOLATILE': 6.771351107094442}
-2026-04-27 01:49:31,968 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (all labels):
+2026-04-27 06:01:10,099 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (all labels):
 {'TRENDING': {'n': 29965, 'mean': 2.149062259083323e-05, 'mean_over_std': 0.011155601434349563}, 'RANGING': {'n': 19623, 'mean': -3.254493608872846e-06, 'mean_over_std': -0.001761415548292494}, 'CONSOLIDATING': {'n': 10050, 'mean': -3.039756158146958e-06, 'mean_over_std': -0.001792488091618151}, 'VOLATILE': {'n': 14985, 'mean': 1.8102764458593193e-05, 'mean_over_std': 0.006974696291378742}}
-2026-04-27 01:49:31,969 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (clean labels conf>=0.40):
+2026-04-27 06:01:10,100 INFO Regime[1H mode=ltf_behaviour] return separation on XAUUSD 1H (clean labels conf>=0.40):
 {'TRENDING': {'n': 26145, 'mean': 2.874435605138053e-05, 'mean_over_std': 0.01595450632691917}, 'RANGING': {'n': 7858, 'mean': 1.7829776785521727e-05, 'mean_over_std': 0.011851561804467463}, 'CONSOLIDATING': {'n': 8543, 'mean': 7.845231961250924e-06, 'mean_over_std': 0.004915839521549481}, 'VOLATILE': {'n': 13636, 'mean': 5.480114267306668e-06, 'mean_over_std': 0.0020378119917389375}}
-2026-04-27 01:49:31,969 INFO Regime retrain total: 232.7s (504761 samples)
-2026-04-27 01:49:31,971 INFO GRU: 2 CUDA device(s) available — using GPU
-2026-04-27 01:49:31,971 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:49:31,972 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:49:31,972 INFO === VectorStore: building similarity indices (parallel feature build) ===
-2026-04-27 01:49:31,972 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
-2026-04-27 01:49:31,972 INFO Retrain complete. Total wall-clock: 232.7s
+2026-04-27 06:01:10,100 INFO Regime retrain total: 219.1s (504761 samples)
+2026-04-27 06:01:10,102 INFO GRU: 2 CUDA device(s) available — using GPU
+2026-04-27 06:01:10,102 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 06:01:10,102 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 06:01:10,102 INFO === VectorStore: building similarity indices (parallel feature build) ===
+2026-04-27 06:01:10,103 ERROR _index_embeddings_post_train failed (non-fatal): faiss not installed. Install with: pip install faiss-gpu  (or faiss-cpu)
+2026-04-27 06:01:10,103 INFO Retrain complete. Total wall-clock: 219.1s
   DONE  Retrain regime [train-split retrain]
   START Retrain quality [train-split retrain]
-2026-04-27 01:49:33,485 INFO retrain environment: KAGGLE
-2026-04-27 01:49:35,214 INFO Device: CUDA (2 GPU(s))
-2026-04-27 01:49:35,225 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:49:35,225 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:49:35,225 INFO cuDNN benchmark=True, TF32 matmul=True
-2026-04-27 01:49:35,226 INFO PyTorch CPU threads: 4 intra / 2 interop
-2026-04-27 01:49:35,226 INFO Retrain data split: train
-2026-04-27 01:49:35,227 INFO === QualityScorer retrain ===
-2026-04-27 01:49:35,379 INFO NumExpr defaulting to 4 threads.
-2026-04-27 01:49:35,584 INFO QualityScorer: CUDA available — using GPU
-2026-04-27 01:49:35,797 INFO QualityScorer loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/quality_scorer.pkl (device=cuda)
-2026-04-27 01:49:35,800 INFO QualityScorer: skipped 82 journal records outside allowed splits ['live', 'paper', 'production', 'train']
-2026-04-27 01:49:35,802 INFO Quality phase label creation: 0.0s (0 trades)
-2026-04-27 01:49:35,802 INFO Retrain complete. Total wall-clock: 0.6s
+2026-04-27 06:01:11,402 INFO retrain environment: KAGGLE
+2026-04-27 06:01:12,998 INFO Device: CUDA (2 GPU(s))
+2026-04-27 06:01:13,008 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 06:01:13,008 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 06:01:13,008 INFO cuDNN benchmark=True, TF32 matmul=True
+2026-04-27 06:01:13,008 INFO PyTorch CPU threads: 4 intra / 2 interop
+2026-04-27 06:01:13,008 INFO Retrain data split: train
+2026-04-27 06:01:13,009 INFO === QualityScorer retrain ===
+2026-04-27 06:01:13,154 INFO NumExpr defaulting to 4 threads.
+2026-04-27 06:01:13,341 INFO QualityScorer: CUDA available — using GPU
+2026-04-27 06:01:13,342 INFO QualityScorer: skipped 49 journal records outside allowed splits ['live', 'paper', 'production', 'train']
+2026-04-27 06:01:13,344 INFO Quality phase label creation: 0.0s (0 trades)
+2026-04-27 06:01:13,344 INFO Retrain complete. Total wall-clock: 0.3s
   WARN  Retrain quality failed (exit 1) — continuing
   START Retrain rl [train-split retrain]
-2026-04-27 01:49:36,552 INFO retrain environment: KAGGLE
-2026-04-27 01:49:38,265 INFO Device: CUDA (2 GPU(s))
-2026-04-27 01:49:38,277 INFO   GPU 0: Tesla T4 (15.6 GB)
-2026-04-27 01:49:38,277 INFO   GPU 1: Tesla T4 (15.6 GB)
-2026-04-27 01:49:38,277 INFO cuDNN benchmark=True, TF32 matmul=True
-2026-04-27 01:49:38,277 INFO PyTorch CPU threads: 4 intra / 2 interop
-2026-04-27 01:49:38,278 INFO Retrain data split: train
-2026-04-27 01:49:38,279 INFO === RLAgent (PPO) retrain ===
-2026-04-27 01:49:38,286 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/rl_ppo → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/rl_ppo_20260427_014938
-2026-04-27 01:49:42.063366: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-04-27 06:01:13,913 INFO retrain environment: KAGGLE
+2026-04-27 06:01:15,554 INFO Device: CUDA (2 GPU(s))
+2026-04-27 06:01:15,565 INFO   GPU 0: Tesla T4 (15.6 GB)
+2026-04-27 06:01:15,566 INFO   GPU 1: Tesla T4 (15.6 GB)
+2026-04-27 06:01:15,566 INFO cuDNN benchmark=True, TF32 matmul=True
+2026-04-27 06:01:15,566 INFO PyTorch CPU threads: 4 intra / 2 interop
+2026-04-27 06:01:15,566 INFO Retrain data split: train
+2026-04-27 06:01:15,567 INFO === RLAgent (PPO) retrain ===
+2026-04-27 06:01:15,574 INFO Backed up /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/rl_ppo → /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/backups/rl_ppo_20260427_060115
+2026-04-27 06:01:15,576 INFO RLAgent: skipped 49 journal records outside allowed splits ['live', 'paper', 'production', 'train']
+2026-04-27 06:01:15,576 INFO RL phase episode loading: 0.0s (0 episodes)
+2026-04-27 06:01:19.201552: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
 WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-E0000 00:00:1777254582.331935   59852 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
-E0000 00:00:1777254582.399503   59852 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
-W0000 00:00:1777254582.953685   59852 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1777254582.953727   59852 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1777254582.953730   59852 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1777254582.953733   59852 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-2026-04-27 01:49:57,900 INFO NumExpr defaulting to 4 threads.
+E0000 00:00:1777269679.431068   84712 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1777269679.503472   84712 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1777269680.071405   84712 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1777269680.071446   84712 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1777269680.071449   84712 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1777269680.071452   84712 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-04-27 06:01:34,231 INFO NumExpr defaulting to 4 threads.
 Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
 Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
 Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
 See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
-2026-04-27 01:50:01,631 INFO RLAgent: PPO model loaded from /kaggle/working/Multi-Bot/trading-system/trading-engine/weights/rl_ppo/model.zip
-2026-04-27 01:50:01,634 INFO RLAgent: skipped 82 journal records outside allowed splits ['live', 'paper', 'production', 'train']
-2026-04-27 01:50:01,634 INFO RL phase episode loading: 0.0s (0 episodes)
-2026-04-27 01:50:01,636 INFO RLAgent: skipped 82 journal records outside allowed splits ['live', 'paper', 'production', 'train']
-2026-04-27 01:50:01,636 WARNING RLAgent.retrain: only 0 episodes — skipping
-2026-04-27 01:50:01,637 INFO RL phase PPO train: 0.0s | total: 23.4s
-2026-04-27 01:50:01,638 INFO Retrain complete. Total wall-clock: 23.4s
+2026-04-27 06:01:36,287 INFO RLAgent: skipped 49 journal records outside allowed splits ['live', 'paper', 'production', 'train']
+2026-04-27 06:01:36,287 WARNING RLAgent.retrain: only 0 episodes — skipping
+2026-04-27 06:01:36,287 INFO RL phase PPO train: 20.7s | total: 20.7s
+2026-04-27 06:01:36,288 INFO Retrain complete. Total wall-clock: 20.7s
   WARN  Retrain rl failed (exit 1) — continuing
 
 === Round 3: Backtest on last 3yr (post-retrain evaluation) ===
   START Round 3 - Post-retrain backtest (last 3yr)
-2026-04-27 01:50:03,983 INFO === STEP 6: BACKTEST (round3) ===
-2026-04-27 01:50:03,984 INFO BT_WINDOW=round3 — post-retrain eval: 2022-08-05 → 2025-08-05 (last 3yr)
-2026-04-27 01:50:03,984 INFO ================================================================
+2026-04-27 06:01:38,170 INFO === STEP 6: BACKTEST (round3) ===
+2026-04-27 06:01:38,171 INFO BT_WINDOW=round3 — post-retrain eval: 2022-08-05 → 2025-08-05 (last 3yr)
+2026-04-27 06:01:38,171 INFO ================================================================
   ROUND 3 / 3
 ================================================================
-2026-04-27 01:50:03,985 INFO Round 3 — running backtest: 2022-08-05 → 2025-08-05 (ml_trader, shared ML cache)
-2026-04-27 01:53:12,483 WARNING ml_trader: portfolio drawdown 8.2% — halting all trading
-2026-04-27 01:53:13,175 INFO Round 3 backtest — 67 trades | avg WR=40.3% | avg PF=2.19 | avg Sharpe=5.01
-2026-04-27 01:53:13,175 INFO   ml_trader: 67 trades | WR=40.3% | PF=2.19 | Return=48.5% | DD=8.2% | Sharpe=5.01
+2026-04-27 06:01:38,172 INFO Round 3 — running backtest: 2022-08-05 → 2025-08-05 (ml_trader, shared ML cache)
+2026-04-27 06:01:40,525 WARNING QualityScorer unavailable (weights missing or load failed)
+2026-04-27 06:04:41,275 WARNING ml_trader: portfolio drawdown 8.1% after trade exit — halting all trading
+2026-04-27 06:04:41,945 INFO Round 3 backtest — 66 trades | avg WR=30.3% | avg PF=1.21 | avg Sharpe=1.23
+2026-04-27 06:04:41,945 INFO   ml_trader: 66 trades | WR=30.3% | PF=1.21 | Return=8.2% | DD=8.1% | Sharpe=1.23
 INFO  Loading: /kaggle/working/Multi-Bot/trading-system/backtesting/results/backtest_round_3.json
-INFO  Total trades: 67
-INFO  Diagnostics CSV → /kaggle/working/Multi-Bot/trading-system/trading-engine/logs/backtest_diagnostics.csv (67 rows)
+INFO  Total trades: 66
+/usr/local/lib/python3.12/dist-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.12/dist-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+INFO  Diagnostics CSV → /kaggle/working/Multi-Bot/trading-system/trading-engine/logs/backtest_diagnostics.csv (66 rows)
   DONE  Round 3 - Post-retrain backtest (last 3yr)
   Saved Round 3 result → round3_summary.json
 
 ======================================================================
   BLIND BACKTEST PIPELINE COMPLETE
 ======================================================================
-  Round 1 (val window)          trades=60  WR=28.3%  PF=0.998  Sharpe=-0.014
-  Round 2 (blind test)          trades=22  WR=27.3%  PF=1.483  Sharpe=2.258
-  Round 3 (last 3yr)            trades=67  WR=40.3%  PF=2.189  Sharpe=5.012
+  Round 1 (val window)          trades=22  WR=13.6%  PF=0.521  Sharpe=-3.943
+  Round 2 (blind test)          trades=27  WR=22.2%  PF=1.159  Sharpe=0.870
+  Round 3 (last 3yr)            trades=66  WR=30.3%  PF=1.214  Sharpe=1.229
 
 
 WARNING: GITHUB_TOKEN not set — skipping GitHub push
-2026-04-27 01:53:13,466 INFO Round 3: wrote 67 journal entries (total in file: 149)
+2026-04-27 06:04:42,185 INFO Round 3: wrote 66 journal entries (total in file: 115)
