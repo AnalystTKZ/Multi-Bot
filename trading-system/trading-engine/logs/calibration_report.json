@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-04-27T07:47:08.874885+00:00",
+  "traders": {
+    "all": {
+      "trader_id": "all",
+      "bins": [
+        {
+          "predicted_range": "0.60-0.65",
+          "actual_win_rate": 0.2308,
+          "count": 13
+        },
+        {
+          "predicted_range": "0.65-0.70",
+          "actual_win_rate": 0.4615,
+          "count": 13
+        },
+        {
+          "predicted_range": "0.70-0.75",
+          "actual_win_rate": 0.2857,
+          "count": 14
+        },
+        {
+          "predicted_range": "0.75-0.80",
+          "actual_win_rate": 0.1818,
+          "count": 11
+        },
+        {
+          "predicted_range": "0.80-0.90",
+          "actual_win_rate": 0.3846,
+          "count": 13
+        }
+      ],
+      "monotonic": false,
+      "reliable": false,
+      "note": "Non-monotonic calibration: 2/4 pairs violated. Consider retraining QualityScorer."
+    },
+    "ml_trader": {
+      "trader_id": "ml_trader",
+      "bins": [
+        {
+          "predicted_range": "0.60-0.65",
+          "actual_win_rate": 0.2308,
+          "count": 13
+        },
+        {
+          "predicted_range": "0.65-0.70",
+          "actual_win_rate": 0.4615,
+          "count": 13
+        },
+        {
+          "predicted_range": "0.70-0.75",
+          "actual_win_rate": 0.2857,
+          "count": 14
+        },
+        {
+          "predicted_range": "0.75-0.80",
+          "actual_win_rate": 0.1818,
+          "count": 11
+        },
+        {
+          "predicted_range": "0.80-0.90",
+          "actual_win_rate": 0.3846,
+          "count": 13
+        }
+      ],
+      "monotonic": false,
+      "reliable": false,
+      "note": "Non-monotonic calibration: 2/4 pairs violated. Consider retraining QualityScorer."
+    }
+  },
+  "run_id": "bt_20260427_074402",
+  "source_split": "combined_eval",
+  "bt_start": "2022-08-05",
+  "bt_end": "2025-08-05",
+  "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6"
+}
