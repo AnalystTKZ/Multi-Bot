@@ -99,9 +99,9 @@ RISK_PER_TRADE     = 0.01
 CAPITAL_PER_TRADER = 1.00
 COMMISSION_PCT     = 0.001
 SLIPPAGE_PCT       = 0.0002
-MAX_DAILY_LOSS_PCT = 0.02
-MAX_DRAWDOWN_PCT   = 0.20
-COOLDOWN_BARS      = 10
+MAX_DAILY_LOSS_PCT = 1.00
+MAX_DRAWDOWN_PCT   = 1.00
+COOLDOWN_BARS      = int(os.getenv("COOLDOWN_BARS", "1"))
 MAX_HOLD_BARS      = 200
 MIN_CONFIDENCE     = float(os.getenv("MIN_CONFIDENCE", "0.0"))
 _BACKTEST_WARMUP = {
@@ -612,10 +612,10 @@ def _build_ml_cache(
 # Signal config — resolved once at module level (env vars don't change mid-run).
 _SCFG = {
     "max_uncertainty": float(os.getenv("MAX_UNCERTAINTY",          "2.0")),
-    "dir_thresh":      float(os.getenv("ML_DIRECTION_THRESHOLD",   "0.58")),
-    "neutral_thresh":  float(os.getenv("NEUTRAL_BIAS_THRESHOLD",   "0.58")),
+    "dir_thresh":      float(os.getenv("ML_DIRECTION_THRESHOLD",   "0.50")),
+    "neutral_thresh":  float(os.getenv("NEUTRAL_BIAS_THRESHOLD",   "0.50")),
     "vol_thr":         float(os.getenv("VOLATILE_ENTRY_THRESHOLD",
-                                       os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))),
+                                       os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))),
     "block_consol":    os.getenv("BLOCK_LTF_CONSOLIDATING", "0").lower() in ("1","true","yes"),
     "sl_mult":         float(os.getenv("SL_ATR_MULT", "1.5")),
     "rr":              float(os.getenv("RR_DEFAULT",  "2.0")),
@@ -888,7 +888,7 @@ def _run_symbol_epoch(
     halted       = False
     first_live_idx = max(200, int(df.index.searchsorted(start_ts, side="left")))
 
-    _dir_thresh     = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
+    _dir_thresh     = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))
     _density_lambda = float(os.getenv("DENSITY_LAMBDA", "0.12"))
 
     for i in range(first_live_idx, len(df)):

@@ -121,6 +121,25 @@ Generated artifacts were deleted from:
 
 The directories were kept so future pipeline runs can recreate outputs cleanly.
 
+## High-Trade Reset Update
+
+After the fresh `output.md` run still halted early, the research defaults were loosened for the next rebuild:
+
+- Daily-loss and portfolio-drawdown halt defaults are now `100%`.
+- Backtest step 6 now defaults to high-trade research mode with `BACKTEST_ENFORCE_DAILY_HALT=0`.
+- Max concurrent positions and same-direction correlation caps were raised to `25`.
+- ML direction, neutral-bias, volatile-entry, and PM confidence floors were lowered to `0.50`.
+- Per-symbol backtest cooldown now defaults to `1` bar.
+
+Generated artifacts were cleared again, including:
+
+- `trading-engine/weights`
+- `trading-engine/backtest_results`
+- `trading-engine/logs`
+- `ml_training/metrics`
+
+This leaves the repository ready for a fresh, unconstrained weight rebuild and new high-trade-count backtests.
+
 ## Verification
 
 Syntax checks passed with:

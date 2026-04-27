@@ -27,14 +27,15 @@ class Settings(BaseSettings):
     RISK_PER_TRADE: float = 0.01           # 1% per trade
 
     # Risk limits
-    MAX_DAILY_LOSS_PCT: float = 0.02
-    MAX_DRAWDOWN_PCT: float = 0.08
-    MAX_CONCURRENT_POSITIONS: int = 2
+    MAX_DAILY_LOSS_PCT: float = 1.00
+    MAX_DRAWDOWN_PCT: float = 1.00
+    MAX_CONCURRENT_POSITIONS: int = 25
 
     # ML thresholds
     ML_QUALITY_THRESHOLD_DEFAULT: float = 0.55
-    ML_DIRECTION_THRESHOLD: float = 0.58
+    ML_DIRECTION_THRESHOLD: float = 0.50
     RL_ACTION_CONFIDENCE_MIN: float = 0.45
+    PM_MIN_CONFIDENCE: float = 0.50
 
     # Session windows (UTC hours, inclusive start / exclusive end)
     ASIAN_SESSION_START: int = 0

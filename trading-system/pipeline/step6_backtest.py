@@ -86,11 +86,18 @@ def _build_env() -> dict:
     env.setdefault("RETRAIN_CPU_WORKERS", _n)
     env.setdefault("MAX_PARALLEL_SYMBOL_LOADS", "4")
     env.setdefault("MAX_PARALLEL_CACHE_BUILDS", "4")
-    # Production-mode evaluation is the default. Research/journal-generation runs
-    # can still opt out explicitly with BACKTEST_ENFORCE_DAILY_HALT=0 or
-    # BACKTEST_COMPOUND_EQUITY=0, but production promotion must validate these.
-    env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "1")
+    # High-trade research mode is the default for fresh weight generation.
+    # Set BACKTEST_ENFORCE_DAILY_HALT=1 when validating production promotion.
+    env.setdefault("BACKTEST_ENFORCE_DAILY_HALT", "0")
     env.setdefault("BACKTEST_COMPOUND_EQUITY", "1")
+    env.setdefault("MAX_DAILY_LOSS_PCT", "1.0")
+    env.setdefault("MAX_DRAWDOWN_PCT", "1.0")
+    env.setdefault("MAX_CONCURRENT_POSITIONS", "25")
+    env.setdefault("PM_MIN_CONFIDENCE", "0.50")
+    env.setdefault("ML_DIRECTION_THRESHOLD", "0.50")
+    env.setdefault("NEUTRAL_BIAS_THRESHOLD", "0.50")
+    env.setdefault("VOLATILE_ENTRY_THRESHOLD", "0.50")
+    env.setdefault("COOLDOWN_BARS", "1")
     return env
 
 

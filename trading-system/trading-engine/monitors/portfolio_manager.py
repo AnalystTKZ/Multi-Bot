@@ -7,7 +7,7 @@ Responsibilities
 2. TP1 partial close (50%) → SL to break-even.
 3. TP2 full close of remainder.
 4. Trailing stop after TP1 (1×ATR behind price).
-5. Correlation filter — max 2 positions per directional currency group.
+5. Correlation filter — configurable high-trade cap per directional currency group.
 6. Session-end forced close.
 7. Daily risk budget per trader.
 8. Volatility-adjusted position sizing (ATR scalar, clamped [0.5, 1.25]).
@@ -57,7 +57,7 @@ _CURRENCY_GROUPS: Dict[str, str] = {
     "GBPJPY": "gbp_cross",
 }
 
-_MAX_SAME_GROUP = 2   # max positions in the same directional group
+_MAX_SAME_GROUP = 25  # max positions in the same directional group
 
 
 class PortfolioManager:
@@ -128,7 +128,7 @@ class PortfolioManager:
         # 1. Daily loss budget
         account    = float(getattr(self._settings, "ACCOUNT_BALANCE", 10000))
         alloc      = account * float(getattr(self._settings, "CAPITAL_PER_TRADER", 0.20))
-        budget     = alloc * float(getattr(self._settings, "MAX_DAILY_LOSS_PCT", 0.02))
+        budget     = alloc * float(getattr(self._settings, "MAX_DAILY_LOSS_PCT", 1.00))
         daily_loss = abs(min(0.0, self._daily_pnl[trader_id]))
         if daily_loss >= budget:
             logger.info("PM: %s daily budget exhausted (%.2f/%.2f) — skip",
@@ -333,15 +333,15 @@ class PortfolioManager:
         Returns (tp1_mult, tp2_mult) as multiples of SL distance.
         Minimum enforced R:R is 1:2 (tp1_mult ≥ 2.0).
         Signals should be accepted once they clear the upstream ML direction gate,
-        which defaults to 0.58 in the unified ML trader. The R:R curve still gets
+        which defaults to 0.50 in the unified ML trader. The R:R curve still gets
         more ambitious as confidence rises, but we no longer hard-kill the whole
-        trade band between 0.58 and 0.70.
+        trade band between the direction floor and 0.70.
         """
         # Minimum accepted R:R is 1:2 (tp1_mult = 2.0).
-        # Floor anchor defaults to 0.58 to match the directional gate, but can
+        # Floor anchor defaults to 0.50 to match the directional gate, but can
         # be tightened with PM_MIN_CONFIDENCE if needed.
         # TP2 is always >= 1.5x TP1 distance (second leg of the move).
-        conf_floor = float(np.clip(float(getattr(self._settings, "PM_MIN_CONFIDENCE", 0.58)), 0.50, 0.90))
+        conf_floor = float(np.clip(float(getattr(self._settings, "PM_MIN_CONFIDENCE", 0.50)), 0.50, 0.90))
         anchors = [(conf_floor, 2.0, 3.0)]  # min conf -> min R:R 1:2, gentler TP2 for cold-start models
         for anchor in [
             (0.65, 2.25, 3.5),

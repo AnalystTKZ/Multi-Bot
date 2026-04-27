@@ -277,10 +277,10 @@ class SignalPipeline:
         if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
             return None
 
-        # Gate 3: GRU direction (default 0.58 matches config.settings)
+        # Gate 3: GRU direction
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
-        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
+        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
             conf = p_bull
@@ -292,7 +292,7 @@ class SignalPipeline:
 
         # Gate 4: HTF bias alignment
         _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.58"))
+        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.50"))
         if _htf_bias == "BIAS_UP" and side == "sell":
             return None
         if _htf_bias == "BIAS_DOWN" and side == "buy":

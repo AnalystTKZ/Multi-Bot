@@ -95,17 +95,17 @@ RISK_PER_TRADE     = 0.01       # 1% per trade
 CAPITAL_PER_TRADER = 1.00       # unified ml_trader owns the full backtest account
 COMMISSION_PCT     = 0.001
 SLIPPAGE_PCT       = 0.0002
-_ENFORCE_DAILY_HALT = str(os.getenv("BACKTEST_ENFORCE_DAILY_HALT", "1")).lower() in (
+_ENFORCE_DAILY_HALT = str(os.getenv("BACKTEST_ENFORCE_DAILY_HALT", "0")).lower() in (
     "1", "true", "yes", "on",
 )
 _COMPOUND_EQUITY = str(os.getenv("BACKTEST_COMPOUND_EQUITY", "1")).lower() in (
     "1", "true", "yes", "on",
 )
-_CONFIGURED_MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.02"))
+_CONFIGURED_MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "1.0"))
 MAX_DAILY_LOSS_PCT = _CONFIGURED_MAX_DAILY_LOSS_PCT if _ENFORCE_DAILY_HALT else 1.0
-MAX_DRAWDOWN_PCT   = float(os.getenv("MAX_DRAWDOWN_PCT", "0.08"))
-COOLDOWN_BARS      = 10         # bars between signals per symbol
-MIN_CONFIDENCE     = 0.58       # align PM floor with ML direction gate for unified trader
+MAX_DRAWDOWN_PCT   = float(os.getenv("MAX_DRAWDOWN_PCT", "1.0"))
+COOLDOWN_BARS      = int(os.getenv("COOLDOWN_BARS", "1"))  # bars between signals per symbol
+MIN_CONFIDENCE     = 0.50       # align PM floor with ML direction gate for unified trader
 MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
@@ -131,6 +131,8 @@ _PM_SETTINGS = SimpleNamespace(
     CAPITAL_PER_TRADER=CAPITAL_PER_TRADER,
     RISK_PER_TRADE=RISK_PER_TRADE,
     MAX_DAILY_LOSS_PCT=MAX_DAILY_LOSS_PCT,
+    MAX_CONCURRENT_POSITIONS=int(os.getenv("MAX_CONCURRENT_POSITIONS", "25")),
+    PM_MIN_CONFIDENCE=float(os.getenv("PM_MIN_CONFIDENCE", "0.50")),
 )
 
 _ALL_SYMBOLS = [
@@ -1272,9 +1274,9 @@ def _precompute_ml_cache(
             dir_conf = np.maximum(valid_p, 1.0 - valid_p)
             q50, q90, q99 = np.quantile(dir_conf, [0.50, 0.90, 0.99])
             logger.info(
-                "ML cache [%s]: GRU direction confidence q50=%.3f q90=%.3f q99=%.3f max=%.3f pass@0.58=%.1f%%",
+                "ML cache [%s]: GRU direction confidence q50=%.3f q90=%.3f q99=%.3f max=%.3f pass@0.50=%.1f%%",
                 symbol, q50, q90, q99, float(dir_conf.max()),
-                100.0 * float(np.mean(dir_conf >= 0.58)),
+                100.0 * float(np.mean(dir_conf >= 0.50)),
             )
 
         if cache_file:
@@ -1339,8 +1341,7 @@ def _compute_backtest_signal(
     # ── Gate 3: GRU direction ─────────────────────────────────────────────────
     p_bull = float(ml_preds.get("p_bull", 0.5))
     p_bear = float(ml_preds.get("p_bear", 0.5))
-    # Default 0.58 matches config.settings.ML_DIRECTION_THRESHOLD and published docs
-    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.58"))
+    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))
     if p_bull >= p_bear and p_bull >= _dir_thresh:
         side = "buy"
         conf = p_bull
@@ -1357,7 +1358,7 @@ def _compute_backtest_signal(
     # BIAS_NEUTRAL → require at least the same bar as the direction threshold
     # (0.65 was stricter than the direction gate and filtered almost all NEUTRAL bars)
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
-    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.58"))
+    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.50"))
 
     if _htf_bias == "BIAS_UP" and side == "sell":
         _reject("htf_bias_conflict")
@@ -1500,12 +1501,12 @@ def _backtest_trader(
 
     Circuit breakers (ordered, checked every bar):
       1. 20% portfolio drawdown halt (hard stop for trader)
-      2. 2% daily loss cap (skip rest of day, resets next calendar day)
+      2. 100% daily loss cap by default (skip rest of day, resets next calendar day)
       3. Session filter (trader only trades in its defined hours)
       4. NY/London dead zone 12:00–13:00 UTC
       5. Cooldown — 10 bars since last trade on the same symbol
       6. PM R:R gate — confidence must yield tp1_mult > 1.0
-      7. PM correlation cap — max 2 positions per directional group
+      7. PM correlation cap — high-trade directional-group cap by default
       8. PM streak gate — size scaled down after 3-4 consecutive losses
     """
     # ── Load + filter all symbol dataframes ──────────────────────────────────
@@ -1692,11 +1693,11 @@ def _backtest_trader(
     # Hoist env-var reads outside the 473k-bar loop — os.getenv does a dict lookup
     # + string compare on every call; at 473k bars this adds measurable overhead.
     _cfg_density_lambda   = float(os.getenv("DENSITY_LAMBDA",             "0.12"))
-    _cfg_dir_thresh       = float(os.getenv("ML_DIRECTION_THRESHOLD",     "0.58"))
+    _cfg_dir_thresh       = float(os.getenv("ML_DIRECTION_THRESHOLD",     "0.50"))
     _cfg_min_conf         = float(os.getenv("MIN_CONFIDENCE",             "0.0"))
     _cfg_min_ev           = float(os.getenv("MIN_EV_THRESHOLD",           "0.0"))
     _cfg_max_uncertainty  = float(os.getenv("MAX_UNCERTAINTY",            "2.0"))
-    _cfg_neutral_thresh   = float(os.getenv("NEUTRAL_BIAS_THRESHOLD",     "0.58"))
+    _cfg_neutral_thresh   = float(os.getenv("NEUTRAL_BIAS_THRESHOLD",     "0.50"))
     _cfg_volatile_thresh  = float(os.getenv("VOLATILE_ENTRY_THRESHOLD",   _cfg_dir_thresh.__str__()))
     _cfg_block_consol     = os.getenv("BLOCK_LTF_CONSOLIDATING",          "0").lower() in ("1","true","yes")
     _cfg_strict_trend_pb  = os.getenv("REQUIRE_TRENDING_PULLBACK",        "0").lower() in ("1","true","yes")

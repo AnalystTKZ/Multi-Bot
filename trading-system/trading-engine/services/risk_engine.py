@@ -24,9 +24,9 @@ class RiskEngine:
         """
         Returns (allowed, reason_if_blocked).
         Checks:
-          - daily_loss_pct < 2% (circuit breaker)
-          - drawdown_pct < 8% (max drawdown)
-          - open_positions < 2 (max concurrent)
+          - daily_loss_pct < configured circuit breaker
+          - drawdown_pct < configured max drawdown
+          - open_positions < configured max concurrent
           - one position per symbol (no stacking)
           - spread within tolerance
         """
