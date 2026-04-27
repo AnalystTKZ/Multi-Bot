@@ -25,6 +25,7 @@ Output:
 """
 from __future__ import annotations
 import gc
+import csv
 import json
 import logging
 import os
@@ -55,6 +56,12 @@ BT_LOGS      = BT_DIR / "logs"
 JOURNAL_PATH = ENGINE_DIR / "logs" / "trade_journal_detailed.jsonl"
 JOURNAL_CSV  = ENGINE_DIR / "logs" / "trade_journal.csv"
 N_ROUNDS     = 3
+JOURNAL_CSV_COLUMNS = [
+    "timestamp", "exit_timestamp", "trader", "symbol", "side", "size",
+    "entry", "stop_loss", "take_profit", "rr_ratio", "confidence", "pnl",
+    "commission", "exit_reason", "source", "source_split", "bt_start",
+    "bt_end", "split_summary_hash", "correlation_id",
+]
 
 for d in [BT_RESULTS, BT_LOGS, ENGINE_DIR / "logs"]:
     d.mkdir(parents=True, exist_ok=True)
@@ -271,11 +278,11 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
     bt_start = str(data.get("start", ""))
     bt_end = str(data.get("end", ""))
 
-    with open(JOURNAL_PATH, "a") as jf, open(JOURNAL_CSV, "a") as cf:
+    with open(JOURNAL_PATH, "a") as jf, open(JOURNAL_CSV, "a", newline="") as cf:
+        csv_writer = csv.DictWriter(cf, fieldnames=JOURNAL_CSV_COLUMNS)
         # Write CSV header only on first write
         if JOURNAL_CSV.stat().st_size == 0:
-            cf.write("timestamp,trader,symbol,side,size,entry,stop_loss,take_profit,"
-                     "rr_ratio,confidence,pnl,commission\n")
+            csv_writer.writeheader()
 
         for tr in trade_log:
             trader  = tr.get("trader", tr.get("trader_id", "ml_trader"))
@@ -372,6 +379,9 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             except Exception:
                 pass
 
+            source = f"backtest_round_{round_num}"
+            correlation_id = f"bt_r{round_num}_{written:06d}"
+
             record = {
                 "timestamp":       ts_str,
                 "exit_timestamp":  exit_ts,
@@ -389,12 +399,12 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                 "exit_reason":     exit_reason,
                 "strategy":        trader,
                 "session":         entry_session,
-                "source":          f"backtest_round_{round_num}",
+                "source":          source,
                 "source_split":    source_split,
                 "bt_start":        bt_start,
                 "bt_end":          bt_end,
                 "split_summary_hash": split_hash,
-                "correlation_id":  f"bt_r{round_num}_{written:06d}",
+                "correlation_id":  correlation_id,
                 "state_at_entry":  state_vec,
                 "rl_action":       int(trader.split("_")[1]) if trader.startswith("trader_") else 1,
                 "ml_model_scores": {
@@ -420,11 +430,28 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             jf.write(json.dumps(record, default=str) + "\n")
 
             # CSV row
-            cf.write(
-                f"{ts_str},{trader},{symbol},{side},{size},"
-                f"{round(entry,6)},{round(sl,6)},{round(tp,6)},"
-                f"{round(rr,3)},{round(conf,3)},{pnl_net},{round(commission,4)}\n"
-            )
+            csv_writer.writerow({
+                "timestamp":          ts_str,
+                "exit_timestamp":     exit_ts,
+                "trader":             trader,
+                "symbol":             symbol,
+                "side":               side,
+                "size":               size,
+                "entry":              round(entry, 6),
+                "stop_loss":          round(sl, 6),
+                "take_profit":        round(tp, 6),
+                "rr_ratio":           round(rr, 3),
+                "confidence":         round(conf, 3),
+                "pnl":                pnl_net,
+                "commission":         round(commission, 4),
+                "exit_reason":        exit_reason,
+                "source":             source,
+                "source_split":       source_split,
+                "bt_start":           bt_start,
+                "bt_end":             bt_end,
+                "split_summary_hash": split_hash,
+                "correlation_id":     correlation_id,
+            })
             written += 1
 
     logger.info("Round %d: wrote %d journal entries (total in file: %d)",

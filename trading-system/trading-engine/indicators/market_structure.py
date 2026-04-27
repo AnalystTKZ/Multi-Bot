@@ -585,37 +585,39 @@ def detect_liquidity_sweeps(df: pd.DataFrame, lookback: int = 20) -> pd.DataFram
 
 def detect_order_blocks(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Last opposing candle before an impulse move (vectorized).
+    Last opposing candle before an impulse move, emitted on confirmation.
 
-    Bullish OB: last bearish candle before a strong bullish move (close[i+1] >> open[i])
-    Bearish OB: last bullish candle before a strong bearish move
+    Bullish OB: previous bearish candle once the current bar confirms a strong
+    bullish impulse.
+    Bearish OB: previous bullish candle once the current bar confirms a strong
+    bearish impulse.
 
     Returns: ob_bull (bool), ob_bear (bool), ob_high (float), ob_low (float)
     """
     atr = compute_atr(df, 14)
     body = (df["close"] - df["open"]).abs()
 
-    # Use next bar to confirm impulse but shift(-1) is lookahead — use
-    # a 2-bar forward confirmed version that's also safe: if current bar
-    # itself is a strong impulse candle, it is an OB candidate on the
-    # *prior* bar, so we shift the impulse signal by +1 bar (backwards).
+    # Emit the OB on the impulse bar, but store the previous candle's zone.
+    # This preserves causality and avoids the old shift(-1) lookahead.
     impulse_up = (df["close"] - df["open"]) > atr * 1.0
     impulse_dn = (df["open"] - df["close"]) > atr * 1.0
-    # OB is the bar *before* the impulse
-    impulse_up = impulse_up.shift(1, fill_value=False).astype(bool)
-    impulse_dn = impulse_dn.shift(1, fill_value=False).astype(bool)
 
     bearish_candle = df["close"] < df["open"]
     bullish_candle = df["close"] > df["open"]
 
-    ob_bull = bearish_candle & impulse_up & (body > atr * 0.3)
-    ob_bear = bullish_candle & impulse_dn & (body > atr * 0.3)
+    prior_bearish = bearish_candle.shift(1, fill_value=False).astype(bool)
+    prior_bullish = bullish_candle.shift(1, fill_value=False).astype(bool)
+    prior_body = body.shift(1)
+    prior_atr = atr.shift(1)
+
+    ob_bull = prior_bearish & impulse_up & (prior_body > prior_atr * 0.3)
+    ob_bear = prior_bullish & impulse_dn & (prior_body > prior_atr * 0.3)
 
     result = pd.DataFrame(index=df.index)
     result["ob_bull"] = ob_bull.fillna(False)
     result["ob_bear"] = ob_bear.fillna(False)
-    result["ob_high"] = df["high"].where(ob_bull | ob_bear)
-    result["ob_low"] = df["low"].where(ob_bull | ob_bear)
+    result["ob_high"] = df["high"].shift(1).where(ob_bull | ob_bear)
+    result["ob_low"] = df["low"].shift(1).where(ob_bull | ob_bear)
     return result
 
 

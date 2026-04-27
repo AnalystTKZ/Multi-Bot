@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 _CSV_PATH = "logs/trade_journal.csv"
 _JSONL_PATH = "logs/trade_journal_detailed.jsonl"
 _CSV_COLUMNS = [
-    "timestamp", "trader", "symbol", "side", "size", "entry",
-    "stop_loss", "take_profit", "rr_ratio", "confidence", "pnl", "commission",
+    "timestamp", "exit_timestamp", "trader", "symbol", "side", "size",
+    "entry", "stop_loss", "take_profit", "rr_ratio", "confidence", "pnl",
+    "commission", "exit_reason", "source", "source_split", "bt_start",
+    "bt_end", "split_summary_hash", "correlation_id",
 ]
 
 
@@ -47,6 +49,7 @@ class TradeJournal:
     def log_trade(self, trade: dict) -> None:
         """Write to both CSV (clean) and JSONL (detailed)."""
         timestamp = trade.get("timestamp") or datetime.now(timezone.utc).isoformat()
+        exit_timestamp = trade.get("exit_timestamp", "")
         trader = str(trade.get("trader") or trade.get("trader_id", ""))
         symbol = str(trade.get("symbol", ""))
         side = str(trade.get("side", ""))
@@ -69,6 +72,7 @@ class TradeJournal:
         # ─── CSV ─────────────────────────────────────────────────────────────
         csv_row = {
             "timestamp": timestamp,
+            "exit_timestamp": exit_timestamp,
             "trader": trader,
             "symbol": symbol,
             "side": side,
@@ -80,6 +84,15 @@ class TradeJournal:
             "confidence": confidence,
             "pnl": pnl,
             "commission": commission,
+            "exit_reason": str(trade.get("exit_reason", "")),
+            "source": str(trade.get("source") or meta.get("source", "")),
+            "source_split": str(trade.get("source_split") or meta.get("source_split", "")),
+            "bt_start": str(trade.get("bt_start") or meta.get("bt_start", "")),
+            "bt_end": str(trade.get("bt_end") or meta.get("bt_end", "")),
+            "split_summary_hash": str(
+                trade.get("split_summary_hash") or meta.get("split_summary_hash", "")
+            ),
+            "correlation_id": str(trade.get("correlation_id", "")),
         }
         try:
             with open(_CSV_PATH, "a", newline="") as f:
@@ -92,6 +105,7 @@ class TradeJournal:
         jsonl_record = {
             # CSV fields
             "timestamp": timestamp,
+            "exit_timestamp": exit_timestamp,
             "trader": trader,
             "symbol": symbol,
             "side": side,
@@ -127,6 +141,13 @@ class TradeJournal:
             "signal_metadata": meta,
             "state_at_entry": state_at_entry,
             "rl_action": rl_action,
+            "source": str(trade.get("source") or meta.get("source", "")),
+            "source_split": str(trade.get("source_split") or meta.get("source_split", "")),
+            "bt_start": str(trade.get("bt_start") or meta.get("bt_start", "")),
+            "bt_end": str(trade.get("bt_end") or meta.get("bt_end", "")),
+            "split_summary_hash": str(
+                trade.get("split_summary_hash") or meta.get("split_summary_hash", "")
+            ),
         }
         try:
             with open(_JSONL_PATH, "a") as f:

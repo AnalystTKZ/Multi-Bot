@@ -109,12 +109,19 @@ MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
 ML_CACHE_DIR       = os.path.join(OUTPUT_DIR, "ml_cache")
+ML_CACHE_SCHEMA    = "context_availability_v2"
 _BACKTEST_WARMUP = {
     "5M": pd.Timedelta(days=7),
     "15M": pd.Timedelta(days=14),
     "1H": pd.Timedelta(days=60),
     "4H": pd.Timedelta(days=180),
     "1D": pd.Timedelta(days=400),
+}
+_CONTEXT_AVAILABILITY_DELAY = {
+    "5M": pd.Timedelta(minutes=5),
+    "1H": pd.Timedelta(hours=1),
+    "4H": pd.Timedelta(hours=4),
+    "1D": pd.Timedelta(days=1),
 }
 
 # PM settings object — mirrors what the live engine passes to PortfolioManager
@@ -264,7 +271,7 @@ def _weight_token(path_str: str | None) -> str:
 
 
 def _ml_cache_file(symbol: str, start: str, end: str, ml_models: dict) -> str:
-    tokens = [symbol, start or "", end or ""]
+    tokens = [ML_CACHE_SCHEMA, symbol, start or "", end or ""]
     relevant = {"gru_lstm", "regime", "regime_htf", "regime_4h", "regime_ltf", "regime_1h"}
     for name in sorted(k for k in (ml_models or {}).keys() if k in relevant):
         model = ml_models[name]
@@ -498,6 +505,33 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return compute_all(df)
 
 
+def _delay_resampled_availability(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """
+    Shift resampled context indexes from candle-open labels to availability time.
+
+    step0_resample.py writes left-labeled bars. A 4H row stamped 08:00 contains
+    data from 08:00-12:00 and must not be visible to a 15M decision before 12:00.
+    Only context frames are shifted here, so requested backtest split windows stay
+    exactly as configured.
+    """
+    if df is None or df.empty:
+        return df
+    delay = _CONTEXT_AVAILABILITY_DELAY.get(str(timeframe).upper())
+    if delay is None or delay <= pd.Timedelta(0):
+        return df
+
+    out = df.copy()
+    idx = pd.DatetimeIndex(out.index)
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    else:
+        idx = idx.tz_convert("UTC")
+    out.index = idx + delay
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    out.attrs["availability_delay"] = str(delay)
+    return out
+
+
 def _load_htf_context(symbol: str, start: str, end: str) -> dict:
     """
     Load and precompute HTF context frames for a symbol.
@@ -542,6 +576,7 @@ def _load_htf_context(symbol: str, start: str, end: str) -> dict:
         logger.debug("  HTF %s/%s: indicators %.1fs (%d bars)", symbol, tf, _time.perf_counter() - _t, len(df))
         if tf == "1H" and "ema_21" in df.columns:
             df["ema_21_slope"] = df["ema_21"].diff(3)
+        df = _delay_resampled_availability(df, tf)
         out[tf] = df
     return out
 
@@ -1671,6 +1706,8 @@ def _backtest_trader(
             "cooldown": 0, "density": 0, "no_signal": 0, "pm_reject": 0, "quality_block": 0,
             "daily_halt_events": 0}
     _daily_halt_dates: set[str] = set()
+    _drawdown_halt_ts: str | None = None
+    _drawdown_halt_drawdown = 0.0
     _signal_reasons: dict[str, int] = {}
     _loop_t0 = _time.perf_counter()
     _loop_last_log = _loop_t0
@@ -1698,6 +1735,9 @@ def _backtest_trader(
         # ── Circuit breaker 1: portfolio drawdown ─────────────────────────────
         dd = (peak_equity - equity) / (peak_equity + 1e-9)
         if dd >= MAX_DRAWDOWN_PCT:
+            _dbg["dd_halt"] += 1
+            _drawdown_halt_ts = dt.isoformat()
+            _drawdown_halt_drawdown = float(dd)
             logger.warning("%s: portfolio drawdown %.1f%% — halting all trading",
                            trader_id, dd * 100)
             halted = True
@@ -1940,6 +1980,17 @@ def _backtest_trader(
             "density_count": _density_count,
         })
 
+        post_trade_dd = (peak_equity - equity) / (peak_equity + 1e-9)
+        if post_trade_dd >= MAX_DRAWDOWN_PCT and not halted:
+            _dbg["dd_halt"] += 1
+            _drawdown_halt_ts = exit_dt.isoformat()
+            _drawdown_halt_drawdown = float(post_trade_dd)
+            logger.warning(
+                "%s: portfolio drawdown %.1f%% after trade exit — halting all trading",
+                trader_id, post_trade_dd * 100,
+            )
+            halted = True
+
     # ─── Metrics ────────────────────────────────────────────────────────────
     _loop_elapsed = _time.perf_counter() - _loop_t0
     _total_bars = _dbg["total"]
@@ -1951,11 +2002,11 @@ def _backtest_trader(
     logger.info(
         "%s diagnostics — bars=%d session_skip=%d daily_skip=%d cooldown=%d "
         "density_suppressed=%d quality_blocked=%d no_signal=%d pm_reject=%d "
-        "daily_halt_events=%d daily_halt_dates=%d enforce_daily_halt=%s compound_equity=%s",
+        "daily_halt_events=%d daily_halt_dates=%d dd_halt=%d enforce_daily_halt=%s compound_equity=%s",
         trader_id, _dbg["total"], _dbg["session"], _dbg["daily"],
         _dbg["cooldown"], _dbg["density"], _dbg["quality_block"],
         _dbg["no_signal"], _dbg["pm_reject"], _dbg["daily_halt_events"],
-        len(_daily_halt_dates), _ENFORCE_DAILY_HALT, _COMPOUND_EQUITY,
+        len(_daily_halt_dates), _dbg["dd_halt"], _ENFORCE_DAILY_HALT, _COMPOUND_EQUITY,
     )
     if _signal_reasons:
         logger.info("%s no_signal reasons — %s", trader_id, dict(sorted(
@@ -1978,6 +2029,8 @@ def _backtest_trader(
                 **dict(_dbg),
                 "no_signal_reasons": dict(_signal_reasons),
                 "daily_halt_dates": sorted(_daily_halt_dates),
+                "drawdown_halt_timestamp": _drawdown_halt_ts,
+                "drawdown_halt_drawdown": round(_drawdown_halt_drawdown, 6),
                 "enforce_daily_halt": _ENFORCE_DAILY_HALT,
                 "compound_equity": _COMPOUND_EQUITY,
             },
@@ -2036,6 +2089,8 @@ def _backtest_trader(
             **dict(_dbg),
             "no_signal_reasons": dict(_signal_reasons),
             "daily_halt_dates": sorted(_daily_halt_dates),
+            "drawdown_halt_timestamp": _drawdown_halt_ts,
+            "drawdown_halt_drawdown": round(_drawdown_halt_drawdown, 6),
             "enforce_daily_halt": _ENFORCE_DAILY_HALT,
             "compound_equity": _COMPOUND_EQUITY,
         },
@@ -2157,10 +2212,18 @@ def _split_summary_metadata() -> dict:
                 continue
             seen.add(path)
             payload = path.read_bytes()
-            return {
+            meta = {
                 "path": str(path),
                 "sha256": hashlib.sha256(payload).hexdigest(),
             }
+            try:
+                summary = json.loads(payload.decode("utf-8"))
+                for key in ("date_ranges", "rows", "leakage_check", "created_at"):
+                    if key in summary:
+                        meta[key] = summary[key]
+            except Exception:
+                pass
+            return meta
         except Exception:
             continue
     return {}
