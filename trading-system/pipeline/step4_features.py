@@ -64,6 +64,28 @@ def _apply_technical(df: pd.DataFrame) -> None:
     df["adx_14_h4"]    = df["adx_14_h1"]
     df["ema_stack_score"] = df.get("ema_stack", pd.Series(0.0, index=df.index))
 
+    # Bollinger Band z-score: (close − BB_mid) / BB_std
+    # More statistically interpretable than bb_position; z≈0 = at mean, z=±2 = 2σ extreme.
+    # BB_std = (bb_upper − bb_mid) / 2  (upper band is mid + 2σ by convention)
+    bb_mid_s = df.get("bb_mid", (df["bb_upper"] + df["bb_lower"]) / 2.0)
+    bb_std_s  = (df["bb_upper"] - bb_mid_s) / 2.0  # σ of the rolling window
+    df["bb_zscore"] = ((df["close"] - bb_mid_s) / (bb_std_s + 1e-9)).clip(-4, 4)
+
+    # Range expansion: ratio of current high−low range to its 20-bar rolling mean.
+    # Values > 1.5 indicate breakout volatility; < 0.5 indicates compression/consolidation.
+    hl_range = df["high"] - df["low"]
+    hl_mean  = hl_range.rolling(20, min_periods=5).mean()
+    df["range_expansion"] = (hl_range / (hl_mean + 1e-9)).clip(0.1, 5.0).fillna(1.0)
+
+    # Rolling skewness of log-returns (20-bar window) — measures return distribution tail.
+    # Negative skew = fat left tail (sudden drops); positive = fat right tail (runups).
+    df["return_skew_20"] = (
+        df["log_return"].rolling(20, min_periods=10)
+        .skew()
+        .clip(-3, 3)
+        .fillna(0.0)
+    )
+
 
 def _apply_smc_rolling(df: pd.DataFrame) -> None:
     """Add rolling SMC counters in-place. SMC flags already added by compute_all."""

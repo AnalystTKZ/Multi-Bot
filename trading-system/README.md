@@ -32,6 +32,14 @@ This system deploys 6 independent trading bots:
 2. Configure environment variables (copy `trading-system/.env.example` to `trading-system/.env`)
 3. Run `docker compose -f docker-compose.dev.yml up -d --build`
 4. Access the dashboard at http://localhost:3001
+# Inside the trading-engine container:
+python -m pytest tests/test_risk_math.py -v --tb=short
+
+# Run backtest with new metrics:
+python scripts/run_backtest.py --split validation
+
+# Run walk-forward validation:
+python pipeline/step6_backtest.py
 
 ## Documentation
 

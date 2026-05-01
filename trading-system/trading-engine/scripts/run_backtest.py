@@ -1583,47 +1583,294 @@ def _compute_backtest_signal(
 
 def _fixed_risk_metrics(trades: list[dict]) -> dict:
     """
-    Primary profitability metric: fixed-risk, non-compounded R-multiple results.
+    Comprehensive performance metrics on a fixed-risk, non-compounded R-multiple basis.
 
-    This removes position-size drift from compounding, streak down-scaling, and
-    symbol price differences so strategy profitability is judged by realized R.
+    This removes position-size drift from compounding, streak scaling, and symbol
+    price differences so strategy profitability is judged purely by realized R.
+
+    Statistical measures implemented:
+      Expectancy     E[R] = mean(realized_R)
+      Profit factor  gross_wins / gross_losses
+      Sharpe         mean(R) / std(R) × sqrt(252)  [annualised, treat each trade as 1 unit]
+      Sortino        mean(R) / downside_deviation   [penalises only losing trades]
+      Calmar         total_R / max_drawdown          [unadjusted; use for relative comparison]
+      Omega          sum(R > 0) / |sum(R < 0)|       [≡ profit factor on R-multiples]
+      VaR_95         5th-percentile realized_R       [95% of trades beat this outcome]
+      CVaR_95        mean(R in worst 5%)             [expected shortfall / tail risk]
+      t_statistic    mean_R / SE(R)                  [is edge statistically different from 0?]
+      bootstrap CI   95% percentile interval on Sharpe via 500-resample bootstrap
+      IC             Spearman rank-corr(confidence, outcome)   [model adds value if IC > 0]
+      Monthly R      per-calendar-month R totals (requires "timestamp" key in each trade)
+      Losing streak  longest run of consecutive losing trades
+      Rolling exp    last-20 vs first-20 expectancy  [edge decay signal]
+      Monte Carlo    200 random trade orderings — median/P10/P90 final equity, P95 max DD
+      PASS/FAIL      acceptance verdict against minimum acceptance thresholds
     """
+    import math as _math
+
     risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
-    realized_rr = [float(t.get("realized_rr", 0.0)) for t in trades]
-    fixed_pnls = [r * risk_amount for r in realized_rr]
-    wins = [p for p in fixed_pnls if p > 0]
-    losses = [p for p in fixed_pnls if p < 0]
-    gross_profit = float(sum(wins))
-    gross_loss = float(abs(sum(losses)))
-    total_pnl = float(sum(fixed_pnls))
+    realized_rr  = [float(t.get("realized_rr", 0.0)) for t in trades]
+    fixed_pnls   = [r * risk_amount for r in realized_rr]
 
-    eq_curve = [INITIAL_CAPITAL]
-    for pnl in fixed_pnls:
-        eq_curve.append(eq_curve[-1] + pnl)
-    peak = eq_curve[0]
-    max_dd = 0.0
-    for value in eq_curve:
-        peak = max(peak, value)
-        max_dd = max(max_dd, (peak - value) / (peak + 1e-9))
+    if not realized_rr:
+        return {
+            "basis": "fixed_risk_r_multiple",
+            "risk_amount": round(risk_amount, 2),
+            "expectancy_r": 0.0,
+            "total_r": 0.0,
+            "net_pnl": 0.0,
+            "gross_profit": 0.0,
+            "gross_loss": 0.0,
+            "profit_factor": 0.0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "calmar": 0.0,
+            "omega": 0.0,
+            "var_95": 0.0,
+            "cvar_95": 0.0,
+            "t_statistic": 0.0,
+            "t_pvalue": 1.0,
+            "sharpe_ci_95_lower": 0.0,
+            "sharpe_ci_95_upper": 0.0,
+            "information_coefficient": 0.0,
+            "longest_losing_streak": 0,
+            "rolling_expectancy_last20": 0.0,
+            "rolling_expectancy_first20": 0.0,
+            "edge_decay": 0.0,
+            "monthly_returns": {},
+            "best_month": 0.0,
+            "worst_month": 0.0,
+            "mc_median_final_equity": INITIAL_CAPITAL,
+            "mc_p10_final_equity": INITIAL_CAPITAL,
+            "mc_p90_final_equity": INITIAL_CAPITAL,
+            "mc_p95_max_drawdown": 0.0,
+            "verdict": "FAIL",
+            "verdict_rules": {"min_trades": False},
+        }
 
+    arr_r = np.array(realized_rr, dtype=np.float64)
+    n = len(arr_r)
+
+    # ── Base stats ────────────────────────────────────────────────────────────
+    wins_r   = arr_r[arr_r > 0]
+    losses_r = arr_r[arr_r < 0]
+    win_rate   = float(len(wins_r) / n) if n > 0 else 0.0
+    avg_win_r  = float(wins_r.mean())   if len(wins_r) > 0   else 0.0
+    avg_loss_r = float(losses_r.mean()) if len(losses_r) > 0 else 0.0
+
+    gross_profit = float(sum(r for r in realized_rr if r > 0)) * risk_amount
+    gross_loss   = float(abs(sum(r for r in realized_rr if r < 0))) * risk_amount
+    total_pnl    = float(sum(fixed_pnls))
+    expectancy_r = float(arr_r.mean())
+    total_r      = float(arr_r.sum())
+    profit_factor = gross_profit / (gross_loss + 1e-9)
+
+    # ── Equity curve & max drawdown ───────────────────────────────────────────
+    eq_curve = np.empty(n + 1)
+    eq_curve[0] = INITIAL_CAPITAL
+    for i, pnl in enumerate(fixed_pnls):
+        eq_curve[i + 1] = eq_curve[i] + pnl
+    peak = np.maximum.accumulate(eq_curve)
+    dd_curve = (peak - eq_curve) / (peak + 1e-9)
+    max_dd = float(dd_curve.max())
+
+    # ── Sharpe ratio (annualised, per-trade as 1 unit) ─────────────────────
     sharpe = 0.0
-    if len(fixed_pnls) >= 2:
-        mean_r = float(np.mean(fixed_pnls))
-        std_r = float(np.std(fixed_pnls))
+    if n >= 2:
+        mean_r = float(arr_r.mean())
+        std_r  = float(arr_r.std(ddof=1))
         sharpe = float((mean_r / (std_r + 1e-9)) * np.sqrt(252))
 
+    # ── Sortino ratio (penalises only downside deviation) ─────────────────────
+    # downside_deviation = sqrt( mean(min(R, 0)^2) )
+    sortino = 0.0
+    neg_sq = arr_r[arr_r < 0] ** 2
+    if len(neg_sq) >= 2:
+        downside_dev = float(np.sqrt(neg_sq.mean()))
+        sortino = float(arr_r.mean() / (downside_dev + 1e-9))
+
+    # ── Calmar ratio (total R / max_drawdown) ─────────────────────────────────
+    calmar = float(total_r / (max_dd + 1e-9)) if max_dd > 0 else 0.0
+
+    # ── Omega ratio (sum of gains / |sum of losses| in R-multiples) ───────────
+    omega = float(wins_r.sum() / (abs(losses_r.sum()) + 1e-9)) if len(losses_r) > 0 else float(wins_r.sum() + 1)
+
+    # ── Value-at-Risk and Conditional VaR at 95% confidence ──────────────────
+    sorted_r = np.sort(arr_r)
+    var_idx  = max(int(n * 0.05) - 1, 0)
+    var_95   = float(sorted_r[var_idx])           # 5th-percentile outcome
+    cvar_95  = float(sorted_r[:max(var_idx + 1, 1)].mean())  # mean of worst 5%
+
+    # ── t-statistic (is mean R significantly different from 0?) ──────────────
+    # H₀: μ = 0.  Two-tailed.  df = n − 1.
+    t_stat = 0.0
+    t_pvalue = 1.0
+    if n >= 5:
+        std_r_ddof1 = float(arr_r.std(ddof=1))
+        se_r = std_r_ddof1 / _math.sqrt(n)
+        t_stat = float(arr_r.mean() / (se_r + 1e-9))
+        # p-value approximation using regularised incomplete beta (manual, no scipy needed)
+        # For |t| > 6 or n > 200, use normal approx: p ≈ erfc(|t|/√2)
+        try:
+            from scipy.stats import t as _t_dist
+            t_pvalue = float(2.0 * _t_dist.sf(abs(t_stat), df=n - 1))
+        except ImportError:
+            t_pvalue = float(2.0 * (0.5 * _math.erfc(abs(t_stat) / _math.sqrt(2.0))))
+
+    # ── Bootstrap 95% confidence interval on Sharpe (500 resamples) ─────────
+    sharpe_ci_lower = sharpe_ci_upper = sharpe
+    if n >= 10:
+        rng_bs = np.random.default_rng(42)
+        bs_sharpes = np.empty(500)
+        for i in range(500):
+            sample = rng_bs.choice(arr_r, size=n, replace=True)
+            m = sample.mean()
+            s = sample.std(ddof=1) + 1e-9
+            bs_sharpes[i] = (m / s) * np.sqrt(252)
+        sharpe_ci_lower = float(np.percentile(bs_sharpes, 2.5))
+        sharpe_ci_upper = float(np.percentile(bs_sharpes, 97.5))
+
+    # ── Information Coefficient: Spearman(confidence, outcome_binary) ────────
+    # IC > 0 means higher model confidence → more likely to be profitable.
+    # Ideal IC ≈ 0.05–0.15 for a good forecasting model.
+    ic = 0.0
+    if n >= 10:
+        confidences = np.array([float(t.get("confidence", 0.5)) for t in trades])
+        outcomes    = (arr_r > 0).astype(float)
+        c_ranks = np.argsort(np.argsort(confidences)).astype(float)
+        o_ranks = np.argsort(np.argsort(outcomes)).astype(float)
+        c_centered = c_ranks - c_ranks.mean()
+        o_centered = o_ranks - o_ranks.mean()
+        ic_num = float((c_centered * o_centered).sum())
+        ic_den = float(np.sqrt((c_centered ** 2).sum() * (o_centered ** 2).sum()) + 1e-9)
+        ic = float(np.clip(ic_num / ic_den, -1.0, 1.0))
+
+    # ── Longest losing streak ─────────────────────────────────────────────────
+    longest_streak = 0
+    current_streak = 0
+    for r in arr_r:
+        if r < 0:
+            current_streak += 1
+            longest_streak = max(longest_streak, current_streak)
+        else:
+            current_streak = 0
+
+    # ── Rolling expectancy: last-20 vs first-20 (edge decay signal) ───────────
+    first20_exp = float(arr_r[:20].mean()) if n >= 20 else float(arr_r.mean())
+    last20_exp  = float(arr_r[-20:].mean()) if n >= 20 else float(arr_r.mean())
+    edge_decay  = first20_exp - last20_exp  # positive = edge decaying over time
+
+    # ── Monthly return breakdown ───────────────────────────────────────────────
+    monthly_returns: dict = {}
+    for trade, r in zip(trades, realized_rr):
+        ts_raw = trade.get("timestamp") or trade.get("entry_time") or ""
+        if not ts_raw:
+            continue
+        try:
+            month_key = str(ts_raw)[:7]   # "YYYY-MM"
+            monthly_returns[month_key] = round(monthly_returns.get(month_key, 0.0) + r, 4)
+        except Exception:
+            pass
+    best_month  = max(monthly_returns.values()) if monthly_returns else 0.0
+    worst_month = min(monthly_returns.values()) if monthly_returns else 0.0
+
+    # ── Monte Carlo: 200 random trade orderings ───────────────────────────────
+    # Reveals path dependency: a strategy that survives only lucky orderings is fragile.
+    mc_final_equities = np.empty(200)
+    mc_max_dds        = np.empty(200)
+    rng_mc = np.random.default_rng(123)
+    for i in range(200):
+        shuffled = rng_mc.permutation(arr_r)
+        eq  = INITIAL_CAPITAL
+        pk  = eq
+        mdd = 0.0
+        for r in shuffled:
+            eq += r * risk_amount
+            pk  = max(pk, eq)
+            mdd = max(mdd, (pk - eq) / (pk + 1e-9))
+        mc_final_equities[i] = eq
+        mc_max_dds[i]        = mdd
+    mc_median_final = float(np.median(mc_final_equities))
+    mc_p10_final    = float(np.percentile(mc_final_equities, 10))
+    mc_p90_final    = float(np.percentile(mc_final_equities, 90))
+    mc_p95_max_dd   = float(np.percentile(mc_max_dds, 95))
+
+    # ── Break-even win rate ───────────────────────────────────────────────────
+    # At the realised average RR, what win rate is required just to break even?
+    avg_rr_realised = avg_win_r / (abs(avg_loss_r) + 1e-9) if abs(avg_loss_r) > 1e-9 else 1.0
+    break_even_wr   = 1.0 / (1.0 + avg_rr_realised)
+
+    # ── PASS/FAIL verdict ─────────────────────────────────────────────────────
+    # A strategy fails if it cannot clear all of the following minimum bars.
+    # Tune thresholds here — not inside individual trader or signal files.
+    min_trades_required = 30
+    rule_results = {
+        "min_trades":              n >= min_trades_required,
+        "positive_expectancy":     expectancy_r > 0.0,
+        "profit_factor_min_1_25":  profit_factor >= 1.25,
+        "drawdown_below_20pct":    max_dd < 0.20,
+        "sharpe_positive":         sharpe > 0.0,
+        "sortino_positive":        sortino > 0.0,
+        "win_rate_above_breakeven": win_rate > break_even_wr,
+        "t_stat_above_1_5":        abs(t_stat) >= 1.5,   # roughly p < 0.07 one-tailed
+        "mc_p10_not_ruin":         mc_p10_final > INITIAL_CAPITAL * 0.80,
+        "sharpe_ci_positive":      sharpe_ci_lower > 0.0,
+    }
+    verdict = "PASS" if all(rule_results.values()) else "FAIL"
+    failed_rules = [k for k, v in rule_results.items() if not v]
+
     return {
-        "basis": "fixed_risk_r_multiple",
-        "risk_amount": round(risk_amount, 2),
-        "expectancy_r": round(float(np.mean(realized_rr)) if realized_rr else 0.0, 4),
-        "total_r": round(float(sum(realized_rr)), 4),
-        "net_pnl": round(total_pnl, 2),
-        "gross_profit": round(gross_profit, 2),
-        "gross_loss": round(gross_loss, 2),
-        "profit_factor": round(gross_profit / (gross_loss + 1e-9), 4),
-        "total_return": round(total_pnl / INITIAL_CAPITAL, 4),
-        "max_drawdown": round(float(max_dd), 4),
-        "sharpe": round(sharpe, 4),
+        "basis":               "fixed_risk_r_multiple",
+        "risk_amount":         round(risk_amount, 2),
+        # ── Core metrics ──────────────────────────────────────────────────────
+        "expectancy_r":        round(expectancy_r, 4),
+        "total_r":             round(total_r, 4),
+        "net_pnl":             round(total_pnl, 2),
+        "gross_profit":        round(gross_profit, 2),
+        "gross_loss":          round(gross_loss, 2),
+        "profit_factor":       round(profit_factor, 4),
+        "win_rate":            round(win_rate, 4),
+        "avg_win_r":           round(avg_win_r, 4),
+        "avg_loss_r":          round(avg_loss_r, 4),
+        "break_even_win_rate": round(break_even_wr, 4),
+        "total_return":        round(total_pnl / INITIAL_CAPITAL, 4),
+        "max_drawdown":        round(max_dd, 4),
+        # ── Risk-adjusted returns ──────────────────────────────────────────────
+        "sharpe":              round(sharpe, 4),
+        "sortino":             round(sortino, 4),
+        "calmar":              round(calmar, 4),
+        "omega":               round(omega, 4),
+        # ── Tail risk ─────────────────────────────────────────────────────────
+        "var_95":              round(var_95, 4),
+        "cvar_95":             round(cvar_95, 4),
+        # ── Statistical significance ───────────────────────────────────────────
+        "t_statistic":         round(t_stat, 4),
+        "t_pvalue":            round(t_pvalue, 4),
+        "sharpe_ci_95_lower":  round(sharpe_ci_lower, 4),
+        "sharpe_ci_95_upper":  round(sharpe_ci_upper, 4),
+        # ── Model quality ─────────────────────────────────────────────────────
+        "information_coefficient": round(ic, 4),
+        # ── Streak & decay ────────────────────────────────────────────────────
+        "longest_losing_streak":    longest_streak,
+        "rolling_expectancy_last20":  round(last20_exp, 4),
+        "rolling_expectancy_first20": round(first20_exp, 4),
+        "edge_decay":               round(edge_decay, 4),
+        # ── Monthly breakdown ─────────────────────────────────────────────────
+        "monthly_returns":     {k: round(v, 4) for k, v in sorted(monthly_returns.items())},
+        "best_month":          round(best_month, 4),
+        "worst_month":         round(worst_month, 4),
+        # ── Monte Carlo simulation ─────────────────────────────────────────────
+        "mc_median_final_equity": round(mc_median_final, 2),
+        "mc_p10_final_equity":    round(mc_p10_final, 2),
+        "mc_p90_final_equity":    round(mc_p90_final, 2),
+        "mc_p95_max_drawdown":    round(mc_p95_max_dd, 4),
+        # ── Acceptance verdict ────────────────────────────────────────────────
+        "verdict":             verdict,
+        "verdict_rules":       rule_results,
+        "failed_rules":        failed_rules,
     }
 
 
@@ -3057,10 +3304,14 @@ def main():
 
     logger.info("Backtest complete → %s", outpath)
     print(f"\nBacktest results → {outpath}")
-    print(f"{'Trader':<40} {'Trades':>6} {'WR':>7} {'PF*':>6} {'Return*':>8} {'ExpR':>7} {'TP1%':>6} {'TP2%':>6} {'DD*':>7} {'Sharpe*':>8}")
-    print("-" * 105)
+    print(f"{'Trader':<40} {'Trades':>6} {'WR':>7} {'PF*':>6} {'Return*':>8} {'ExpR':>7} {'TP1%':>6} {'TP2%':>6} {'DD*':>7} {'Sharpe*':>8} {'Sortino':>8} {'IC':>6} {'Verdict':>8}")
+    print("-" * 125)
     for tid, r in results.items():
         name = TRADER_NAMES.get(tid, tid)
+        pm = r.get("primary_metrics") or {}
+        verdict  = pm.get("verdict",  r.get("verdict",  "N/A"))
+        sortino  = pm.get("sortino",  0.0)
+        ic_val   = pm.get("information_coefficient", 0.0)
         print(
             f"{name:<40} {r['trades']:>6} {r['win_rate']:>6.1%}"
             f" {r.get('primary_profit_factor', r['profit_factor']):>6.2f}"
@@ -3069,7 +3320,25 @@ def main():
             f" {r['tp1_rate']:>5.1%} {r['tp2_rate']:>5.1%}"
             f" {r.get('primary_max_drawdown', r['max_drawdown']):>6.1%}"
             f" {r.get('primary_sharpe', r['sharpe']):>8.2f}"
+            f" {sortino:>8.2f}"
+            f" {ic_val:>6.3f}"
+            f" {verdict:>8}"
         )
+        if pm.get("failed_rules"):
+            print(f"  FAILED rules: {', '.join(pm['failed_rules'])}")
+        if pm.get("monthly_returns"):
+            months_str = "  monthly R: " + "  ".join(
+                f"{m}={v:+.2f}" for m, v in list(pm["monthly_returns"].items())[-6:]
+            )
+            print(months_str)
+        if pm.get("mc_p95_max_drawdown") is not None:
+            print(
+                f"  MonteCarlo P95 DD={pm['mc_p95_max_drawdown']:.1%}"
+                f"  P10 equity={pm['mc_p10_final_equity']:,.0f}"
+                f"  t={pm.get('t_statistic', 0.0):.2f} (p={pm.get('t_pvalue', 1.0):.3f})"
+                f"  Sharpe CI=[{pm.get('sharpe_ci_95_lower', 0.0):.2f}, {pm.get('sharpe_ci_95_upper', 0.0):.2f}]"
+                f"  streak={pm.get('longest_losing_streak', 0)}"
+            )
         gd = r.get("gate_diagnostics") or {}
         if gd:
             print(

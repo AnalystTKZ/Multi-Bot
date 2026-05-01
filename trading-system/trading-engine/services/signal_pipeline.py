@@ -110,8 +110,9 @@ class SignalPipeline:
         if raw_signal is None:
             return []
 
-        # Step 4: Confidence gate (≥ 0.55) — same as backtest MIN_CONFIDENCE
-        if float(raw_signal.get("confidence", 0)) < 0.55:
+        # Step 4: Confidence gate — use settings threshold, not a hardcoded constant
+        _min_conf = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
+        if float(raw_signal.get("confidence", 0)) < _min_conf:
             return []
 
         # Enrich metadata with sentiment and macro context
@@ -273,15 +274,16 @@ class SignalPipeline:
         if not ml_preds:
             return None
 
-        # Gate 2: GRU uncertainty
+        # Gate 2: GRU uncertainty — use settings (default 0.25, not the old env-var default of 2.0)
         _uncertainty = float(ml_preds.get("expected_variance", 0.0))
-        if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
+        _max_unc = float(getattr(self._settings, "MAX_UNCERTAINTY", 0.25))
+        if _uncertainty > _max_unc:
             return None
 
-        # Gate 3: GRU direction
+        # Gate 3: GRU direction — use settings threshold
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
-        _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.55"))
+        _dir_thresh = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
             conf = p_bull
@@ -318,30 +320,59 @@ class SignalPipeline:
             )
             return None
 
-        # ATR-based entry / SL / TP
-        # For RANGING entries: TP targets the far wall of the range.
-        _sl_mult    = float(os.getenv("SL_ATR_MULT", "1.5"))
-        _rr_default = float(os.getenv("RR_DEFAULT", "2.0"))
+        # ATR-based entry / SL / TP — use settings multipliers, with stricter values for XAUUSD
+        _is_gold = (symbol == "XAUUSD")
+        _sl_mult = float(
+            getattr(self._settings, "GOLD_ATR_STOP_MULTIPLIER", 2.0)
+            if _is_gold else getattr(self._settings, "ATR_STOP_MULTIPLIER", 1.5)
+        )
+        _tp_mult = float(
+            getattr(self._settings, "GOLD_ATR_TARGET_MULTIPLIER", 3.5)
+            if _is_gold else getattr(self._settings, "ATR_TARGET_MULTIPLIER", 2.5)
+        )
+        _min_rr = float(getattr(self._settings, "MIN_REWARD_TO_RISK", 1.50))
         sl_dist = atr * _sl_mult
 
         if _ltf_behaviour == "RANGING" and _range_valid:
             if side == "buy":
                 stop_loss   = float(bar.get("range_support", close - sl_dist)) - atr * 0.3
-                take_profit = float(bar.get("range_resist",  close + sl_dist * _rr_default))
+                take_profit = float(bar.get("range_resist",  close + sl_dist * _tp_mult))
             else:
                 stop_loss   = float(bar.get("range_resist",  close + sl_dist)) + atr * 0.3
-                take_profit = float(bar.get("range_support", close - sl_dist * _rr_default))
+                take_profit = float(bar.get("range_support", close - sl_dist * _tp_mult))
             actual_rr = abs(take_profit - close) / (abs(close - stop_loss) + 1e-9)
-            if actual_rr < 1.5:
+            if actual_rr < _min_rr:
                 stop_loss   = (close - sl_dist) if side == "buy" else (close + sl_dist)
-                take_profit = (close + sl_dist * _rr_default) if side == "buy" else (close - sl_dist * _rr_default)
+                take_profit = (close + sl_dist * _tp_mult) if side == "buy" else (close - sl_dist * _tp_mult)
         else:
             if side == "buy":
                 stop_loss   = close - sl_dist
-                take_profit = close + sl_dist * _rr_default
+                take_profit = close + sl_dist * _tp_mult
             else:
                 stop_loss   = close + sl_dist
-                take_profit = close - sl_dist * _rr_default
+                take_profit = close - sl_dist * _tp_mult
+
+        # Gate: minimum reward-to-risk ratio (hard geometric check at entry)
+        actual_rr = abs(take_profit - close) / (abs(close - stop_loss) + 1e-9)
+        if actual_rr < _min_rr:
+            logger.debug(
+                "Signal rejected %s %s — rr_ratio=%.2f < min_rr=%.2f",
+                symbol, side, actual_rr, _min_rr,
+            )
+            return None
+
+        # Gate: probability-weighted expected R must exceed MIN_EXPECTED_R.
+        # E[R] = P(win) × RR − P(loss) × 1.0
+        p_win = p_bull if side == "buy" else p_bear
+        expected_r = p_win * actual_rr - (1.0 - p_win) * 1.0
+        _min_er = float(getattr(self._settings, "MIN_EXPECTED_R", 1.30))
+        if expected_r < _min_er:
+            logger.debug(
+                "Signal rejected %s %s — expected_R=%.3f < min_expected_R=%.2f "
+                "(p_win=%.3f rr=%.2f)",
+                symbol, side, expected_r, _min_er, p_win, actual_rr,
+            )
+            return None
 
         return {
             "side":        side,
