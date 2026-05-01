@@ -1276,6 +1276,44 @@ class RegimeClassifier(BaseModel):
                     )
                 }
 
+            # ── Majority-class undersampling ──────────────────────────────────
+            # BIAS_NEUTRAL (HTF) is ~57% of bars; RANGING (LTF) is ~42%.
+            # Even with focal loss + class weights, a 2.7× majority ratio causes
+            # the optimiser to collapse minority-class gradients on warm starts
+            # (observed: BIAS_NEUTRAL recall 0.405 → 0.078 over 50 epochs, loss
+            # still decreasing). Cap the majority class at 2× the smallest present
+            # class so all class gradients are comparable in magnitude.
+            _us_counts = np.bincount(y.astype(np.int64), minlength=_n_cls)
+            _present = _us_counts[_us_counts > 0]
+            _minority_n = int(_present.min()) if len(_present) > 0 else 1
+            _majority_cap = max(_minority_n, int(_minority_n * 2.0))
+            _keep_mask = np.ones(len(y), dtype=bool)
+            for _cls_id in range(_n_cls):
+                _cls_idx = np.where(y == _cls_id)[0]
+                if len(_cls_idx) > _majority_cap:
+                    # Evenly-spaced subset preserves temporal distribution
+                    _keep = np.round(
+                        np.linspace(0, len(_cls_idx) - 1, _majority_cap)
+                    ).astype(int)
+                    _drop = np.ones(len(_cls_idx), dtype=bool)
+                    _drop[_keep] = False
+                    _keep_mask[_cls_idx[_drop]] = False
+                    logger.info(
+                        "RegimeClassifier[mode=%s]: undersample class %s: %d → %d",
+                        self._mode, _classes[_cls_id], len(_cls_idx), _majority_cap,
+                    )
+            _keep_idx = np.sort(np.where(_keep_mask)[0])
+            if len(_keep_idx) < len(y):
+                X = X[_keep_idx]
+                y = y[_keep_idx]
+                if sample_weight is not None:
+                    sample_weight = sample_weight[_keep_idx]
+                _new_counts = {_classes[c]: int((y == c).sum()) for c in range(_n_cls)}
+                logger.info(
+                    "RegimeClassifier[mode=%s]: after undersampling: %d samples classes=%s",
+                    self._mode, len(y), _new_counts,
+                )
+
             # ── Temporal split ────────────────────────────────────────────────
             split      = int(len(X) * 0.8)
             X_tr, X_va = X[:split],  X[split:]
@@ -1375,14 +1413,12 @@ class RegimeClassifier(BaseModel):
                 return (ce * effective_w).sum() / (effective_w.sum() + 1e-9)
 
             # ── Optimiser + scheduler ─────────────────────────────────────────
-            # Fine-tuning uses a lower LR to preserve learned structure.
-            # Cold start gets full LR; warm start gets 5× lower to avoid
-            # blowing away weights that took 7 years of data to learn.
-            _base_lr  = 3e-4
+            # Lowered from 3e-4 to 1e-4: warm-start collapse was observed even at
+            # 3e-4/5=6e-5 — BIAS_NEUTRAL recall fell 0.405→0.078 over 50 epochs
+            # while val_loss kept decreasing. Lower LR makes the warm start
+            # move more slowly away from the loaded weights.
+            _base_lr  = 1e-4
             _train_lr = _base_lr / 5.0 if _warm_start else _base_lr
-            # weight_decay raised 5e-2 → 1e-1: train/val gap was ~0.35 (HTF) and ~0.37 (LTF)
-            # indicating the small MLP was memorising label noise. Stronger L2 penalty
-            # keeps weights closer to zero and forces the model to learn general patterns.
             optimiser = torch.optim.AdamW(self._model.parameters(),
                                           lr=_train_lr, weight_decay=1e-1)
             scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -1396,10 +1432,35 @@ class RegimeClassifier(BaseModel):
             amp_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
             # ── Training loop ─────────────────────────────────────────────────
-            best_val_loss = float("inf")
-            patience, no_improve = 10, 0   # rule labels are stable — allow longer runs
-            min_epochs_before_stop = 5    # always train at least 5 epochs
+            # Early stopping based on BALANCED ACCURACY (mean per-class recall),
+            # not val_loss. Val_loss decreased monotonically 0.824→0.813 while
+            # BIAS_NEUTRAL recall crashed 0.405→0.078 — the model learned to
+            # produce confident wrong predictions (lower CE) at the cost of
+            # minority-class recall. Balanced accuracy exposes this collapse.
+            best_balanced_acc  = -1.0
+            epoch_1_balanced_acc: float | None = None
+            epoch_1_state: dict | None = None
+            patience, no_improve = 10, 0
+            min_epochs_before_stop = 5
             best_state = None
+
+            def _compute_val_stats() -> tuple[float, float, np.ndarray, np.ndarray]:
+                va_loss_acc = 0.0
+                all_preds_v, all_true_v = [], []
+                with torch.no_grad():
+                    for v_s in range(0, n_va, batch_size * 2):
+                        xb = X_va_gpu[v_s: v_s + batch_size * 2]
+                        yb = y_va_gpu[v_s: v_s + batch_size * 2]
+                        with torch.amp.autocast("cuda", enabled=use_amp):
+                            logits_v = self._model(xb).float()
+                        va_loss_acc += _base_ce(logits_v, yb).mean().item() * len(xb)
+                        all_preds_v.append(logits_v.argmax(1).cpu().numpy())
+                        all_true_v.append(yb.cpu().numpy())
+                va_loss_out = va_loss_acc / max(1, n_va)
+                va_preds = np.concatenate(all_preds_v)
+                va_trues = np.concatenate(all_true_v)
+                val_acc_out = float((va_preds == va_trues).mean())
+                return va_loss_out, val_acc_out, va_preds, va_trues
 
             for epoch in range(50):
                 self._model.train()
@@ -1428,50 +1489,47 @@ class RegimeClassifier(BaseModel):
                 tr_loss /= max(1, n_tr)
 
                 self._model.eval()
-                va_loss  = 0.0
-                n_correct = 0
-                with torch.no_grad():
-                    val_bs = batch_size * 2
-                    for v_s in range(0, n_va, val_bs):
-                        xb = X_va_gpu[v_s: v_s + val_bs]
-                        yb = y_va_gpu[v_s: v_s + val_bs]
-                        with torch.amp.autocast("cuda", enabled=use_amp):
-                            logits = self._model(xb)
-                        logits = logits.float()
-                        # Val loss: uniform weights (no rule confidence on val — measure true accuracy)
-                        va_loss   += _base_ce(logits, yb).mean().item() * len(xb)
-                        n_correct += (logits.argmax(1) == yb).sum().item()
-                va_loss /= max(1, n_va)
-                val_acc  = n_correct / max(1, n_va)
+                va_loss, val_acc, va_p, va_t = _compute_val_stats()
+                per_class_recall = [
+                    float((va_p[va_t == c] == c).mean()) if (va_t == c).sum() > 0 else 0.0
+                    for c in range(_n_cls)
+                ]
+                balanced_acc = float(np.mean(per_class_recall))
 
-                # Per-class accuracy every 5 epochs — exposes collapse to majority class
                 if (epoch + 1) % 5 == 0 or epoch == 0:
-                    all_va_preds, all_va_true = [], []
-                    with torch.no_grad():
-                        for v_s in range(0, n_va, batch_size * 2):
-                            xb = X_va_gpu[v_s: v_s + batch_size * 2]
-                            yb = y_va_gpu[v_s: v_s + batch_size * 2]
-                            with torch.amp.autocast("cuda", enabled=use_amp):
-                                preds_b = self._model(xb).float().argmax(1)
-                            all_va_preds.extend(preds_b.cpu().numpy())
-                            all_va_true.extend(yb.cpu().numpy())
-                    va_p = np.array(all_va_preds)
-                    va_t = np.array(all_va_true)
-                    per_class = {_classes[c]: round(float((va_p[va_t == c] == c).mean()), 3)
-                                 if (va_t == c).sum() > 0 else 0.0 for c in range(_n_cls)}
-                    logger.info("Regime epoch %2d/50 — tr=%.4f va=%.4f acc=%.3f per_class=%s",
-                                epoch + 1, tr_loss, va_loss, val_acc, per_class)
+                    per_class = {_classes[c]: round(per_class_recall[c], 3) for c in range(_n_cls)}
+                    logger.info("Regime epoch %2d/50 — tr=%.4f va=%.4f acc=%.3f bal=%.3f per_class=%s",
+                                epoch + 1, tr_loss, va_loss, val_acc, balanced_acc, per_class)
                 else:
-                    logger.info("Regime epoch %2d/50 — tr=%.4f va=%.4f acc=%.3f",
-                                epoch + 1, tr_loss, va_loss, val_acc)
+                    logger.info("Regime epoch %2d/50 — tr=%.4f va=%.4f acc=%.3f bal=%.3f",
+                                epoch + 1, tr_loss, va_loss, val_acc, balanced_acc)
 
-                if va_loss < best_val_loss:
-                    best_val_loss = va_loss
-                    no_improve    = 0
-                    # Save best weights (unwrap DataParallel)
-                    m = self._model.module if isinstance(
+                # Save epoch-1 checkpoint for warm-start degradation protection
+                if epoch == 0:
+                    epoch_1_balanced_acc = balanced_acc
+                    m_e1 = self._model.module if isinstance(
                         self._model, torch.nn.DataParallel) else self._model
-                    best_state = {k: v.cpu().clone() for k, v in m.state_dict().items()}
+                    epoch_1_state = {k: v.cpu().clone() for k, v in m_e1.state_dict().items()}
+
+                # Early abort: if balanced accuracy degraded >4pp from epoch 1
+                # after 3 warm-up epochs, training is making things worse.
+                if epoch >= 3 and epoch_1_balanced_acc is not None:
+                    if balanced_acc < epoch_1_balanced_acc - 0.04:
+                        logger.info(
+                            "Regime: balanced_acc degraded %.3f→%.3f at epoch %d — "
+                            "reverting to epoch-1 checkpoint to prevent collapse",
+                            epoch_1_balanced_acc, balanced_acc, epoch + 1,
+                        )
+                        best_state = epoch_1_state
+                        break
+
+                # Best state = highest balanced accuracy
+                if balanced_acc > best_balanced_acc:
+                    best_balanced_acc = balanced_acc
+                    no_improve = 0
+                    m_bs = self._model.module if isinstance(
+                        self._model, torch.nn.DataParallel) else self._model
+                    best_state = {k: v.cpu().clone() for k, v in m_bs.state_dict().items()}
                 else:
                     no_improve += 1
                     if no_improve >= patience and epoch + 1 >= min_epochs_before_stop:
@@ -1479,7 +1537,7 @@ class RegimeClassifier(BaseModel):
                                     epoch + 1, no_improve)
                         break
 
-            # Restore best weights
+            # Restore best weights (highest balanced accuracy seen during training)
             if best_state is not None:
                 m = self._model.module if isinstance(
                     self._model, torch.nn.DataParallel) else self._model
