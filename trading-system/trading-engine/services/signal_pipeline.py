@@ -67,11 +67,13 @@ class SignalPipeline:
         return self._ohlcv.get(symbol, {}).get(timeframe)
 
     async def process_bar(
-        self, symbol: str, df: pd.DataFrame, df_htf: dict
+        self, symbol: str, df: pd.DataFrame, df_htf: dict,
+        portfolio: Optional[dict] = None,
     ) -> List[dict]:
         """
         Returns list of approved signals (usually 0 or 1).
         df_htf: {timeframe: DataFrame} for HTF context.
+        portfolio: current portfolio state for RL state vector.
         """
         if df is None or len(df) < 20:
             return []
@@ -99,24 +101,46 @@ class SignalPipeline:
                 "active_news_events": [],
             })
 
-        # Step 2: Dead zone 12:00–13:00 UTC (mirrors backtest _backtest_trader)
+        # Dead zone 12:00–13:00 UTC (mirrors backtest _backtest_trader)
         now = datetime.now(timezone.utc)
         if now.hour == 12:
             return []
 
-        # Step 3: Unified ML signal (mirrors _compute_backtest_signal exactly)
-        # QualityScorer/EV gate runs in main.py after PM enrichment (needs rr_ratio).
-        raw_signal = self._compute_ml_signal(symbol, df, ml_preds)
+        # Step 2: RL agent selects dynamic confidence threshold.
+        # decide() returns (trader_id=1, threshold) or (0, 0.0) for NoTrade.
+        # Uses trained PPO when available; session-aware heuristic before training.
+        rl_agent = self._ml.get("rl")
+        bar = df.iloc[-1]
+        session = self._detect_session(now)
+        if rl_agent is not None:
+            rl_state = self._build_rl_state(ml_preds, bar, portfolio)
+            _trader_id, rl_threshold = rl_agent.decide(
+                rl_state, {"ml_trader": True}, session
+            )
+            if _trader_id == 0:
+                logger.debug("RL NoTrade %s (session=%s)", symbol, session)
+                return []
+        else:
+            rl_threshold = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
+            rl_state = np.zeros(43, dtype=np.float32)
+
+        from models.rl_agent import _encode_action
+        rl_action = _encode_action(rl_threshold) if rl_threshold > 0 else 0
+
+        # Step 3: Generate signal gated by RL-determined threshold.
+        raw_signal = self._compute_ml_signal(symbol, df, ml_preds, threshold=rl_threshold)
         if raw_signal is None:
             return []
 
-        # Step 4: Confidence gate — use settings threshold, not a hardcoded constant
-        _min_conf = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
-        if float(raw_signal.get("confidence", 0)) < _min_conf:
-            return []
+        # Attach RL metadata so TradeJournal can reconstruct episodes for RL training.
+        raw_signal["rl_action"] = rl_action
+        raw_signal["state_at_entry"] = rl_state.tolist()
+        meta = raw_signal.setdefault("signal_metadata", {})
+        meta["rl_action"] = rl_action
+        meta["rl_threshold"] = rl_threshold
 
         # Enrich metadata with sentiment and macro context
-        meta = raw_signal.setdefault("signal_metadata", {})
+        meta["session"] = session
         meta["sentiment_label"] = ml_preds.get("sentiment_label", "neutral")
         meta["sentiment_backend"] = ml_preds.get("sentiment_backend", "neutral")
         meta["sentiment_confidence"] = ml_preds.get("sentiment_confidence", 0.0)
@@ -124,18 +148,141 @@ class SignalPipeline:
         meta["macro"] = {k: float(ml_preds.get(k, 0.0)) for k in MACRO_FEATURES}
 
         logger.info(
-            "Signal APPROVED ml_trader %s %s — conf=%.3f htf=%s ltf=%s pb=%s p_bull=%.3f p_bear=%.3f",
+            "Signal APPROVED ml_trader %s %s — conf=%.3f rl_thresh=%.2f htf=%s ltf=%s "
+            "p_bull=%.3f p_bear=%.3f",
             symbol, raw_signal.get("side"),
             raw_signal.get("confidence", 0),
+            rl_threshold,
             ml_preds.get("regime", "?"),
             ml_preds.get("regime_ltf", "?"),
-            raw_signal.get("signal_metadata", {}).get("pullback_valid", False),
             ml_preds.get("p_bull", 0.5),
             ml_preds.get("p_bear", 0.5),
         )
 
         self._publish_signal(raw_signal)
         return [raw_signal]
+
+    @staticmethod
+    def _detect_session(now: datetime) -> str:
+        h = now.hour
+        if 2 <= h < 7:
+            return "ASIAN"
+        if 7 <= h < 12:
+            return "LONDON"
+        if 13 <= h < 18:
+            return "NY"
+        return "INACTIVE"
+
+    def _build_rl_state(
+        self, ml_preds: dict, bar, portfolio: Optional[dict]
+    ) -> np.ndarray:
+        """
+        Build the 43-dim RL state vector from inference outputs + portfolio context.
+
+        Dims 0–2:   GRU direction (p_bull, p_bear, uncertainty)
+        Dims 3–5:   HTF regime probabilities [BIAS_UP, BIAS_DOWN, BIAS_NEUTRAL]
+        Dims 6–9:   LTF regime probabilities [TRENDING, RANGING, CONSOLIDATING, VOLATILE]
+        Dims 10–11: Sentiment (score, confidence)
+        Dims 12–19: ATR history ratios (8 lags)
+        Dim  20:    Spread normalized
+        Dims 21–23: Time (sin_hour, cos_hour, session_enc)
+        Dims 24–28: Portfolio (win_rate, drawdown, trades_today, open_pos, daily_pnl)
+        Dims 29–32: Market structure (adx, vol_slope, vix, yield_spread)
+        Dims 33–36: Auction indicators (vwap_dist, vol_delta, wick_ratio, cum_delta)
+        Dims 37–39: Regime quality (ema_stack, htf_conf, ltf_conf)
+        Dims 40–42: Extra context (atr_ratio, volume_ratio, direction_strength)
+        """
+        from services.feature_engine import _ATR_LAGS
+
+        port = portfolio or {}
+
+        # HTF / LTF regime probability arrays
+        htf_p = ml_preds.get("regime_proba") or [1/3, 1/3, 1/3]
+        if len(htf_p) < 3:
+            htf_p = list(htf_p) + [0.0] * (3 - len(htf_p))
+
+        ltf_p = ml_preds.get("regime_ltf_conf")
+        if ltf_p is None or isinstance(ltf_p, float):
+            # Scalar confidence — rebuild as one-hot-ish
+            ltf_id = int(ml_preds.get("regime_ltf_id", 0))
+            c = float(ltf_p or 0.4)
+            ltf_p = [(c if i == ltf_id else (1 - c) / 3) for i in range(4)]
+        if len(ltf_p) < 4:
+            ltf_p = list(ltf_p) + [0.0] * (4 - len(ltf_p))
+
+        atr_lags = [
+            float(np.clip(ml_preds.get(f"atr_lag_{lag}", 1.0), 0.0, 5.0))
+            for lag in _ATR_LAGS
+        ]
+
+        now_h = datetime.now(timezone.utc).hour
+        _session_enc = {"INACTIVE": 0.0, "ASIAN": 1/3, "LONDON": 2/3, "NY": 1.0}
+        session_str = self._detect_session(datetime.now(timezone.utc))
+        session_enc = _session_enc.get(session_str, 0.0)
+
+        state = np.array([
+            # GRU direction
+            float(np.clip(ml_preds.get("p_bull", 0.5), 0.0, 1.0)),          # 0
+            float(np.clip(ml_preds.get("p_bear", 0.5), 0.0, 1.0)),          # 1
+            float(np.clip(ml_preds.get("expected_variance", 0.1), 0.0, 1.0)), # 2
+            # HTF regime
+            float(np.clip(htf_p[0], 0.0, 1.0)),                             # 3
+            float(np.clip(htf_p[1], 0.0, 1.0)),                             # 4
+            float(np.clip(htf_p[2], 0.0, 1.0)),                             # 5
+            # LTF regime
+            float(np.clip(ltf_p[0], 0.0, 1.0)),                             # 6
+            float(np.clip(ltf_p[1], 0.0, 1.0)),                             # 7
+            float(np.clip(ltf_p[2], 0.0, 1.0)),                             # 8
+            float(np.clip(ltf_p[3], 0.0, 1.0)),                             # 9
+            # Sentiment
+            float(np.clip(ml_preds.get("sentiment_score", 0.0), -1.0, 1.0)), # 10
+            float(np.clip(ml_preds.get("sentiment_confidence", 0.5), 0.0, 1.0)), # 11
+            # ATR history ratios (8 lags)
+            *atr_lags,                                                        # 12–19
+            # Spread
+            float(np.clip(ml_preds.get("spread_pips", 1.0) / 5.0, 0.0, 1.0)), # 20
+            # Time cyclical + session
+            float(np.sin(2 * np.pi * now_h / 24)),                          # 21
+            float(np.cos(2 * np.pi * now_h / 24)),                          # 22
+            float(session_enc),                                               # 23
+            # Portfolio context
+            float(np.clip(port.get("win_rate_10", 0.5), 0.0, 1.0)),         # 24
+            float(np.clip(port.get("drawdown_pct", 0.0) / 0.20, 0.0, 1.0)), # 25
+            float(np.clip(port.get("trades_today", 0) / 5.0, 0.0, 1.0)),    # 26
+            float(np.clip(port.get("open_positions", 0) / 5.0, 0.0, 1.0)),  # 27
+            float(np.clip(
+                port.get("daily_pnl", 0.0) / (port.get("equity", 1000.0) + 1e-9),
+                -0.10, 0.10,
+            )),                                                               # 28
+            # Market structure
+            float(np.clip(float(bar.get("adx_14", 20.0)) / 50.0, 0.0, 1.0)), # 29
+            float(np.clip(float(ml_preds.get("vol_slope", 0.0)), -1.0, 1.0)), # 30
+            float(np.clip(ml_preds.get("macro_vix_level", 0.2), 0.0, 1.0)), # 31
+            float(np.clip(
+                ml_preds.get("macro_yield_spread", 0.0) / 0.02, -1.0, 1.0
+            )),                                                               # 32
+            # Auction indicators (from bar computed in feature engine)
+            float(np.clip(float(bar.get("vwap_dist_atr", 0.0)) / 3.0, -1.0, 1.0)), # 33
+            float(np.clip(float(bar.get("volume_delta_pct", 0.0)), -1.0, 1.0)),     # 34
+            float(np.clip(float(bar.get("wick_auction_ratio", 0.5)), 0.0, 1.0)),    # 35
+            float(np.clip(float(ml_preds.get("cum_delta_norm", 0.0)), -1.0, 1.0)),  # 36
+            # Regime quality signals
+            float(np.clip(float(bar.get("ema_stack", 0)) / 2.0, -1.0, 1.0)), # 37
+            float(np.clip(float(max(htf_p)), 0.0, 1.0)),                    # 38
+            float(np.clip(float(max(ltf_p)), 0.0, 1.0)),                    # 39
+            # Extra context
+            float(np.clip(
+                float(ml_preds.get("atr_normalized", ml_preds.get("atr_ratio", 1.0)))
+                / 3.0, 0.0, 1.0
+            )),                                                               # 40
+            float(np.clip(float(ml_preds.get("volume_ratio", 1.0)) / 3.0, 0.0, 1.0)), # 41
+            float(np.clip(
+                max(ml_preds.get("p_bull", 0.5), ml_preds.get("p_bear", 0.5)) * 2.0 - 1.0,
+                -1.0, 1.0,
+            )),                                                               # 42
+        ], dtype=np.float32)
+
+        return np.nan_to_num(state, nan=0.0, posinf=1.0, neginf=-1.0)
 
     def _run_ml_inference(
         self, symbol: str, df: pd.DataFrame, df_htf: dict
@@ -245,15 +392,17 @@ class SignalPipeline:
         }
 
     def _compute_ml_signal(
-        self, symbol: str, df: pd.DataFrame, ml_preds: dict
+        self, symbol: str, df: pd.DataFrame, ml_preds: dict,
+        threshold: float | None = None,
     ) -> dict | None:
         """
         Mirrors run_backtest._compute_backtest_signal (source of truth).
+        threshold: RL-determined confidence threshold; falls back to settings.
 
         Gate order:
           1. ATR sanity
           2. GRU variance ≤ MAX_UNCERTAINTY
-          3. GRU direction ≥ ML_DIRECTION_THRESHOLD  →  determines side
+          3. GRU direction ≥ threshold  →  determines side
           4. HTF bias must agree with GRU side
           5. LTF behaviour must permit entry:
                TRENDING   → optional pullback filter (REQUIRE_TRENDING_PULLBACK=1 is strict)
@@ -280,10 +429,12 @@ class SignalPipeline:
         if _uncertainty > _max_unc:
             return None
 
-        # Gate 3: GRU direction — use settings threshold
+        # Gate 3: GRU direction — use RL-determined threshold (or settings default)
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
-        _dir_thresh = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
+        _dir_thresh = threshold if threshold is not None else float(
+            getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62)
+        )
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
             conf = p_bull

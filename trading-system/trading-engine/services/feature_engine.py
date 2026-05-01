@@ -206,9 +206,14 @@ SEQUENCE_FEATURES = [
     # adds noise at 15M execution; they belong in the 4H bias classifier).
     "macro_vix_level",          # 72  VIX percentile — risk-off context for sizing
     "macro_yield_spread",       # 73  10Y-2Y spread — macro regime signal
+    # ── Institutional / volume structure ─────────────────────────────────────
+    "vwap_dist_atr",            # 74  (close − VWAP) / ATR — distance from institutional fair value
+    "volume_delta_pct",         # 75  bar-level buy/sell pressure fraction [−1, +1]
+    "cum_delta_norm",           # 76  rolling 20-bar cumulative delta normalised by mean volume
+    "wick_auction_ratio",       # 77  lower_wick / (lower + upper wick) — buyer dominance [0, 1]
 ]
-# Total: 74 features (26 base/MTF + 12 regime slots [3 HTF + 1 HTF_conf + 4 LTF + 1 LTF_conf + 3 align/dur]
-#                     + 36 ICT/macro)
+# Total: 78 features (26 base/MTF + 12 regime slots [3 HTF + 1 HTF_conf + 4 LTF + 1 LTF_conf + 3 align/dur]
+#                     + 36 ICT/macro + 4 institutional/volume)
 
 # ─── 4H BIAS classifier features ─────────────────────────────────────────────
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
@@ -962,6 +967,35 @@ class FeatureEngine:
         extra["adx_15m"] = np.clip(
             _compute_adx(out, 14).fillna(0.0).to_numpy(dtype=np.float64) / 100.0, 0.0, 1.0
         ).astype(np.float32)
+
+        # ── Institutional / volume structure ──────────────────────────────────
+        from indicators.market_structure import (
+            compute_vwap as _vwap_fn,
+            compute_volume_delta as _vd_fn,
+            compute_wick_ratio as _wr_fn,
+        )
+        _vwap_df = _vwap_fn(out)
+        extra["vwap_dist_atr"] = np.clip(
+            _vwap_df["vwap_dist_atr"].fillna(0.0).to_numpy(dtype=np.float64), -3.0, 3.0
+        ).astype(np.float32)
+
+        _vd_df = _vd_fn(out)
+        extra["volume_delta_pct"] = (
+            _vd_df["volume_delta_pct"].fillna(0.0).to_numpy(dtype=np.float32)
+        )
+        _vol_mean = (
+            out["volume"].clip(lower=1e-9).rolling(20, min_periods=1).mean()
+        ).to_numpy(dtype=np.float64)
+        extra["cum_delta_norm"] = np.clip(
+            _vd_df["cum_delta_20"].fillna(0.0).to_numpy(dtype=np.float64)
+            / (_vol_mean * 10.0 + 1e-9),
+            -3.0, 3.0,
+        ).astype(np.float32)
+
+        _wr_df = _wr_fn(out)
+        extra["wick_auction_ratio"] = (
+            _wr_df["wick_auction_ratio"].fillna(0.5).to_numpy(dtype=np.float32)
+        )
 
         # ── Regime duration ───────────────────────────────────────────────────
         # Bars since last regime change; computed from regime_series if provided.

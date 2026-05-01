@@ -186,16 +186,15 @@ class PortfolioManager:
         base_size = (allocated * risk_pct) / sl_dist
         base_size = max(round(base_size, 2), 0.01)
 
-        vol_scalar    = self._volatility_scalar(atr, signal)
-        streak_scalar = self._streak_scalar(trader_id)
-        size = round(max(base_size * vol_scalar * streak_scalar, 0.01), 2)
+        vol_scalar = self._volatility_scalar(atr, signal)
+        size = round(max(base_size * vol_scalar, 0.01), 2)
 
         logger.info(
             "PM: %s %s %s conf=%.2f R:R %.2f/%.2f size=%.2f "
-            "(base=%.2f vol=%.2f streak=%.2f daily_left=%.2f)",
+            "(base=%.2f vol=%.2f daily_left=%.2f)",
             trader_id, side, symbol, confidence,
             tp1_mult, tp2_mult, size,
-            base_size, vol_scalar, streak_scalar, budget - daily_loss,
+            base_size, vol_scalar, budget - daily_loss,
         )
 
         return {
@@ -212,7 +211,6 @@ class PortfolioManager:
                 "tp1_mult":           round(tp1_mult, 2),
                 "tp2_mult":           round(tp2_mult, 2),
                 "vol_scalar":         round(vol_scalar, 3),
-                "streak_scalar":      round(streak_scalar, 3),
                 "daily_loss_remaining": round(budget - daily_loss, 2),
             },
         }
@@ -384,42 +382,16 @@ class PortfolioManager:
     # ─── Volatility scalar ────────────────────────────────────────────────────
 
     def _volatility_scalar(self, atr: float, signal: dict) -> float:
-        """nominal_atr / current_atr, clamped [0.5, 1.25]."""
+        """nominal_atr / current_atr, clamped [0.5, 1.0].
+
+        Only reduces size when current volatility is elevated vs. the nominal
+        baseline — never increases it. Sizing up into calm/compressed markets
+        risks outsized exposure when volatility reverts (e.g. pre-news).
+        """
         nominal = float(signal.get("signal_metadata", {}).get("atr_nominal", 0.0))
         if nominal < 1e-9 or atr < 1e-9:
             return 1.0
-        return float(np.clip(nominal / atr, 0.5, 1.25))
-
-    # ─── Streak scalar ────────────────────────────────────────────────────────
-
-    def _streak_scalar(self, trader_id: str) -> float:
-        """
-        3 consecutive losses → 0.50×
-        4+ consecutive losses → 0.35×
-        2 consecutive wins after a loss → full restore to 1.0×
-        """
-        hist = self._outcome_history[trader_id]
-        if not hist:
-            return 1.0
-
-        # Count trailing consecutive losses
-        consec_losses = 0
-        for outcome in reversed(hist):
-            if not outcome:
-                consec_losses += 1
-            else:
-                break
-
-        if consec_losses >= 4:
-            return 0.35
-        if consec_losses >= 3:
-            return 0.50
-
-        # Recovery: 2 wins after a prior loss streak
-        if len(hist) >= 3 and hist[-1] and hist[-2] and not hist[-3]:
-            return 1.0
-
-        return 1.0
+        return float(np.clip(nominal / atr, 0.5, 1.0))
 
     # ─── Correlation filter ───────────────────────────────────────────────────
 

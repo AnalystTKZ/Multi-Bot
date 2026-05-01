@@ -55,14 +55,11 @@ class BaseModel(abc.ABC):
 
         if current_mtime != self._last_mtime:
             logger.info("%s: weight file changed — reloading", self.__class__.__name__)
-            try:
-                self.load(self.weight_path)
-                self._last_mtime = current_mtime
-                self._loaded = True
-                logger.info("%s: reload complete", self.__class__.__name__)
-                return True
-            except Exception as exc:
-                logger.error("%s: reload failed: %s", self.__class__.__name__, exc)
+            self.load(self.weight_path)
+            self._last_mtime = current_mtime
+            self._loaded = True
+            logger.info("%s: reload complete", self.__class__.__name__)
+            return True
         return False
 
     @abc.abstractmethod

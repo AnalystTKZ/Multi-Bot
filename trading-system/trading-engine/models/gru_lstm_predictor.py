@@ -79,6 +79,14 @@ def _build_torch_model():
     import torch.nn as nn
 
     class _MultiHeadGRULSTM(nn.Module):
+        """
+        GRU(64,2) → LSTM(128,2) → MultiHeadAttention(128,4) → mean-pool → shared(64)
+        → [direction logit, magnitude regression, log-variance].
+
+        Attention over all 30 timesteps (not just the last hidden state) lets the
+        model learn which bars in the window are most predictive — e.g. the BOS bar
+        5 bars ago matters more than the most recent consolidation bar.
+        """
         def __init__(self):
             super().__init__()
             self.gru = nn.GRU(
@@ -96,6 +104,11 @@ def _build_torch_model():
                 batch_first=True,
                 dropout=0.3,
             )
+            # Self-attention over the full 30-bar LSTM output sequence.
+            # 4 heads × 32 dims each = 128 total embed_dim.
+            self.attn  = nn.MultiheadAttention(
+                embed_dim=128, num_heads=4, dropout=0.1, batch_first=True
+            )
             self.drop2 = nn.Dropout(0.3)
             self.shared = nn.Sequential(
                 nn.Linear(128, 64),
@@ -107,23 +120,25 @@ def _build_torch_model():
             self.head_var = nn.Linear(64, 1)
 
         def forward(self, x):
-            out, _ = self.gru(x)
-            out = self.drop1(out)
-            out, _ = self.lstm(out)
-            out = self.drop2(out[:, -1, :])   # last timestep
+            out, _ = self.gru(x)                       # (B, T, 64)
+            out    = self.drop1(out)
+            out, _ = self.lstm(out)                    # (B, T, 128)
+            attn_out, _ = self.attn(out, out, out)     # (B, T, 128)
+            out    = self.drop2(attn_out.mean(dim=1))  # (B, 128) — mean-pool timesteps
             shared = self.shared(out)
-            dir_logits = self.head_dir(shared).squeeze(-1)
-            mag = self.head_mag(shared).squeeze(-1)
+            dir_logits   = self.head_dir(shared).squeeze(-1)
+            mag          = self.head_mag(shared).squeeze(-1)
             log_variance = self.head_var(shared).squeeze(-1)
             return dir_logits, mag, log_variance
 
         def encode(self, x):
             """Return the 64-dim shared embedding without running the output heads."""
             out, _ = self.gru(x)
-            out = self.drop1(out)
+            out    = self.drop1(out)
             out, _ = self.lstm(out)
-            out = self.drop2(out[:, -1, :])
-            return self.shared(out)  # (batch, 64)
+            attn_out, _ = self.attn(out, out, out)
+            out = self.drop2(attn_out.mean(dim=1))
+            return self.shared(out)  # (B, 64)
 
     return _MultiHeadGRULSTM()
 

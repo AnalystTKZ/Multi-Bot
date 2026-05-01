@@ -283,7 +283,9 @@ class ProductionTradingEngine:
         try:
             loop = asyncio.new_event_loop()
             signals = loop.run_until_complete(
-                self._pipeline.process_bar(symbol, df, df_htf)
+                self._pipeline.process_bar(
+                    symbol, df, df_htf, portfolio=self._get_portfolio_state()
+                )
             )
             loop.close()
         except Exception as exc:
@@ -323,7 +325,7 @@ class ProductionTradingEngine:
                     rr_ratio=float(enriched.get("rr_ratio", 1.5)),
                     correlation_id=enriched.get("correlation_id", ""),
                     signal_metadata=enriched.get("signal_metadata", {}),
-                    state_at_entry=enriched.get("state_at_entry", [0.0] * 42),
+                    state_at_entry=enriched.get("state_at_entry", [0.0] * 43),
                 )
                 trade = self._executor.execute_trade(req, portfolio)
                 if trade:

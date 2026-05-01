@@ -199,11 +199,8 @@ class RegimeClassifier(BaseModel):
                      self._n_output_classes, self.weight_path)
         os.makedirs(os.path.join(_MODEL_ROOT, "weights"), exist_ok=True)
         if self.is_trained:
-            try:
-                self.load(self.weight_path)
-            except Exception as exc:
-                logger.warning("RegimeClassifier[%s mode=%s]: initial load failed: %s",
-                               self._timeframe or "default", self._mode, exc)
+            self.load(self.weight_path)
+            self._last_mtime = os.path.getmtime(self.weight_path)
 
     # ── Predict ───────────────────────────────────────────────────────────────
 
@@ -272,11 +269,11 @@ class RegimeClassifier(BaseModel):
         GPU is reserved for the GRU which has large recurrent state and benefits
         from CUDA parallelism.
         """
-        _default_id = 2 if self._mode == "htf_bias" else 1  # BIAS_NEUTRAL or RANGING
-        _default_conf = 1.0 / self._n_output_classes
         if not self.is_trained or self._model is None:
-            n = len(X)
-            return np.full(n, _default_id, dtype=np.int32), np.full(n, _default_conf, dtype=np.float32)
+            raise ModelNotTrainedError(
+                "RegimeClassifier has no trained weights. "
+                "Run: python scripts/retrain_incremental.py --model regime"
+            )
         try:
             import torch
             self.reload_if_updated()
@@ -306,103 +303,69 @@ class RegimeClassifier(BaseModel):
 
     def create_labels(self, df: pd.DataFrame) -> pd.Series:
         """
-        Institutional-grade regime labeling via unsupervised clustering.
+        Institutional-grade regime labeling via unsupervised GMM clustering.
 
-        Step 1 — build 4 continuous, timeframe-agnostic features:
-          efficiency_ratio  = |net n-bar move| / sum(|bar moves|)  [0→1, 1=clean trend]
-          volatility        = ATR / close (relative, not pip-units)
-          drift             = (close - close[n]) / n / close       (signed direction)
-          compression       = (max - min) / ATR over n bars
+        Uses 4 components to match LTF_CLASSES exactly:
+          VOLATILE (3):       highest (vol - eff) — chaotic expansion
+          TRENDING (0):       highest efficiency + highest abs(drift) — direction-agnostic
+          CONSOLIDATING (2):  lowest atr_pctile + lowest autocorr — pre-breakout compression
+          RANGING (1):        remainder — moderate vol, near-zero drift
 
-        Step 2 — GaussianMixture (k=4) on z-scored features.
-          GMM is preferred over KMeans: handles elongated clusters (trending
-          regimes stretch along the drift axis) and gives soft probabilities.
-
-        Step 3 — map clusters → regime labels by their feature profile:
-          high efficiency + positive drift → TRENDING (0)
-          high efficiency + negative drift → TRENDING (1)
-          low efficiency + low vol         → RANGING (2)
-          high vol + low efficiency        → VOLATILE (3)
-
-        Result: balanced classes (~20-30% each), stable labels, timeframe-agnostic.
+        Mirrors fit_global_gmm (ltf_behaviour) exactly so per-symbol and global
+        paths produce consistent semantics. Raises if sklearn is not available
+        or if the data is insufficient — callers must supply clean data.
         """
-        from indicators.market_structure import compute_atr
-        try:
-            from sklearn.mixture import GaussianMixture
-            from sklearn.preprocessing import StandardScaler
-            _has_gmm = True
-        except ImportError:
-            _has_gmm = False
+        from sklearn.mixture import GaussianMixture
+        from sklearn.preprocessing import StandardScaler
 
-        close = df["close"]
-        # Scale lookback to the timeframe: 4H needs ~50 bars to see a full trend;
-        # 14 bars at 4H is only 2.3 days — not enough to separate regimes.
         n_bar = self._TF_NBAR.get(self._timeframe, self._DEFAULT_NBAR)
-
-        atr = compute_atr(df, n_bar)
-
-        # ── Feature 1: efficiency ratio ───────────────────────────────────────
-        abs_moves   = np.abs(close.diff()).rolling(n_bar, min_periods=n_bar).sum()
-        net_move    = np.abs(close - close.shift(n_bar))
-        eff_ratio   = (net_move / (abs_moves + 1e-9)).clip(0, 1)
-
-        # ── Feature 2: relative volatility ───────────────────────────────────
-        rel_vol = atr / (close + 1e-9)
-
-        # ── Feature 3: drift (signed) ─────────────────────────────────────────
-        drift = (close - close.shift(n_bar)) / (n_bar * close + 1e-9)
-
-        # Use the shared feature extractor (includes atr_pctile as 6th feature)
         feat_df, _ = self._extract_gmm_features(df, n_bar=n_bar)
 
-        if len(feat_df) < 50 or not _has_gmm:
-            # Fallback: simple rule-based labels
-            adx_s = df["adx_14"] if "adx_14" in df.columns else atr * 0
-            vol_thresh = float(np.nanpercentile(rel_vol.fillna(0).values, 80))
-            ema_stack = df.get("ema_stack", pd.Series(0, index=df.index))
-            trend_up = (adx_s > 25) & (ema_stack == 2)
-            trend_dn = (adx_s > 25) & (ema_stack == -2)
-            volatile = (rel_vol > vol_thresh) & ~trend_up & ~trend_dn
-            labels = pd.Series(2, index=df.index)
-            labels[volatile] = 3
-            labels[trend_dn] = 1
-            labels[trend_up] = 0
-            return labels.astype(int)
+        if len(feat_df) < 50:
+            raise ValueError(
+                f"create_labels: insufficient data ({len(feat_df)} rows after feature extraction, "
+                f"need ≥50). Provide a longer history or use create_rule_labels()."
+            )
 
-        # ── GMM clustering ────────────────────────────────────────────────────
         scaler   = StandardScaler()
         X_scaled = scaler.fit_transform(feat_df.values)
 
-        gmm = GaussianMixture(n_components=5, covariance_type="full",
-                               random_state=42, max_iter=200)
+        n_components = 3 if self._mode == "htf_bias" else 4
+        gmm = GaussianMixture(n_components=n_components, covariance_type="full",
+                              random_state=42, max_iter=200)
         cluster_ids = gmm.fit_predict(X_scaled)
 
-        # ── Map clusters → regime labels (rank-based — guaranteed all 5 classes) ──
         centroids = scaler.inverse_transform(gmm.means_)
-        remaining = list(range(5))
+        # centroids cols: [eff, vol, drift, comp, vol_slope, atr_pctile, autocorr, hurst_proxy]
+        remaining = list(range(n_components))
         cluster_labels: dict[int, int] = {}
 
-        vol_c = max(remaining, key=lambda c: centroids[c, 1] - centroids[c, 0])
-        cluster_labels[vol_c] = 3
-        remaining.remove(vol_c)
+        if self._mode == "htf_bias":
+            bu_c = max(remaining, key=lambda c: centroids[c, 2])
+            cluster_labels[bu_c] = 0
+            remaining.remove(bu_c)
+            bd_c = min(remaining, key=lambda c: centroids[c, 2])
+            cluster_labels[bd_c] = 1
+            remaining.remove(bd_c)
+            cluster_labels[remaining[0]] = 2
+        else:
+            # VOLATILE (3): highest (vol - eff)
+            vol_c = max(remaining, key=lambda c: centroids[c, 1] - centroids[c, 0])
+            cluster_labels[vol_c] = 3
+            remaining.remove(vol_c)
+            # TRENDING (0): highest efficiency + highest abs(drift), direction-agnostic
+            tr_c = max(remaining, key=lambda c: centroids[c, 0] + abs(centroids[c, 2]))
+            cluster_labels[tr_c] = 0
+            remaining.remove(tr_c)
+            # CONSOLIDATING (2): lowest atr_pctile + lowest autocorr
+            consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
+            cluster_labels[consol] = 2
+            remaining.remove(consol)
+            # RANGING (1): the remainder
+            cluster_labels[remaining[0]] = 1
 
-        tu = max(remaining, key=lambda c: centroids[c, 2])
-        cluster_labels[tu] = 0
-        remaining.remove(tu)
-
-        td = min(remaining, key=lambda c: centroids[c, 2])
-        cluster_labels[td] = 1
-        remaining.remove(td)
-
-        # CONSOLIDATING (4): lowest atr_pctile + lowest autocorr (pre-breakout compression)
-        consol = min(remaining, key=lambda c: centroids[c, 5] + max(centroids[c, 6], 0))
-        cluster_labels[consol] = 4
-        remaining.remove(consol)
-
-        # RANGING (2): the remainder — moderate vol, near-zero drift, stable ATR
-        cluster_labels[remaining[0]] = 2
-
-        labels = pd.Series(2, index=df.index, dtype=int)
+        default_id = 2 if self._mode == "htf_bias" else 1
+        labels = pd.Series(default_id, index=df.index, dtype=int)
         labels.loc[feat_df.index] = [cluster_labels[int(c)] for c in cluster_ids]
         return labels.astype(int)
 
@@ -876,23 +839,17 @@ class RegimeClassifier(BaseModel):
             X[:, 5] = sc.astype(np.float32)
 
         # BOS and sweep counts — causal rolling sums over 24 bars.
-        # Reads pre-computed bos_bull/bos_bear and sweep_bull/sweep_bear columns
-        # if present; falls back to zero if the columns are absent so inference
-        # remains safe on DataFrames that lack these indicators.
-        try:
-            _bos_window = 24
-            if "bos_bull" in df.columns or "bos_bear" in df.columns:
-                _bos_bull = df["bos_bull"].fillna(0) if "bos_bull" in df.columns else pd.Series(0, index=df.index)
-                _bos_bear = df["bos_bear"].fillna(0) if "bos_bear" in df.columns else pd.Series(0, index=df.index)
-                _bos_count = (_bos_bull + _bos_bear).rolling(_bos_window, min_periods=1).sum()
-                X[:, 6] = np.clip(np.nan_to_num(_bos_count.values.astype(np.float32), nan=0.0), 0, 20)
-            if "sweep_bull" in df.columns or "sweep_bear" in df.columns:
-                _sw_bull = df["sweep_bull"].fillna(0) if "sweep_bull" in df.columns else pd.Series(0, index=df.index)
-                _sw_bear = df["sweep_bear"].fillna(0) if "sweep_bear" in df.columns else pd.Series(0, index=df.index)
-                _sw_count = (_sw_bull + _sw_bear).rolling(_bos_window, min_periods=1).sum()
-                X[:, 7] = np.clip(np.nan_to_num(_sw_count.values.astype(np.float32), nan=0.0), 0, 20)
-        except Exception:
-            pass  # columns absent — X[:, 6] and X[:, 7] remain zero (safe fallback)
+        _bos_window = 24
+        if "bos_bull" in df.columns or "bos_bear" in df.columns:
+            _bos_bull = df["bos_bull"].fillna(0) if "bos_bull" in df.columns else pd.Series(0, index=df.index)
+            _bos_bear = df["bos_bear"].fillna(0) if "bos_bear" in df.columns else pd.Series(0, index=df.index)
+            _bos_count = (_bos_bull + _bos_bear).rolling(_bos_window, min_periods=1).sum()
+            X[:, 6] = np.clip(np.nan_to_num(_bos_count.values.astype(np.float32), nan=0.0), 0, 20)
+        if "sweep_bull" in df.columns or "sweep_bear" in df.columns:
+            _sw_bull = df["sweep_bull"].fillna(0) if "sweep_bull" in df.columns else pd.Series(0, index=df.index)
+            _sw_bear = df["sweep_bear"].fillna(0) if "sweep_bear" in df.columns else pd.Series(0, index=df.index)
+            _sw_count = (_sw_bull + _sw_bear).rolling(_bos_window, min_periods=1).sum()
+            X[:, 7] = np.clip(np.nan_to_num(_sw_count.values.astype(np.float32), nan=0.0), 0, 20)
 
         # ── MTF features (indices 8–27): 5 TFs × 4 features each ─────────────
         _tf_map = {"5M": (8, "5M"), "15M": (12, "15M"), "1H": (16, "1H"),

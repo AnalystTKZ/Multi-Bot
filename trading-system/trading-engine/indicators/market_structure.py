@@ -833,16 +833,162 @@ def detect_significant_range(
     return result
 
 
+def compute_vwap(df: pd.DataFrame, session_length: int = 24) -> pd.DataFrame:
+    """
+    Session-anchored VWAP with ±1σ and ±2σ standard deviation bands.
+
+    For DatetimeIndex data, VWAP resets at UTC midnight each calendar day
+    (proper cumulative VWAP). Fallback: rolling `session_length`-bar VWAP.
+
+      VWAP = Σ(tp × vol) / Σvol   where  tp = (high + low + close) / 3
+
+    VWAP σ² uses the online volume-weighted variance formula:
+      σ² = Σ(tp² × vol) / Σvol  −  VWAP²   (computational form of Var)
+
+    Returns DataFrame columns:
+      vwap, vwap_upper1, vwap_lower1, vwap_upper2, vwap_lower2,
+      vwap_dist_atr  — (close − vwap) / ATR, clipped [−5, 5]
+    """
+    tp     = (df["high"] + df["low"] + df["close"]) / 3.0
+    vol    = df["volume"].clip(lower=0)
+    tp_vol  = tp * vol
+    tp2_vol = tp ** 2 * vol
+
+    if isinstance(df.index, pd.DatetimeIndex):
+        day_key    = df.index.normalize()
+        cum_tpvol  = tp_vol.groupby(day_key).cumsum()
+        cum_tp2vol = tp2_vol.groupby(day_key).cumsum()
+        cum_vol    = vol.groupby(day_key).cumsum()
+    else:
+        sl = max(1, session_length)
+        cum_tpvol  = tp_vol.rolling(sl, min_periods=1).sum()
+        cum_tp2vol = tp2_vol.rolling(sl, min_periods=1).sum()
+        cum_vol    = vol.rolling(sl, min_periods=1).sum()
+
+    vwap     = cum_tpvol / (cum_vol + 1e-9)
+    vwap_var = (cum_tp2vol / (cum_vol + 1e-9) - vwap ** 2).clip(lower=0)
+    vwap_std = np.sqrt(vwap_var)
+    atr      = compute_atr(df, 14)
+
+    result = pd.DataFrame(index=df.index)
+    result["vwap"]         = vwap.astype(np.float32)
+    result["vwap_upper1"]  = (vwap + vwap_std).astype(np.float32)
+    result["vwap_lower1"]  = (vwap - vwap_std).astype(np.float32)
+    result["vwap_upper2"]  = (vwap + 2.0 * vwap_std).astype(np.float32)
+    result["vwap_lower2"]  = (vwap - 2.0 * vwap_std).astype(np.float32)
+    result["vwap_dist_atr"] = (
+        (df["close"] - vwap) / (atr + 1e-9)
+    ).clip(-5.0, 5.0).astype(np.float32)
+    return result
+
+
+def compute_volume_delta(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """
+    Directional volume — estimated buy/sell pressure from OHLC bar position.
+
+    Models the bar-level auction result: if close is near the high, buyers
+    controlled the bar; near the low means sellers controlled it.
+
+      buy_vol  = volume × (close − low)  / (high − low + ε)
+      sell_vol = volume × (high − close) / (high − low + ε)
+      delta    = buy_vol − sell_vol      (+ve = net buying pressure)
+
+    delta_pct normalises to [−1, +1] per bar (fraction of volume).
+
+    Cumulative delta (rolling `period` bars) tracks sustained pressure
+    accumulation. Divergence from price is a leading reversal signal:
+      bear_div — price at 20-bar high but cum_delta below its 20-bar high
+                 (hidden selling: buyers are losing the auction)
+      bull_div — price at 20-bar low but cum_delta above its 20-bar low
+                 (hidden buying: sellers are losing the auction)
+
+    Returns DataFrame columns:
+      volume_delta, volume_delta_pct, cum_delta_20,
+      delta_bull_div, delta_bear_div
+    """
+    bar_range = (df["high"] - df["low"]).clip(lower=1e-9)
+    vol       = df["volume"].clip(lower=0)
+    buy_vol   = vol * (df["close"] - df["low"])  / bar_range
+    sell_vol  = vol * (df["high"] - df["close"]) / bar_range
+    delta     = buy_vol - sell_vol
+    delta_pct = (delta / (vol + 1e-9)).clip(-1.0, 1.0)
+    cum_delta = delta.rolling(period, min_periods=1).sum()
+
+    close_high = df["close"].rolling(period, min_periods=5).max()
+    close_low  = df["close"].rolling(period, min_periods=5).min()
+    delta_high = cum_delta.rolling(period, min_periods=5).max()
+    delta_low  = cum_delta.rolling(period, min_periods=5).min()
+
+    bear_div = (
+        (df["close"] >= close_high * 0.9995) &
+        (cum_delta < delta_high * 0.98)
+    ).astype(np.float32).fillna(0.0)
+
+    bull_div = (
+        (df["close"] <= close_low * 1.0005) &
+        (cum_delta > delta_low * 0.98)
+    ).astype(np.float32).fillna(0.0)
+
+    result = pd.DataFrame(index=df.index)
+    result["volume_delta"]     = delta.astype(np.float32)
+    result["volume_delta_pct"] = delta_pct.astype(np.float32)
+    result["cum_delta_20"]     = cum_delta.astype(np.float32)
+    result["delta_bull_div"]   = bull_div
+    result["delta_bear_div"]   = bear_div
+    return result
+
+
+def compute_wick_ratio(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bar auction result — which side dominated each bar's high-low range.
+
+    wick_auction_ratio = lower_wick / (lower_wick + upper_wick + ε)
+      → near 1.0: buyers dominated (long lower tail = buyers absorbed selling)
+      → near 0.0: sellers dominated (long upper tail = sellers absorbed buying)
+      → near 0.5: balanced / doji / indecision
+
+    body_pct = |close − open| / (high − low + ε)
+      → near 1.0: strong directional conviction bar (small wicks, large body)
+      → near 0.0: doji / spinning top (indecision, equal auction)
+
+    Note: feature_engine also computes separate upper_wick_ratio and
+    lower_wick_ratio (both normalised by bar range) for SEQUENCE_FEATURES.
+    This function adds the directional *ratio* between the two wicks, which
+    conveys which side won rather than just each wick's absolute size.
+
+    Returns DataFrame columns: wick_auction_ratio, body_pct
+    """
+    bar_range  = (df["high"] - df["low"]).clip(lower=1e-9)
+    body_top   = df[["open", "close"]].max(axis=1)
+    body_bot   = df[["open", "close"]].min(axis=1)
+    upper_wick = (df["high"] - body_top).clip(lower=0)
+    lower_wick = (body_bot - df["low"]).clip(lower=0)
+
+    result = pd.DataFrame(index=df.index)
+    result["wick_auction_ratio"] = (
+        lower_wick / (lower_wick + upper_wick + 1e-9)
+    ).clip(0, 1).astype(np.float32)
+    result["body_pct"] = (
+        (body_top - body_bot) / bar_range
+    ).clip(0, 1).astype(np.float32)
+    return result
+
+
 def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Master function. Adds all indicator columns to df and returns it.
+    Master function. Computes all indicators and returns an enriched DataFrame.
 
-    Column naming convention:
-      ema_21, ema_50, ema_200, atr_14, rsi_14, adx_14,
-      stoch_k, stoch_d, bb_upper, bb_mid, bb_lower, bb_width,
-      macd_line, macd_signal, macd_hist,
-      ema_stack, fvg_bull, fvg_bear, bos_bull, bos_bear,
-      sweep_bull, sweep_bear, ob_bull, ob_bear
+    Trend / momentum: ema_21/50/200, atr_14, rsi_14, adx_14, bb_*, stoch_k/d, ema_stack
+    SMC structure:    fvg_bull/bear, bos_bull/bear, sweep_bull/bear, ob_bull/bear
+    S/R zones:        sr_nearest_resist/support, sr_dist_*, sr_in_supply/demand_zone
+    Range / pullback: range_valid/side/support/resist, pullback_valid/side/level
+    Institutional:    vwap, vwap_upper/lower1/2, vwap_dist_atr
+    Volume structure: volume_delta, volume_delta_pct, cum_delta_20, delta_*_div
+    Auction result:   wick_auction_ratio, body_pct
+
+    Note: MACD (compute_macd) is available as a standalone function but is NOT
+    included in compute_all — its information is captured by the EMA-distance
+    features already present in SEQUENCE_FEATURES.
     """
     out = df.copy()
 
@@ -862,11 +1008,6 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     out["bb_mid"] = bb_mid
     out["bb_lower"] = bb_lower
     out["bb_width"] = (bb_upper - bb_lower) / (bb_mid + 1e-9)
-
-    macd_line, macd_sig, macd_hist = compute_macd(df["close"])
-    out["macd_line"]   = macd_line
-    out["macd_signal"] = macd_sig
-    out["macd_hist"]   = macd_hist
 
     out["ema_stack"] = compute_ema_stack_score(df)
 
@@ -921,6 +1062,21 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     out["pullback_level"]  = pb["pullback_level"]
     out["pb_swing_high"]   = pb["pb_swing_high"]
     out["pb_swing_low"]    = pb["pb_swing_low"]
+
+    # ── Institutional reference price ─────────────────────────────────────────
+    vwap_df = compute_vwap(df)
+    for col in vwap_df.columns:
+        out[col] = vwap_df[col]
+
+    # ── Directional volume (buy/sell pressure + divergence) ───────────────────
+    vd = compute_volume_delta(df)
+    for col in vd.columns:
+        out[col] = vd[col]
+
+    # ── Bar auction result (wick dominance) ───────────────────────────────────
+    wr = compute_wick_ratio(df)
+    for col in wr.columns:
+        out[col] = wr[col]
 
     # Downcast float64 → float32 to halve per-symbol memory footprint.
     # Boolean columns are left as-is; OHLCV source columns keep their dtype.

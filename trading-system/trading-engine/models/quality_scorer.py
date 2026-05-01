@@ -140,10 +140,8 @@ class QualityScorer(BaseModel):
         self._inference_lock = threading.RLock()
         os.makedirs(os.path.join(_MODEL_ROOT, "weights"), exist_ok=True)
         if self.is_trained:
-            try:
-                self.load(WEIGHT_PATH)
-            except Exception as exc:
-                logger.warning("QualityScorer: initial load failed: %s", exc)
+            self.load(WEIGHT_PATH)
+            self._last_mtime = os.path.getmtime(WEIGHT_PATH)
 
     # ── Predict ───────────────────────────────────────────────────────────────
 
@@ -603,7 +601,6 @@ class QualityScorer(BaseModel):
         try:
             import torch
             os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-            import torch
             _m = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
             payload = {
                 "state_dict":    {k: v.cpu() for k, v in _m.state_dict().items()},

@@ -1,19 +1,20 @@
 """
-rl_agent.py — PPO-based strategy selector via Stable-Baselines3.
+rl_agent.py — PPO-based confidence-threshold selector via Stable-Baselines3.
 
-State: 43-dim vector.
-Actions (v2 — expanded): 16
-  0           = NoTrade
-  1–5         = Trader 1–5 @ default threshold (0.55)
-  6–10        = Trader 1–5 @ medium threshold (0.65)
-  11–15       = Trader 1–5 @ high threshold (0.75)
+State: 43-dim vector (regime logits, recent performance, market context).
+Actions (v3 — threshold-only): 9
+  0     = NoTrade
+  1–8   = Trade with ml_trader at threshold [0.60, 0.62, 0.65, 0.68,
+                                              0.70, 0.72, 0.75, 0.80]
 
-The action encodes BOTH which strategy to trade AND how selective to be.
-Higher-confidence thresholds mean fewer but better trades — the RL agent
-can learn to dial selectivity up/down based on regime / drawdown context.
+The action encodes HOW SELECTIVE to be. Higher thresholds mean fewer but
+higher-confidence trades. The RL agent learns to match selectivity to regime:
+  - Strong trending + positive IC  → lower threshold (more trades)
+  - Volatile ranging + degrading IC → higher threshold (fewer, better trades)
+  - Drawdown / cooldown active      → NoTrade (action 0)
 
-Backward-compat: select_action() still returns (trader_id, confidence_float)
-so BaseTrader.analyze_market() is unchanged.
+select_action() returns (trader_id=1, confidence_threshold) so the upstream
+ml_trader interface is unchanged. trader_id=1 maps to the unified ml_trader.
 """
 
 from __future__ import annotations
@@ -33,14 +34,18 @@ logger = logging.getLogger(__name__)
 N_STATE = 43
 
 # Action space layout
-# [0]       NoTrade
-# [1–5]     Traders 1–5 @ threshold tier 0 (0.55)
-# [6–10]    Traders 1–5 @ threshold tier 1 (0.65)
-# [11–15]   Traders 1–5 @ threshold tier 2 (0.75)
-N_ACTIONS = 16
+# [0]     NoTrade
+# [1]     Trade @ 0.60   (most permissive — use in strong trending + high IC)
+# [2]     Trade @ 0.62
+# [3]     Trade @ 0.65
+# [4]     Trade @ 0.68
+# [5]     Trade @ 0.70   (default baseline — matches settings.ML_DIRECTION_THRESHOLD)
+# [6]     Trade @ 0.72
+# [7]     Trade @ 0.75
+# [8]     Trade @ 0.80   (most selective — use in volatile/ranging regimes)
+N_ACTIONS = 9
 
-_THRESHOLD_TIERS = [0.55, 0.65, 0.75]
-_N_TRADERS = 5
+_THRESHOLD_TIERS = [0.60, 0.62, 0.65, 0.68, 0.70, 0.72, 0.75, 0.80]
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # trading-engine/
 MODEL_DIR = os.path.join(_MODEL_ROOT, "weights", "rl_ppo") + os.sep
 
@@ -79,25 +84,23 @@ def _record_allowed_by_split(record: dict, allowed_splits: set[str] | None) -> b
 
 def _decode_action(action_id: int) -> Tuple[int, float]:
     """
-    Decode action_id → (trader_id [1–5 or 0], confidence_threshold).
-    action 0      → (0, 0.0)   NoTrade
-    action 1–5    → (1–5, 0.55)
-    action 6–10   → (1–5, 0.65)
-    action 11–15  → (1–5, 0.75)
+    Decode action_id → (trader_id, confidence_threshold).
+    action 0   → (0, 0.0)  NoTrade
+    action 1–8 → (1, _THRESHOLD_TIERS[action_id - 1])
+    trader_id=1 maps to the unified ml_trader.
     """
     if action_id == 0 or action_id >= N_ACTIONS:
         return (0, 0.0)
-    tier = (action_id - 1) // _N_TRADERS          # 0, 1, or 2
-    trader_num = ((action_id - 1) % _N_TRADERS) + 1  # 1–5
-    threshold = _THRESHOLD_TIERS[min(tier, len(_THRESHOLD_TIERS)-1)]
-    return (trader_num, threshold)
+    threshold = _THRESHOLD_TIERS[action_id - 1]
+    return (1, threshold)
 
 
-def _encode_action(trader_num: int, tier: int = 0) -> int:
-    """Inverse of _decode_action."""
-    if trader_num == 0:
+def _encode_action(threshold: float) -> int:
+    """Return the action_id for the closest threshold tier."""
+    if threshold <= 0:
         return 0
-    return (tier * _N_TRADERS) + trader_num
+    diffs = [abs(t - threshold) for t in _THRESHOLD_TIERS]
+    return diffs.index(min(diffs)) + 1
 
 
 class ModelNotTrainedError(RuntimeError):
@@ -152,21 +155,27 @@ class RLAgent(BaseModel):
         if len(self._experience_buffer) >= _BUFFER_TRIGGER and self._model is not None:
             self._mini_update()
 
+    def decide(
+        self, state: np.ndarray, available_signals: dict, session: str
+    ) -> Tuple[int, float]:
+        """
+        Primary live-trading API. Returns (trader_id, confidence_threshold).
+        Uses trained PPO when weights are present; session-aware heuristic before
+        enough episodes have been collected to train the PPO.
+        trader_id=0 means NoTrade regardless of source.
+        """
+        if self.is_trained and self._model is not None:
+            return self.select_action(state, available_signals)
+        logger.debug("RLAgent: untrained — heuristic fallback (session=%s)", session)
+        return self._heuristic_fallback(available_signals, session)
+
     def select_action(
         self, state: np.ndarray, available_signals: dict
     ) -> Tuple[int, float]:
         """
-        Returns (trader_id [1–5 or 0], confidence_threshold).
-
-        v2 action space: 16 actions.
-          action 0       → NoTrade
-          action 1–5     → Trader 1–5 @ threshold 0.55
-          action 6–10    → Trader 1–5 @ threshold 0.65
-          action 11–15   → Trader 1–5 @ threshold 0.75
-
-        HARD RULE: if selected trader not in available_signals → return (0, 0.0).
-        Raises ModelNotTrainedError if PPO weights are missing.
-        Run: python scripts/retrain_incremental.py --model rl
+        PPO inference path. Returns (trader_id=1, confidence_threshold) or (0, 0.0).
+        Raises ModelNotTrainedError if PPO weights are missing — call decide() instead
+        for the version that gracefully handles the untrained case.
         """
         if not self.is_trained or self._model is None:
             raise ModelNotTrainedError(
@@ -181,20 +190,17 @@ class RLAgent(BaseModel):
         action_id = int(action[0]) if hasattr(action, "__len__") else int(action)
         action_id = max(0, min(action_id, N_ACTIONS - 1))
 
-        trader_num, threshold = _decode_action(action_id)
+        trader_id, threshold = _decode_action(action_id)
 
-        # Guard: strategy must have a rule-based signal
-        if trader_num != 0:
-            trader_key = f"trader_{trader_num}"
-            if not available_signals.get(trader_key):
-                return (0, 0.0)
+        if trader_id != 0 and not available_signals.get("ml_trader"):
+            return (0, 0.0)
 
-        return (trader_num, threshold)
+        return (trader_id, threshold)
 
-    def get_confidence_threshold(self, trader_num: int, state: np.ndarray) -> float:
+    def get_confidence_threshold(self, state: np.ndarray) -> float:
         """
-        Returns the dynamic confidence threshold for a trader given the current
-        market state. Raises ModelNotTrainedError if model not loaded.
+        Returns the dynamic confidence threshold for the current market state.
+        Raises ModelNotTrainedError if model not loaded.
         """
         if not self.is_trained or self._model is None:
             raise ModelNotTrainedError(
@@ -204,22 +210,20 @@ class RLAgent(BaseModel):
         obs = np.array(state, dtype=np.float32).reshape(1, -1)
         action, _ = self._model.predict(obs, deterministic=True)
         action_id = int(action[0]) if hasattr(action, "__len__") else int(action)
-        decoded_trader, threshold = _decode_action(action_id)
-        if decoded_trader == trader_num:
-            return threshold
-        return _THRESHOLD_TIERS[0]
+        _, threshold = _decode_action(action_id)
+        return threshold if threshold > 0 else _THRESHOLD_TIERS[0]
 
     def _compute_reward(self, trade_result: dict) -> float:
         """
-        Multi-component reward:
-          pnl_reward      = clip(r_multiple, -3, 4) × 1.0
-          sharpe_bonus    = clip(rolling_sharpe_20 × 0.3, -0.5, 0.5)
-          dd_penalty      = -2.0 × max(0, drawdown - 0.05)
-          overtrade_pen   = -0.3 × max(0, trades_today - 4)
-          session_bonus   = +0.15 if correct session strategy used AND profitable
-          inaction_pen    = -0.05 if valid London setup skipped (action==0)
+        Multi-component reward (v3):
+          pnl_reward    = clip(r_multiple, -3, 4)          — primary outcome
+          sharpe_bonus  = clip(rolling_sharpe_20 × 0.3, -0.5, 0.5)
+          dd_penalty    = -2.0 × max(0, drawdown - 0.05)  — drawdown deterrent
+          overtrade_pen = -0.3 × max(0, trades_today - 3) — frequency cap
+          session_bonus = +0.1 if London or NY session AND profitable
+          inaction_pen  = -0.05 if valid setup skipped (action==0)
         """
-        rr = float(trade_result.get("rr_ratio", 1.0))
+        rr  = float(trade_result.get("rr_ratio", 1.0))
         pnl = float(trade_result.get("pnl", 0.0))
         r_multiple = pnl / (abs(pnl / rr) + 1e-9) if rr > 0 else pnl
         pnl_reward = float(np.clip(r_multiple, -3, 4))
@@ -227,29 +231,22 @@ class RLAgent(BaseModel):
         rewards_list = list(self._rolling_rewards)
         if len(rewards_list) >= 2:
             mean_r = float(np.mean(rewards_list))
-            std_r = float(np.std(rewards_list))
+            std_r  = float(np.std(rewards_list))
             sharpe_bonus = float(np.clip((mean_r / (std_r + 1e-9)) * 0.3, -0.5, 0.5))
         else:
             sharpe_bonus = 0.0
 
-        drawdown = float(trade_result.get("drawdown_pct", 0.0))
-        dd_penalty = -2.0 * max(0.0, drawdown - 0.05)
+        drawdown     = float(trade_result.get("drawdown_pct", 0.0))
+        dd_penalty   = -2.0 * max(0.0, drawdown - 0.05)
 
-        trades_today = int(trade_result.get("trades_today", 0))
-        overtrade_pen = -0.3 * max(0, trades_today - 4)
+        trades_today  = int(trade_result.get("trades_today", 0))
+        overtrade_pen = -0.3 * max(0, trades_today - 3)
 
-        rl_action = int(trade_result.get("rl_action", 0))
-        session = str(trade_result.get("session", ""))
-        session_bonus = 0.0
-        if (session == "LONDON" and rl_action == 3) or \
-           (session == "NY" and rl_action in (1, 2)) or \
-           (session == "ASIAN" and rl_action in (4, 5)):
-            if pnl > 0:
-                session_bonus = 0.15
+        session       = str(trade_result.get("session", ""))
+        session_bonus = 0.1 if (session in ("LONDON", "NY") and pnl > 0) else 0.0
 
-        inaction_pen = 0.0
-        if rl_action == 0 and trade_result.get("missed_setup"):
-            inaction_pen = -0.05
+        rl_action     = int(trade_result.get("rl_action", 0))
+        inaction_pen  = -0.05 if (rl_action == 0 and trade_result.get("missed_setup")) else 0.0
 
         total = pnl_reward + sharpe_bonus + dd_penalty + overtrade_pen + session_bonus + inaction_pen
         return float(np.clip(total, -5.0, 6.0))
@@ -258,20 +255,17 @@ class RLAgent(BaseModel):
         self, available_signals: dict, session: str
     ) -> Tuple[int, float]:
         """
-        When PPO not trained — returns (trader_id, confidence_threshold).
-        Thresholds are conservative until model learns optimal values.
+        When PPO not trained — returns (1, threshold) or (0, 0.0).
+        Session-aware threshold: London/NY get a slightly lower bar (more trades);
+        Asian/Inactive get a higher bar (fewer, more conservative trades).
         """
-        if session == "LONDON" and available_signals.get("trader_3"):
-            return (3, 0.60)
-        if session == "NY" and available_signals.get("trader_1"):
-            return (1, 0.60)
-        if session == "NY" and available_signals.get("trader_2"):
-            return (2, 0.55)
-        if session == "ASIAN" and available_signals.get("trader_5"):
-            return (5, 0.55)
-        if available_signals.get("trader_4"):
-            return (4, 0.55)
-        return (0, 0.0)
+        if not available_signals.get("ml_trader"):
+            return (0, 0.0)
+        if session in ("LONDON", "NY"):
+            return (1, 0.65)
+        if session == "ASIAN":
+            return (1, 0.70)
+        return (1, 0.72)
 
     def _detect_session(self) -> str:
         from datetime import datetime, timezone
@@ -388,7 +382,7 @@ class RLAgent(BaseModel):
                     self.observation_space = gym.spaces.Box(
                         low=-10, high=10, shape=(N_STATE,), dtype=np.float32
                     )
-                    self.action_space = gym.spaces.Discrete(N_ACTIONS)  # 16 actions
+                    self.action_space = gym.spaces.Discrete(N_ACTIONS)  # 9 actions
 
                 def reset(self, **kwargs):
                     self.idx = 0
