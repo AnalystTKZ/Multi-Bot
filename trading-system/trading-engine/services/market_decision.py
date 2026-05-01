@@ -42,6 +42,7 @@ def combined_market_decision(
     volatile_threshold: float = 0.70,
     block_consolidating: bool = True,
     require_range: bool = True,
+    htf_confidence: float = 1.0,
 ) -> tuple[bool, str]:
     """
     Return (allowed, reason) for a proposed trade side.
@@ -52,6 +53,11 @@ def combined_market_decision(
       - BIAS_DOWN: sell only; mirror of BIAS_UP.
       - BIAS_NEUTRAL: only range-boundary trades are allowed, and only when the
         LTF classifier explicitly says RANGING.
+
+    htf_confidence: HTF regime classifier's softmax confidence for its prediction.
+      The HTF confidence gate (HTF_MIN_REGIME_CONFIDENCE) is applied in the caller
+      before this function is invoked, so htf_confidence here is available for any
+      additional per-regime logic that needs it.
     """
     htf = str(htf_bias or "BIAS_NEUTRAL").upper()
     ltf = str(ltf_behaviour or "RANGING").upper()

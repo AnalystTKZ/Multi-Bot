@@ -323,6 +323,7 @@ class SignalPipeline:
                 preds["regime"]       = r.get("regime")
                 preds["regime_id"]    = r.get("regime_id")
                 preds["regime_proba"] = r.get("proba")
+                preds["regime_conf"]  = float(r.get("regime_confidence", 1.0 / 3.0))
             except RuntimeError as exc:
                 logger.error("HTF RegimeClassifier not trained — ML signals disabled. %s", exc)
                 raise
@@ -444,8 +445,18 @@ class SignalPipeline:
         else:
             return None
 
-        # Gate 4/5: combined HTF/LTF market-decision matrix
+        # Gate 4: HTF regime classifier confidence
         _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
+        _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
+        _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.55"))
+        if _htf_bias != "BIAS_NEUTRAL" and _htf_regime_conf < _htf_min_conf:
+            logger.debug(
+                "Signal rejected %s — htf_low_regime_confidence htf=%s conf=%.3f",
+                symbol, _htf_bias, _htf_regime_conf,
+            )
+            return None
+
+        # Gate 5: combined HTF/LTF market-decision matrix
         _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
         _range_valid    = bool(bar.get("range_valid", False))
         _pullback_valid = bool(bar.get("pullback_valid", False))
@@ -463,6 +474,7 @@ class SignalPipeline:
             volatile_threshold=_volatile_thresh,
             block_consolidating=_block_consol,
             require_range=_require_range,
+            htf_confidence=_htf_regime_conf,
         )
         if not _allowed:
             logger.debug(

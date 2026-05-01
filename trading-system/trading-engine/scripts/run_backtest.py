@@ -111,7 +111,7 @@ MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
 ML_CACHE_DIR       = os.path.join(OUTPUT_DIR, "ml_cache")
-ML_CACHE_SCHEMA    = "context_availability_v2"
+ML_CACHE_SCHEMA    = "context_availability_v3_conf_gates"
 _BACKTEST_WARMUP = {
     "5M": pd.Timedelta(days=7),
     "15M": pd.Timedelta(days=14),
@@ -140,8 +140,8 @@ _PM_SETTINGS = SimpleNamespace(
 _LIVE_SIGNAL_DEFAULTS = {
     # Keep backtest signal gates aligned with config.settings.Settings without
     # importing pydantic in Kaggle/runtime subprocesses.
-    "ML_DIRECTION_THRESHOLD": 0.62,
-    "MAX_UNCERTAINTY": 0.25,
+    "ML_DIRECTION_THRESHOLD": 0.65,
+    "MAX_UNCERTAINTY": 0.15,
     "MIN_REWARD_TO_RISK": 1.50,
     "ATR_STOP_MULTIPLIER": 1.5,
     "ATR_TARGET_MULTIPLIER": 2.5,
@@ -341,6 +341,17 @@ def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
     regime_ltf_id = int(cache["regime_ltf"][idx])
     if regime_ltf_id >= 0:
         out["regime_ltf"] = str(_LTF_REGIME_NAMES[regime_ltf_id])
+    # Regime classifier confidence scores — used by HTF confidence gate
+    if "regime_conf" in cache:
+        rc = float(cache["regime_conf"][idx])
+        out["regime_conf"] = rc if not np.isnan(rc) else 1.0 / 3.0
+    else:
+        out["regime_conf"] = 1.0 / 3.0
+    if "regime_ltf_conf" in cache:
+        rlc = float(cache["regime_ltf_conf"][idx])
+        out["regime_ltf_conf"] = rlc if not np.isnan(rlc) else 0.25
+    else:
+        out["regime_ltf_conf"] = 0.25
     return out
 
 
@@ -1208,7 +1219,8 @@ def _run_bar_ml(ml_models: dict, df: pd.DataFrame, i: int, symbol: str = "",
     regime_model = ml_models.get("regime")
     if regime_model:
         r = regime_model.predict(window, symbol=symbol, df_htf=htf_slice)
-        preds["regime"] = r.get("regime")
+        preds["regime"]      = r.get("regime")
+        preds["regime_conf"] = float(r.get("regime_confidence", 1.0 / 3.0))
 
     qs = ml_models.get("quality")
     if qs:
@@ -1399,6 +1411,8 @@ def _precompute_ml_cache(
             "expected_variance": np.full(n, np.nan, dtype=np.float32),
             "regime": np.full(n, -1, dtype=np.int8),
             "regime_ltf": np.full(n, -1, dtype=np.int8),
+            "regime_conf": np.full(n, np.nan, dtype=np.float32),
+            "regime_ltf_conf": np.full(n, np.nan, dtype=np.float32),
         }
         if gru_model and seq_arr is not None and gru_model.is_trained and gru_model._model is not None:
             try:
@@ -1437,9 +1451,16 @@ def _precompute_ml_cache(
 
                     # Vectorised post-processing
                     var_vals    = np.log1p(np.exp(all_log_var)) + 1e-6   # softplus
-                    p_bear_arr  = np.clip(1.0 - all_p_bull, 0.0, 1.0)
                     entry_depth = np.clip(all_mag * 100.0, 0.0, 1.0)
                     vol_arr     = np.sqrt(var_vals)
+
+                    # Apply isotonic calibration if available — reduces ECE from 0.56
+                    _iso = getattr(gru_model, "_isotonic", None)
+                    if _iso is not None:
+                        all_p_bull = np.clip(_iso.predict(all_p_bull), 0.0, 1.0).astype(np.float32)
+                        logger.info("ML cache [%s]: isotonic calibration applied", symbol)
+
+                    p_bear_arr  = np.clip(1.0 - all_p_bull, 0.0, 1.0)
 
                     # bar_idx for sequence i = i + SEQ_LEN - 1
                     bar_indices = np.arange(n_valid, dtype=np.int32) + (SEQ_LEN - 1)
@@ -1456,11 +1477,15 @@ def _precompute_ml_cache(
                 if 'seq_arr' in dir() and seq_arr is not None:
                     del seq_arr  # ~(N×F) float32 — free before regime allocates X_all
 
-        # ── Build LTF per-bar lookup (behaviour class name) ──────────────────
+        # ── Build LTF per-bar lookup (behaviour class name + confidence) ─────
         if _regime_ltf_series is not None:
             cache["regime_ltf"] = np.clip(_regime_ltf_series.values, 0, 3).astype(np.int8, copy=False)
+        if _regime_ltf_conf is not None:
+            cache["regime_ltf_conf"] = _regime_ltf_conf.values.astype(np.float32, copy=False)
         if _regime_htf_series is not None:
             cache["regime"] = np.clip(_regime_htf_series.values, 0, 2).astype(np.int8, copy=False)
+        if _regime_htf_conf is not None:
+            cache["regime_conf"] = _regime_htf_conf.values.astype(np.float32, copy=False)
 
         n_gru = int(np.count_nonzero(~np.isnan(cache["p_bull"])))
         n_htf = int(np.count_nonzero(cache["regime"] >= 0))
@@ -1550,8 +1575,18 @@ def _compute_backtest_signal(
         _reject("weak_gru_direction")
         return None
 
-    # ── Gate 4/5: combined HTF/LTF market-decision matrix ─────────────────────
+    # ── Gate 4: HTF regime confidence ─────────────────────────────────────────
+    # Low-confidence regime predictions are unreliable — training accuracy was
+    # only 0.366 overall with BIAS_DOWN recall=0.239. Blocking trades when the
+    # regime classifier is uncertain prevents acting on misclassified NEUTRAL bars.
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
+    _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
+    _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.55"))
+    if _htf_bias != "BIAS_NEUTRAL" and _htf_regime_conf < _htf_min_conf:
+        _reject("htf_low_regime_confidence")
+        return None
+
+    # ── Gate 5: combined HTF/LTF market-decision matrix ───────────────────────
     _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
     _range_valid    = bool(bar.get("range_valid", False))
     _pullback_valid = bool(bar.get("pullback_valid", False))
@@ -1569,6 +1604,7 @@ def _compute_backtest_signal(
         volatile_threshold=_volatile_thresh,
         block_consolidating=_block_consol,
         require_range=_require_range,
+        htf_confidence=_htf_regime_conf,
     )
     if not _allowed:
         _reject(_reason)

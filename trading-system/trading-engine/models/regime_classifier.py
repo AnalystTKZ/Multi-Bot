@@ -274,30 +274,25 @@ class RegimeClassifier(BaseModel):
                 "RegimeClassifier has no trained weights. "
                 "Run: python scripts/retrain_incremental.py --model regime"
             )
-        try:
-            import torch
-            self.reload_if_updated()
-            with self._inference_lock:
-                # Slice to TF-specific columns if full matrix provided
-                if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
-                    X = X[:, self._col_idx]
-                # Clone to CPU for inference — never mutate the live shared model.
-                _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
-                _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
-                all_labels = []
-                all_conf   = []
-                with torch.no_grad():
-                    for s in range(0, len(X), batch_size):
-                        xb = torch.from_numpy(X[s: s + batch_size])  # stays on CPU
-                        logits = _cpu_m(xb).float()
-                        proba = torch.softmax(logits, dim=1).numpy()
-                        all_labels.append(proba.argmax(axis=1).astype(np.int32))
-                        all_conf.append(proba.max(axis=1).astype(np.float32))
-                return np.concatenate(all_labels), np.concatenate(all_conf)
-        except Exception as exc:
-            logger.error("RegimeClassifier.predict_batch failed: %s", exc)
-            n = len(X)
-            return np.full(n, _default_id, dtype=np.int32), np.full(n, _default_conf, dtype=np.float32)
+        import torch
+        self.reload_if_updated()
+        with self._inference_lock:
+            # Slice to TF-specific columns if full matrix provided
+            if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
+                X = X[:, self._col_idx]
+            # Clone to CPU for inference — never mutate the live shared model.
+            _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+            _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
+            all_labels = []
+            all_conf   = []
+            with torch.no_grad():
+                for s in range(0, len(X), batch_size):
+                    xb = torch.from_numpy(X[s: s + batch_size])  # stays on CPU
+                    logits = _cpu_m(xb).float()
+                    proba = torch.softmax(logits, dim=1).numpy()
+                    all_labels.append(proba.argmax(axis=1).astype(np.int32))
+                    all_conf.append(proba.max(axis=1).astype(np.float32))
+            return np.concatenate(all_labels), np.concatenate(all_conf)
 
     # ── Labels ────────────────────────────────────────────────────────────────
 
@@ -1331,12 +1326,14 @@ class RegimeClassifier(BaseModel):
             # ── Class weights (handle imbalance) ─────────────────────────────
             counts  = np.bincount(y_tr, minlength=_n_cls).astype(np.float32)
             counts  = np.where(counts == 0, 1.0, counts)
-            class_w = counts.sum() / (_n_cls * counts)
-            # Do not apply legacy manual class boosts here. They were tuned for
-            # the old sparse rule-label set and collapse the structural-label
-            # classifier into BIAS_NEUTRAL/RANGING by overweighting majority
-            # classes. Inverse-frequency weighting is enough for the new target.
-            class_w = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
+            # Squared inverse-frequency: boosts minority classes more aggressively
+            # than linear inverse-frequency. Linear weights weren't sufficient to
+            # prevent the LTF classifier from collapsing (TRENDING/RANGING recall
+            # 0.20/0.24) and the HTF classifier from predicting mostly BIAS_DOWN.
+            inv_freq = counts.sum() / (_n_cls * counts)
+            class_w  = inv_freq ** 1.5
+            class_w  = class_w / class_w.mean()   # normalise so mean weight = 1.0
+            class_w  = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
 
             # ── GPU-resident tensors ──────────────────────────────────────────
             batch_size = 4096
@@ -1351,23 +1348,30 @@ class RegimeClassifier(BaseModel):
             tr_idx = np.arange(n_tr, dtype=np.int64)
 
             # ── Loss functions ────────────────────────────────────────────────
-            # Structural labels are hard supervised targets. The old soft-target
-            # entropy loss was built for noisy hand rules and suppressed directional
-            # learning on the new forward-path labels.
+            # Focal loss (gamma=2): down-weights easy (well-classified) examples
+            # and focuses gradient on hard boundary examples. Standard CE + class
+            # weights alone produced TRENDING/RANGING recall of 0.20/0.24 and
+            # BIAS_DOWN recall of 0.239 — the model was collapsing to majority class.
             _base_ce = nn.CrossEntropyLoss(weight=class_w, reduction="none")
+            _focal_gamma = 2.0
 
             def _hybrid_loss(logits: "torch.Tensor", labels: "torch.Tensor",
                              bar_weights: "torch.Tensor") -> "torch.Tensor":
                 """
-                Class-weighted hard CE with per-bar confidence weighting.
+                Class-weighted focal loss with per-bar confidence weighting.
 
-                Class weights prevent majority-regime shortcuts. Confidence
-                weights only scale contribution strength; they no longer soften
-                the target distribution, because these are realised path labels.
+                Focal loss = -(1-pt)^gamma * log(pt). This reduces the gradient
+                contribution from bars that are already classified confidently and
+                focuses learning on ambiguous boundary bars (NEUTRAL vs DOWN, etc.).
                 """
                 logits_f = logits.float()
-                ce = _base_ce(logits_f, labels)
-                effective_w = torch.clamp(bar_weights.float(), min=0.25)
+                ce = _base_ce(logits_f, labels)  # already class-weighted
+                # pt = probability assigned to the correct class
+                with torch.no_grad():
+                    proba = torch.softmax(logits_f, dim=1)
+                    pt = proba.gather(1, labels.unsqueeze(1)).squeeze(1).clamp(1e-7, 1.0)
+                focal_w = (1.0 - pt) ** _focal_gamma
+                effective_w = torch.clamp(bar_weights.float(), min=0.25) * focal_w
                 return (ce * effective_w).sum() / (effective_w.sum() + 1e-9)
 
             # ── Optimiser + scheduler ─────────────────────────────────────────
