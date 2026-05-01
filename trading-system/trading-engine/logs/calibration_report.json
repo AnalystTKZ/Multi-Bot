@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-05-01T07:47:41.615634+00:00",
+  "traders": {
+    "all": {
+      "trader_id": "all",
+      "bins": [],
+      "monotonic": null,
+      "reliable": null,
+      "note": "Insufficient data: 1 samples"
+    },
+    "ml_trader": {
+      "trader_id": "ml_trader",
+      "bins": [],
+      "monotonic": null,
+      "reliable": null,
+      "note": "Insufficient data: 1 samples"
+    }
+  },
+  "run_id": "bt_20260501_074313",
+  "source_split": "combined_eval",
+  "bt_start": "2022-08-05",
+  "bt_end": "2025-08-05",
+  "split_summary_hash": "e66cf0f2d9bb45152870571b33a723a137d69894c7d3c2cd56d561d4651c9fb6"
+}
