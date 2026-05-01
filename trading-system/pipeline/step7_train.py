@@ -318,7 +318,7 @@ def run_retrain(model: str, dry_run: bool = False) -> dict:
         return {"error": str(e), "model": model}
 
 
-def collect_model_artifacts():
+def collect_model_artifacts() -> dict:
     """Verify trained weights exist in the canonical location: trading-engine/weights/.
 
     trading-system/weights/ symlinks to trading-engine/weights/ — no copying needed.
@@ -327,7 +327,7 @@ def collect_model_artifacts():
     weights_dir = ENGINE_DIR / "weights"
     if not weights_dir.exists():
         logger.warning("Canonical weights dir not found: %s", weights_dir)
-        return
+        return {"found": [], "missing_required": ["weights_dir"], "missing_deferred": []}
 
     found, missing_required, missing_deferred = [], [], []
     checks = {
@@ -356,6 +356,12 @@ def collect_model_artifacts():
 
     if missing_deferred:
         logger.info("Deferred until post-Round-1 journal retrain: %s", missing_deferred)
+
+    return {
+        "found": found,
+        "missing_required": missing_required,
+        "missing_deferred": missing_deferred,
+    }
 
 
 def collect_metrics():
@@ -390,6 +396,7 @@ def main():
     logger.info("=== STEP 7a: GRU + REGIME TRAINING ===")
 
     metrics = {}
+    failures = []
 
     for model_name in ["regime", "gru"]:
         logger.info("--- Training %s ---", model_name)
@@ -398,13 +405,18 @@ def main():
 
         if result.get("error"):
             logger.error("Model %s failed: %s", model_name, result["error"])
+            failures.append(model_name)
             with open(ML_LOGS / f"retrain_{model_name}_error.log", "w") as f:
                 f.write(str(result))
+            break
         else:
             logger.info("Model %s: SUCCESS", model_name)
 
     # Collect artifacts
-    collect_model_artifacts()
+    artifact_status = collect_model_artifacts()
+    metrics["artifacts"] = artifact_status
+    if artifact_status.get("missing_required"):
+        failures.extend(artifact_status["missing_required"])
     history = collect_metrics()
     metrics["history"] = history
 
@@ -419,10 +431,14 @@ def main():
 
     print(f"\n=== TRAINING COMPLETE ===")
     for model_name, result in metrics.items():
-        if model_name == "history":
+        if model_name in {"history", "artifacts"}:
             continue
         status = "SUCCESS" if result.get("success") else f"FAILED: {result.get('error', '')[:80]}"
         print(f"  {model_name}: {status}")
+
+    if failures:
+        logger.error("Step 7a failed; required training/artifacts missing: %s", sorted(set(failures)))
+        sys.exit(1)
 
     return metrics
 

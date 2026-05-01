@@ -749,15 +749,17 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         try:
             X_sym = _RC._build_feature_matrix(df, htf_train, sym)
 
-            # Mode-aware rule-based labels with confidence.
-            # HTF: label on source_tf df with htf_bias mode.
-            # LTF: label on source_tf df with ltf_behaviour mode.
+            # Outcome-aware structural labels with confidence. These are the
+            # supervised targets for the regime classifier only; GRU context
+            # still uses past-only rule labels to avoid future-label leakage.
             if mode == "htf_bias":
-                labels, conf = _RC.create_rule_labels(df, timeframe=source_tf, mode="htf_bias",
-                                                      return_confidence=True)
+                labels, conf = _RC.create_structural_labels(
+                    df, timeframe=source_tf, mode="htf_bias", return_confidence=True,
+                )
             elif mode == "ltf_behaviour":
-                labels, conf = _RC.create_rule_labels(df, timeframe=source_tf, mode="ltf_behaviour",
-                                                      return_confidence=True)
+                labels, conf = _RC.create_structural_labels(
+                    df, timeframe=source_tf, mode="ltf_behaviour", return_confidence=True,
+                )
             else:
                 # Fallback GMM for any other mode — uniform confidence
                 if gmm_grp is not None:
@@ -799,7 +801,7 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
 
 
 def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str) -> None:
-    """Log persistence and return-separation using the same rule labels as training."""
+    """Log persistence and return-separation using the same labels as training."""
     try:
         from models.regime_classifier import RegimeClassifier as _RC_diag
         _diag_sym = symbols[-1] if symbols else None
@@ -813,7 +815,7 @@ def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str) 
             else ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]
         )
         _min_conf = float(os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"))
-        _lbl, _conf = _RC_diag.create_rule_labels(
+        _lbl, _conf = _RC_diag.create_structural_labels(
             _diag_df, timeframe=source_tf, mode=_mode, return_confidence=True,
         )
         _run_id = (_lbl != _lbl.shift()).cumsum()
@@ -857,10 +859,10 @@ def retrain_regime(dry_run: bool = False) -> dict:
     """
     Train hierarchical regime cascade:
       1. HTF classifier (regime_htf.pkl) — 3-class bias (BIAS_UP/DOWN/NEUTRAL).
-         mode="htf_bias", trained on 4H bars, labels by drift direction.
+         mode="htf_bias", trained on 4H bars with realised forward-path bias labels.
          GPU-parallel across both T4s via DataParallel.
       2. LTF classifier (regime_ltf.pkl) — 4-class behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE).
-         mode="ltf_behaviour", trained on 1H bars, direction-agnostic labels.
+         mode="ltf_behaviour", trained on 1H bars with realised forward-path behaviour labels.
          Same DataParallel setup — both GPUs stay hot across both trains.
 
     Both classifiers share the same REGIME_FEATURES contract (same feature matrix),
@@ -879,47 +881,43 @@ def retrain_regime(dry_run: bool = False) -> dict:
         _update_macro_correlations(symbols)
         logger.info("Regime phase macro_correlations: %.1fs", _time.perf_counter() - _t_macro)
 
-    # Fit per-group GMMs on 4H data for HTF bias — separate GMM for LTF on 1H data.
-    logger.info("Regime: fitting per-group GMMs for HTF (dollar / cross / gold)...")
-    group_dfs_4h: dict = {"dollar": [], "cross": [], "gold": []}
-    group_dfs_1h: dict = {"dollar": [], "cross": [], "gold": []}
-    for sym in symbols:
-        df_4h = _load_ohlcv(sym, "4H", split=RETRAIN_DATA_SPLIT)
-        if df_4h is not None and len(df_4h) > 200:
-            group_dfs_4h[_group_for_symbol(sym)].append(df_4h)
-        df_1h = _load_ohlcv(sym, "1H", split=RETRAIN_DATA_SPLIT)
-        if df_1h is not None and len(df_1h) > 200:
-            group_dfs_1h[_group_for_symbol(sym)].append(df_1h)
-
     group_gmms_htf: dict = {}
-    _t_gmm_htf = _time.perf_counter()
-    for grp, dfs in group_dfs_4h.items():
-        if dfs:
-            _t_grp = _time.perf_counter()
-            gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="4H", mode="htf_bias")
-            group_gmms_htf[grp] = (gmm, scaler, cluster_labels)
-            logger.info("Regime HTF GMM '%s' fitted on %d 4H dfs (3-class bias) in %.1fs",
-                        grp, len(dfs), _time.perf_counter() - _t_grp)
-        else:
-            logger.warning("Regime: no 4H data for group '%s'", grp)
-    logger.info("Regime phase GMM HTF total: %.1fs", _time.perf_counter() - _t_gmm_htf)
-
     group_gmms_ltf: dict = {}
-    _t_gmm_ltf = _time.perf_counter()
-    for grp, dfs in group_dfs_1h.items():
-        if dfs:
-            _t_grp = _time.perf_counter()
-            gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="1H", mode="ltf_behaviour")
-            group_gmms_ltf[grp] = (gmm, scaler, cluster_labels)
-            logger.info("Regime LTF GMM '%s' fitted on %d 1H dfs (4-class behaviour) in %.1fs",
-                        grp, len(dfs), _time.perf_counter() - _t_grp)
-        else:
-            logger.warning("Regime LTF: no 1H data for group '%s'", grp)
-    logger.info("Regime phase GMM LTF total: %.1fs", _time.perf_counter() - _t_gmm_ltf)
+    if os.getenv("REGIME_FIT_GMM", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("Regime: fitting optional per-group GMMs for diagnostics/fallback...")
+        group_dfs_4h: dict = {"dollar": [], "cross": [], "gold": []}
+        group_dfs_1h: dict = {"dollar": [], "cross": [], "gold": []}
+        for sym in symbols:
+            df_4h = _load_ohlcv(sym, "4H", split=RETRAIN_DATA_SPLIT)
+            if df_4h is not None and len(df_4h) > 200:
+                group_dfs_4h[_group_for_symbol(sym)].append(df_4h)
+            df_1h = _load_ohlcv(sym, "1H", split=RETRAIN_DATA_SPLIT)
+            if df_1h is not None and len(df_1h) > 200:
+                group_dfs_1h[_group_for_symbol(sym)].append(df_1h)
 
-    # For backward compat, pass htf GMMs to _build_regime_dataset (which uses group_gmms)
-    group_gmms = group_gmms_htf
-    del group_dfs_4h, group_dfs_1h
+        _t_gmm_htf = _time.perf_counter()
+        for grp, dfs in group_dfs_4h.items():
+            if dfs:
+                _t_grp = _time.perf_counter()
+                gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="4H", mode="htf_bias")
+                group_gmms_htf[grp] = (gmm, scaler, cluster_labels)
+                logger.info("Regime HTF GMM '%s' fitted on %d 4H dfs in %.1fs",
+                            grp, len(dfs), _time.perf_counter() - _t_grp)
+        logger.info("Regime phase GMM HTF total: %.1fs", _time.perf_counter() - _t_gmm_htf)
+
+        _t_gmm_ltf = _time.perf_counter()
+        for grp, dfs in group_dfs_1h.items():
+            if dfs:
+                _t_grp = _time.perf_counter()
+                gmm, scaler, cluster_labels = _RC.fit_global_gmm(dfs, timeframe="1H", mode="ltf_behaviour")
+                group_gmms_ltf[grp] = (gmm, scaler, cluster_labels)
+                logger.info("Regime LTF GMM '%s' fitted on %d 1H dfs in %.1fs",
+                            grp, len(dfs), _time.perf_counter() - _t_grp)
+        logger.info("Regime phase GMM LTF total: %.1fs", _time.perf_counter() - _t_gmm_ltf)
+        del group_dfs_4h, group_dfs_1h
+    else:
+        logger.info("Regime: skipping GMM fit; structural forward-path labels are the default target")
+
     _gc.collect()
 
     results: dict = {}

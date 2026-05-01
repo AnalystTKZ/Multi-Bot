@@ -1,2 +1,0 @@
-timestamp,symbol,side,regime,ev,realized_rr,p_bull,p_bear,rr_ratio,pnl,bars_held,session_hour,regime_duration,session_weight,regime_weight,age_weight,expected_variance,exit_reason
-2024-03-06T09:45:00+00:00,XAUUSD,buy,BIAS_UP,0.0076097771525382996,-1.0009999999899903,0.62939453125,0.37060546875,2.21,-100.1053,1,9,0.5,1.0,1.0,1.0,0.3059820234775543,sl_full

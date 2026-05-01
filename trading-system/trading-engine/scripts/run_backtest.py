@@ -137,6 +137,23 @@ _PM_SETTINGS = SimpleNamespace(
     PM_MIN_CONFIDENCE=float(os.getenv("PM_MIN_CONFIDENCE", "0.50")),
 )
 
+_LIVE_SIGNAL_DEFAULTS = {
+    # Keep backtest signal gates aligned with config.settings.Settings without
+    # importing pydantic in Kaggle/runtime subprocesses.
+    "ML_DIRECTION_THRESHOLD": 0.62,
+    "MAX_UNCERTAINTY": 0.25,
+    "MIN_REWARD_TO_RISK": 1.50,
+    "ATR_STOP_MULTIPLIER": 1.5,
+    "ATR_TARGET_MULTIPLIER": 2.5,
+    "GOLD_ATR_STOP_MULTIPLIER": 2.0,
+    "GOLD_ATR_TARGET_MULTIPLIER": 3.5,
+}
+
+
+def _live_float_env(name: str) -> float:
+    return float(os.getenv(name, str(_LIVE_SIGNAL_DEFAULTS[name])))
+
+
 _ALL_SYMBOLS = [
     "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD",
     "USDCAD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY", "XAUUSD",
@@ -1039,6 +1056,38 @@ def _candidate_feature_row(
         "ema_stack_score": int(bar.get("ema_stack", 0) or 0),
         "regime": str(ml_preds.get("regime") or meta.get("regime", "")),
         "regime_ltf": str(ml_preds.get("regime_ltf") or meta.get("regime_ltf", "")),
+        "bos_bull": int(bool(bar.get("bos_bull", False))),
+        "bos_bear": int(bool(bar.get("bos_bear", False))),
+        "fvg_bull": int(bool(bar.get("fvg_bull", False))),
+        "fvg_bear": int(bool(bar.get("fvg_bear", False))),
+        "fvg_bull_top": float(bar.get("fvg_bull_top", float("nan"))),
+        "fvg_bull_bottom": float(bar.get("fvg_bull_bottom", float("nan"))),
+        "fvg_bear_top": float(bar.get("fvg_bear_top", float("nan"))),
+        "fvg_bear_bottom": float(bar.get("fvg_bear_bottom", float("nan"))),
+        "sweep_bull": int(bool(bar.get("sweep_bull", False))),
+        "sweep_bear": int(bool(bar.get("sweep_bear", False))),
+        "sweep_low_level": float(bar.get("sweep_low_level", float("nan"))),
+        "sweep_high_level": float(bar.get("sweep_high_level", float("nan"))),
+        "ob_bull": int(bool(bar.get("ob_bull", False))),
+        "ob_bear": int(bool(bar.get("ob_bear", False))),
+        "ob_high": float(bar.get("ob_high", float("nan"))),
+        "ob_low": float(bar.get("ob_low", float("nan"))),
+        "range_valid": int(bool(bar.get("range_valid", False))),
+        "range_side": str(bar.get("range_side", "") or ""),
+        "range_support": float(bar.get("range_support", 0.0) or 0.0),
+        "range_resist": float(bar.get("range_resist", 0.0) or 0.0),
+        "range_width_atr": float(bar.get("range_width_atr", 0.0) or 0.0),
+        "pullback_valid": int(bool(bar.get("pullback_valid", False))),
+        "pullback_side": str(bar.get("pullback_side", "") or ""),
+        "pullback_level": float(bar.get("pullback_level", float("nan"))),
+        "last_swing_high": float(bar.get("last_swing_high", float("nan"))),
+        "last_swing_low": float(bar.get("last_swing_low", float("nan"))),
+        "sr_dist_resist_atr": float(bar.get("sr_dist_resist_atr", 0.0) or 0.0),
+        "sr_dist_support_atr": float(bar.get("sr_dist_support_atr", 0.0) or 0.0),
+        "sr_in_supply_zone": float(bar.get("sr_in_supply_zone", 0.0) or 0.0),
+        "sr_in_demand_zone": float(bar.get("sr_in_demand_zone", 0.0) or 0.0),
+        "sr_resist_strength": float(bar.get("sr_resist_strength", 0.0) or 0.0),
+        "sr_support_strength": float(bar.get("sr_support_strength", 0.0) or 0.0),
         "p_win": float(ml_preds.get("quality_score", 0.0) or 0.0),
         "p_bull": float(ml_preds.get("p_bull", meta.get("p_bull", 0.5)) or 0.5),
         "p_bear": float(ml_preds.get("p_bear", meta.get("p_bear", 0.5)) or 0.5),
@@ -1483,14 +1532,14 @@ def _compute_backtest_signal(
 
     # ── Gate 2: GRU uncertainty ───────────────────────────────────────────────
     _uncertainty = float(ml_preds.get("expected_variance", 0.0))
-    if _uncertainty > float(os.getenv("MAX_UNCERTAINTY", "2.0")):
+    if _uncertainty > _live_float_env("MAX_UNCERTAINTY"):
         _reject("high_uncertainty")
         return None
 
     # ── Gate 3: GRU direction ─────────────────────────────────────────────────
     p_bull = float(ml_preds.get("p_bull", 0.5))
     p_bear = float(ml_preds.get("p_bear", 0.5))
-    _dir_thresh = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.55"))
+    _dir_thresh = _live_float_env("ML_DIRECTION_THRESHOLD")
     if p_bull >= p_bear and p_bull >= _dir_thresh:
         side = "buy"
         conf = p_bull
@@ -1528,8 +1577,9 @@ def _compute_backtest_signal(
     # ── ATR-based entry / SL / TP ─────────────────────────────────────────────
     # For RANGING entries: TP is the far wall of the range rather than a fixed
     # ATR multiple, provided the far wall gives better R:R than the default.
-    _sl_mult    = float(os.getenv("SL_ATR_MULT", "1.5"))
-    _rr_default = float(os.getenv("RR_DEFAULT", "2.0"))
+    _is_gold = symbol == "XAUUSD"
+    _sl_mult = _live_float_env("GOLD_ATR_STOP_MULTIPLIER" if _is_gold else "ATR_STOP_MULTIPLIER")
+    _tp_mult = _live_float_env("GOLD_ATR_TARGET_MULTIPLIER" if _is_gold else "ATR_TARGET_MULTIPLIER")
     sl_dist = atr * _sl_mult
 
     if _ltf_behaviour == "RANGING" and _range_valid:
@@ -1537,25 +1587,25 @@ def _compute_backtest_signal(
         # TP: the far wall of the range
         if side == "buy":
             stop_loss   = float(bar.get("range_support", close - sl_dist)) - atr * 0.3
-            far_wall    = float(bar.get("range_resist",  close + sl_dist * _rr_default))
+            far_wall    = float(bar.get("range_resist",  close + sl_dist * _tp_mult))
             take_profit = far_wall
         else:
             stop_loss   = float(bar.get("range_resist",  close + sl_dist)) + atr * 0.3
-            far_wall    = float(bar.get("range_support", close - sl_dist * _rr_default))
+            far_wall    = float(bar.get("range_support", close - sl_dist * _tp_mult))
             take_profit = far_wall
         # Fall back to ATR-based TP if the range wall gives worse R:R
-        default_tp = (close + sl_dist * _rr_default) if side == "buy" else (close - sl_dist * _rr_default)
+        default_tp = (close + sl_dist * _tp_mult) if side == "buy" else (close - sl_dist * _tp_mult)
         actual_rr  = abs(take_profit - close) / (abs(close - stop_loss) + 1e-9)
-        if actual_rr < 1.5:
+        if actual_rr < _live_float_env("MIN_REWARD_TO_RISK"):
             stop_loss   = (close - sl_dist) if side == "buy" else (close + sl_dist)
             take_profit = default_tp
     else:
         if side == "buy":
             stop_loss   = close - sl_dist
-            take_profit = close + sl_dist * _rr_default
+            take_profit = close + sl_dist * _tp_mult
         else:
             stop_loss   = close + sl_dist
-            take_profit = close - sl_dist * _rr_default
+            take_profit = close - sl_dist * _tp_mult
 
     _range_width = float(bar.get("range_width_atr", 0.0)) if _ltf_behaviour == "RANGING" else 0.0
 
@@ -2027,6 +2077,11 @@ def _backtest_trader(
     import heapq
     _bar_cols = ["open", "high", "low", "close", "atr_14", "adx_14", "rsi_14",
                  "ema_stack", "bb_width", "bos_bull", "bos_bear", "fvg_bull", "fvg_bear",
+                 "fvg_bull_top", "fvg_bull_bottom", "fvg_bear_top", "fvg_bear_bottom",
+                 "sweep_bull", "sweep_bear", "sweep_low_level", "sweep_high_level",
+                 "ob_bull", "ob_bear", "ob_high", "ob_low",
+                 "sr_dist_resist_atr", "sr_dist_support_atr", "sr_in_supply_zone",
+                 "sr_in_demand_zone", "sr_resist_strength", "sr_support_strength",
                  "range_valid", "range_side", "range_support", "range_resist",
                  "range_width_atr", "pullback_valid", "pullback_side", "pullback_level",
                  "last_swing_high", "last_swing_low", "regime_duration", "vol_slope_seq",
@@ -2104,17 +2159,9 @@ def _backtest_trader(
     # Hoist env-var reads outside the 473k-bar loop — os.getenv does a dict lookup
     # + string compare on every call; at 473k bars this adds measurable overhead.
     _cfg_density_lambda   = float(os.getenv("DENSITY_LAMBDA",             "0.12"))
-    _cfg_dir_thresh       = float(os.getenv("ML_DIRECTION_THRESHOLD",     "0.55"))
+    _cfg_dir_thresh       = _live_float_env("ML_DIRECTION_THRESHOLD")
     _cfg_min_conf         = float(os.getenv("MIN_CONFIDENCE",             "0.0"))
     _cfg_min_ev           = float(os.getenv("MIN_EV_THRESHOLD",           "0.0"))
-    _cfg_max_uncertainty  = float(os.getenv("MAX_UNCERTAINTY",            "2.0"))
-    _cfg_neutral_thresh   = float(os.getenv("NEUTRAL_BIAS_THRESHOLD",     "0.60"))
-    _cfg_volatile_thresh  = float(os.getenv("VOLATILE_ENTRY_THRESHOLD",   "0.70"))
-    _cfg_block_consol     = os.getenv("BLOCK_LTF_CONSOLIDATING",          "1").lower() in ("1","true","yes")
-    _cfg_strict_trend_pb  = os.getenv("REQUIRE_TRENDING_PULLBACK",        "0").lower() in ("1","true","yes")
-    _cfg_strict_rng       = os.getenv("RANGING_REQUIRE_RANGE",            "1").lower() in ("1","true","yes")
-    _cfg_sl_mult          = float(os.getenv("SL_ATR_MULT",               "1.5"))
-    _cfg_rr_default       = float(os.getenv("RR_DEFAULT",                "2.0"))
 
     # ── Main loop ─────────────────────────────────────────────────────────────
     import time as _time
@@ -2241,8 +2288,26 @@ def _backtest_trader(
             "bos_bear":       bool(_sarr["bos_bear"][i] == 1) if _sarr["bos_bear"] is not None else False,
             "fvg_bull":       bool(_sarr["fvg_bull"][i] == 1) if _sarr["fvg_bull"] is not None else False,
             "fvg_bear":       bool(_sarr["fvg_bear"][i] == 1) if _sarr["fvg_bear"] is not None else False,
+            "fvg_bull_top":   float(_sarr["fvg_bull_top"][i]) if _sarr["fvg_bull_top"] is not None else float("nan"),
+            "fvg_bull_bottom": float(_sarr["fvg_bull_bottom"][i]) if _sarr["fvg_bull_bottom"] is not None else float("nan"),
+            "fvg_bear_top":   float(_sarr["fvg_bear_top"][i]) if _sarr["fvg_bear_top"] is not None else float("nan"),
+            "fvg_bear_bottom": float(_sarr["fvg_bear_bottom"][i]) if _sarr["fvg_bear_bottom"] is not None else float("nan"),
+            "sweep_bull":     bool(_sarr["sweep_bull"][i] == 1) if _sarr["sweep_bull"] is not None else False,
+            "sweep_bear":     bool(_sarr["sweep_bear"][i] == 1) if _sarr["sweep_bear"] is not None else False,
+            "sweep_low_level": float(_sarr["sweep_low_level"][i]) if _sarr["sweep_low_level"] is not None else float("nan"),
+            "sweep_high_level": float(_sarr["sweep_high_level"][i]) if _sarr["sweep_high_level"] is not None else float("nan"),
+            "ob_bull":        bool(_sarr["ob_bull"][i] == 1) if _sarr["ob_bull"] is not None else False,
+            "ob_bear":        bool(_sarr["ob_bear"][i] == 1) if _sarr["ob_bear"] is not None else False,
+            "ob_high":        float(_sarr["ob_high"][i]) if _sarr["ob_high"] is not None else float("nan"),
+            "ob_low":         float(_sarr["ob_low"][i]) if _sarr["ob_low"] is not None else float("nan"),
             "last_swing_high": float(_sarr["last_swing_high"][i]) if _sarr["last_swing_high"] is not None else float("nan"),
             "last_swing_low":  float(_sarr["last_swing_low"][i]) if _sarr["last_swing_low"] is not None else float("nan"),
+            "sr_dist_resist_atr": float(_sarr["sr_dist_resist_atr"][i]) if _sarr["sr_dist_resist_atr"] is not None else 0.0,
+            "sr_dist_support_atr": float(_sarr["sr_dist_support_atr"][i]) if _sarr["sr_dist_support_atr"] is not None else 0.0,
+            "sr_in_supply_zone": float(_sarr["sr_in_supply_zone"][i]) if _sarr["sr_in_supply_zone"] is not None else 0.0,
+            "sr_in_demand_zone": float(_sarr["sr_in_demand_zone"][i]) if _sarr["sr_in_demand_zone"] is not None else 0.0,
+            "sr_resist_strength": float(_sarr["sr_resist_strength"][i]) if _sarr["sr_resist_strength"] is not None else 0.0,
+            "sr_support_strength": float(_sarr["sr_support_strength"][i]) if _sarr["sr_support_strength"] is not None else 0.0,
             "regime_duration": float(_sarr["regime_duration"][i]) if _sarr["regime_duration"] is not None else 0.5,
             "vol_slope_seq":   float(_sarr["vol_slope_seq"][i]) if _sarr["vol_slope_seq"] is not None else 0.0,
             "volume_ratio":    float(_sarr["volume_ratio"][i]) if _sarr["volume_ratio"] is not None else 1.0,

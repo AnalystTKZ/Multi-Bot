@@ -57,7 +57,7 @@ def _make_settings(**overrides):
 class TestExpectancy:
     def test_positive_expectancy(self):
         """60% win rate, 2R reward, 1R loss → E[R] = 0.6×2 − 0.4×1 = 0.80"""
-        realized_rr = [2.0, 2.0, -1.0] * 10  # 30 trades: 20 wins, 10 losses
+        realized_rr = [2.0] * 18 + [-1.0] * 12
         e = np.mean(realized_rr)
         assert abs(e - 0.80) < 1e-6
 
@@ -544,7 +544,7 @@ class TestBacktestMetricsIntegration:
 
     def test_verdict_pass_for_strong_strategy(self):
         """A clearly profitable strategy must receive PASS verdict."""
-        rr = [2.0] * 20 + [-1.0] * 8  # 71% win rate, ~0.76R expectancy, PF=5.0
+        rr = [2.0] * 22 + [-1.0] * 8  # 73% win rate, clears 30-trade acceptance floor
         m = self._run_metrics(rr)
         assert m["profit_factor"] > 1.25
         assert m["expectancy_r"] > 0

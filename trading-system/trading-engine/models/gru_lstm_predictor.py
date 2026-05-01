@@ -986,11 +986,20 @@ class GRULSTMPredictor(BaseModel):
         future_close = close.shift(-horizon_bars)
         log_ret_k    = np.log((future_close + 1e-9) / (close + 1e-9))
 
-        # Forward-looking volatility: std of next horizon_bars 1-step log returns
+        # Forward-looking volatility: std of the next horizon_bars 1-step log returns.
+        # The previous implementation used rolling() on shift(-1), which still
+        # included mostly past returns at each timestamp. Reverse-rolling keeps
+        # this target aligned with the same future window as direction_up.
         log_ret_1  = np.log((close + 1e-9) / (close.shift(1) + 1e-9))
-        vol_target = (log_ret_1.shift(-1)
-                      .rolling(window=horizon_bars, min_periods=horizon_bars)
-                      .std()).astype(np.float32)
+        vol_target = (
+            log_ret_1.shift(-1)
+            .iloc[::-1]
+            .rolling(window=horizon_bars, min_periods=horizon_bars)
+            .std()
+            .iloc[::-1]
+            .reindex(df.index)
+            .astype(np.float32)
+        )
 
         # ATR-normalised dead zone — suppress noise below 0.3× ATR
         atr_norm_thresh = (atr * atr_threshold) / (close + 1e-9)

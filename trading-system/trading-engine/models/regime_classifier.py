@@ -374,7 +374,27 @@ class RegimeClassifier(BaseModel):
     # 15M/default: 14 bars ≈ 3.5 hours. Using 14 everywhere collapses all
     # 4H distributions to nearly identical centroids → poor GMM separation.
     _TF_NBAR: dict = {"4H": 50, "1H": 24, "15M": 14, "5M": 10}
+    _TF_LABEL_HORIZON: dict = {"4H": 12, "1H": 12, "15M": 16, "5M": 24}
     _DEFAULT_NBAR = 14
+
+    @staticmethod
+    def _infer_nbar_from_index(index: pd.Index) -> int:
+        """Infer the regime lookback from bar spacing so features match labels."""
+        try:
+            if len(index) >= 3:
+                deltas = pd.Series(index).diff().dropna()
+                minutes = float(deltas.median().total_seconds() / 60.0)
+                if minutes <= 7:
+                    return RegimeClassifier._TF_NBAR["5M"]
+                if minutes <= 30:
+                    return RegimeClassifier._TF_NBAR["15M"]
+                if minutes <= 90:
+                    return RegimeClassifier._TF_NBAR["1H"]
+                if minutes <= 300:
+                    return RegimeClassifier._TF_NBAR["4H"]
+        except Exception:
+            pass
+        return RegimeClassifier._DEFAULT_NBAR
 
     @staticmethod
     def _extract_gmm_features(df: pd.DataFrame, n_bar: int = 14) -> tuple[pd.DataFrame, pd.Index]:
@@ -536,6 +556,169 @@ class RegimeClassifier(BaseModel):
         X_scaled = scaler.transform(feat_df.values)
         ids = gmm.predict(X_scaled)
         labels.loc[feat_df.index] = [cluster_labels[int(c)] for c in ids]
+        return labels.astype(int)
+
+    @staticmethod
+    def _future_rolling(series: pd.Series, horizon: int, op: str) -> pd.Series:
+        future = series.shift(-1).iloc[::-1]
+        rolled = getattr(future.rolling(horizon, min_periods=horizon), op)()
+        return rolled.iloc[::-1].reindex(series.index)
+
+    @staticmethod
+    def create_structural_labels(
+        df: pd.DataFrame,
+        timeframe: str = "4H",
+        mode: str = "ltf_behaviour",
+        return_confidence: bool = False,
+    ):
+        """
+        Outcome-aware regime labels for supervised regime-classifier training.
+
+        These labels describe the realised forward path over the next regime
+        horizon, while the model features remain strictly backward-looking.
+        Do not feed these labels directly into GRU/sequence features.
+        """
+        from indicators.market_structure import compute_atr
+
+        _tf = (timeframe or "4H").upper()
+        horizon = int(RegimeClassifier._TF_LABEL_HORIZON.get(_tf, 12))
+        n_bar = int(RegimeClassifier._TF_NBAR.get(_tf, RegimeClassifier._DEFAULT_NBAR))
+
+        close = df["close"].astype(float)
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        atr = compute_atr(df, max(14, min(n_bar, 50))).astype(float).replace(0.0, np.nan)
+
+        f_high = RegimeClassifier._future_rolling(high, horizon, "max")
+        f_low = RegimeClassifier._future_rolling(low, horizon, "min")
+        f_close = close.shift(-horizon)
+        f_abs_path = (
+            close.diff().abs().shift(-1).iloc[::-1]
+            .rolling(horizon, min_periods=horizon).sum()
+            .iloc[::-1].reindex(close.index)
+        )
+
+        up_exc = ((f_high - close) / (atr + 1e-9)).clip(lower=0.0)
+        down_exc = ((close - f_low) / (atr + 1e-9)).clip(lower=0.0)
+        terminal = (f_close - close) / (atr + 1e-9)
+        f_range = ((f_high - f_low) / (atr + 1e-9)).clip(lower=0.0)
+        efficiency = ((f_close - close).abs() / (f_abs_path + 1e-9)).clip(0.0, 1.0)
+
+        valid = (
+            up_exc.notna()
+            & down_exc.notna()
+            & terminal.notna()
+            & f_range.notna()
+            & efficiency.notna()
+            & atr.notna()
+        )
+        if valid.any():
+            dominant = pd.concat([up_exc, down_exc], axis=1).max(axis=1)
+            trend_thr = max(0.80, float(dominant[valid].quantile(0.55)))
+            range_hi = max(1.25, float(f_range[valid].quantile(0.75)))
+            vol_thr = max(1.75, float(f_range[valid].quantile(0.80)))
+            consol_thr = max(0.45, float(f_range[valid].quantile(0.25)))
+        else:
+            trend_thr, range_hi, vol_thr, consol_thr = 1.0, 1.5, 2.0, 0.6
+
+        if mode == "htf_bias":
+            labels = pd.Series(2, index=df.index, dtype=int)
+            conf = pd.Series(0.0, index=df.index, dtype=np.float32)
+
+            spread = (up_exc - down_exc)
+            dominance = (spread.abs() / (f_range + 1e-9)).clip(0.0, 1.0)
+            up_mask = valid & (up_exc >= trend_thr) & (up_exc >= down_exc * 1.20) & (terminal > 0.25)
+            down_mask = valid & (down_exc >= trend_thr) & (down_exc >= up_exc * 1.20) & (terminal < -0.25)
+            labels[up_mask] = 0
+            labels[down_mask] = 1
+
+            directional_conf = (
+                0.45 * (dominance / 0.65).clip(0.0, 1.0)
+                + 0.35 * (pd.concat([up_exc, down_exc], axis=1).max(axis=1) / (trend_thr + 1e-9)).clip(0.0, 1.0)
+                + 0.20 * efficiency
+            ).clip(0.0, 1.0)
+            conf[up_mask | down_mask] = (0.45 + 0.55 * directional_conf[up_mask | down_mask]).astype(np.float32)
+
+            neutral_mask = valid & ~(up_mask | down_mask)
+            neutral_conf = (
+                0.55 * (1.0 - dominance).clip(0.0, 1.0)
+                + 0.45 * (1.0 - (f_range / (range_hi + 1e-9)).clip(0.0, 1.0))
+            ).clip(0.0, 1.0)
+            conf[neutral_mask] = (0.40 + 0.60 * neutral_conf[neutral_mask]).astype(np.float32)
+
+            dist = {HTF_CLASSES[c]: int((labels == c).sum()) for c in range(len(HTF_CLASSES))}
+            ambiguous = int((conf < 0.4).sum())
+            logger.info(
+                "Structural labels HTF_BIAS [%s]: %s  ambiguous=%d (total=%d) horizon=%d",
+                timeframe or "?", dist, ambiguous, len(labels), horizon,
+            )
+            if return_confidence:
+                return labels.astype(int), conf.astype(np.float32)
+            return labels.astype(int)
+
+        labels = pd.Series(1, index=df.index, dtype=int)
+        conf = pd.Series(0.0, index=df.index, dtype=np.float32)
+
+        dominance = ((up_exc - down_exc).abs() / (f_range + 1e-9)).clip(0.0, 1.0)
+        two_sided = pd.concat([up_exc, down_exc], axis=1).min(axis=1)
+        dominant = pd.concat([up_exc, down_exc], axis=1).max(axis=1)
+
+        trend_mask = (
+            valid
+            & (dominant >= trend_thr)
+            & (dominance >= 0.35)
+            & (terminal.abs() >= 0.35)
+            & (efficiency >= 0.35)
+        )
+        volatile_mask = (
+            valid
+            & ~trend_mask
+            & (f_range >= vol_thr)
+            & ((two_sided >= 0.45) | (efficiency <= 0.35))
+        )
+        consol_mask = (
+            valid
+            & ~trend_mask
+            & ~volatile_mask
+            & (f_range <= consol_thr)
+            & (dominant <= max(trend_thr, 1.25))
+        )
+        ranging_mask = valid & ~(trend_mask | volatile_mask | consol_mask)
+
+        labels[trend_mask] = 0
+        labels[ranging_mask] = 1
+        labels[consol_mask] = 2
+        labels[volatile_mask] = 3
+
+        trend_conf = (
+            0.40 * (dominance / 0.70).clip(0.0, 1.0)
+            + 0.35 * (dominant / (trend_thr + 1e-9)).clip(0.0, 1.0)
+            + 0.25 * efficiency
+        ).clip(0.0, 1.0)
+        vol_conf = (
+            0.55 * (f_range / (vol_thr + 1e-9)).clip(0.0, 1.0)
+            + 0.45 * (1.0 - efficiency).clip(0.0, 1.0)
+        ).clip(0.0, 1.0)
+        consol_conf = (1.0 - (f_range / (consol_thr + 1e-9)).clip(0.0, 1.0))
+        range_conf = (
+            0.45 * (1.0 - dominance).clip(0.0, 1.0)
+            + 0.35 * (two_sided / (0.75 + 1e-9)).clip(0.0, 1.0)
+            + 0.20 * (1.0 - efficiency).clip(0.0, 1.0)
+        ).clip(0.0, 1.0)
+
+        conf[trend_mask] = (0.45 + 0.55 * trend_conf[trend_mask]).astype(np.float32)
+        conf[volatile_mask] = (0.45 + 0.55 * vol_conf[volatile_mask]).astype(np.float32)
+        conf[consol_mask] = (0.45 + 0.55 * consol_conf[consol_mask]).astype(np.float32)
+        conf[ranging_mask] = (0.40 + 0.60 * range_conf[ranging_mask]).astype(np.float32)
+
+        dist = {LTF_CLASSES[c]: int((labels == c).sum()) for c in range(len(LTF_CLASSES))}
+        ambiguous = int((conf < 0.4).sum())
+        logger.info(
+            "Structural labels LTF_BEHAVIOUR [%s]: %s  ambiguous=%d (total=%d) horizon=%d",
+            timeframe or "?", dist, ambiguous, len(labels), horizon,
+        )
+        if return_confidence:
+            return labels.astype(int), conf.astype(np.float32)
         return labels.astype(int)
 
     @staticmethod
@@ -807,6 +990,7 @@ class RegimeClassifier(BaseModel):
         n = len(df)
         n_feat = len(REGIME_FEATURES)
         X = np.zeros((n, n_feat), dtype=np.float32)
+        regime_n_bar = RegimeClassifier._infer_nbar_from_index(df.index)
 
         close = df["close"].values
         # ── Base structural features (indices 0–7) ────────────────────────────
@@ -890,11 +1074,11 @@ class RegimeClassifier(BaseModel):
         # X[:, 28:34] already initialised to 0 above.
 
         # ── Regime dynamics (indices 34–35) ──────────────────────────────────
-        # vol_slope: Δ(ATR/close) over 14 bars — positive = expanding, negative = contracting
+        # vol_slope: Δ(ATR/close) over the regime lookback — positive = expanding.
         try:
             atr_series = compute_atr(df, 14)
             rel_vol = atr_series / (df["close"] + 1e-9)
-            vol_slope = rel_vol.diff(14)  # change over 14 bars
+            vol_slope = rel_vol.diff(regime_n_bar)
             X[:, 34] = np.clip(np.nan_to_num(vol_slope.values * 1000, nan=0.0), -5, 5)
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: vol_slope failed: {exc}") from exc
@@ -915,15 +1099,14 @@ class RegimeClassifier(BaseModel):
             raise RuntimeError(f"_build_feature_matrix: regime_duration failed: {exc}") from exc
 
         # ── ATR percentile (index 36) ─────────────────────────────────────────
-        # Mirrors create_rule_labels exactly: rolling(n_bar*3) searchsorted rank.
-        # n_bar=14, window=42 — same as _hist = n_bar * 3 in the label path.
+        # Mirrors the timeframe-specific regime label window.
         try:
             _atr_feat = compute_atr(df, 14)
-            _atr_hist_window = 14 * 3  # 42 bars — matches _hist = n_bar * 3
+            _atr_hist_window = regime_n_bar * 3
             from services.feature_engine import _vec_atr_pctile
             X[:, 36] = _vec_atr_pctile(
                 _atr_feat.to_numpy(dtype=np.float64),
-                window=_atr_hist_window, min_periods=14,
+                window=_atr_hist_window, min_periods=min(regime_n_bar, 14),
             )
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: atr_pctile failed: {exc}") from exc
@@ -934,7 +1117,7 @@ class RegimeClassifier(BaseModel):
         # cannot separate RANGING (autocorr≈0, eff≈0.2) from TRENDING (autocorr>0,
         # eff>0.7) because ADX and ATR look identical for both at the boundary.
         try:
-            _n_bar = 14  # default lookback — matches _DEFAULT_NBAR
+            _n_bar = regime_n_bar
             _close = df["close"]
             _log_ret = np.log(_close / _close.shift(1))
             _abs_moves = np.abs(_close.diff()).rolling(_n_bar, min_periods=_n_bar).sum()
@@ -1000,9 +1183,18 @@ class RegimeClassifier(BaseModel):
                 clean_mask = np.isfinite(sw) & (sw >= min_conf)
                 n_clean = int(clean_mask.sum())
                 n_total = int(len(clean_mask))
+                min_clean_ratio = float(os.getenv("REGIME_MIN_CLEAN_RATIO", "0.05"))
                 _n_cls = self._n_output_classes
                 clean_counts = np.bincount(y[clean_mask].astype(np.int64), minlength=_n_cls)
                 has_all_classes = bool((clean_counts[:_n_cls] > 0).all())
+                if n_total > 0 and (n_clean / n_total) < min_clean_ratio:
+                    return {
+                        "error": (
+                            f"Regime labels too sparse after confidence filter: "
+                            f"kept={n_clean}/{n_total} < {min_clean_ratio:.1%}. "
+                            "Check structural label rules before trusting accuracy."
+                        )
+                    }
                 if n_clean >= 100 and has_all_classes:
                     dropped = n_total - n_clean
                     logger.info(
@@ -1037,11 +1229,11 @@ class RegimeClassifier(BaseModel):
              sample_weight: Optional[np.ndarray] = None) -> dict:
         """Core GPU training loop. X: (N, F) float32, y: (N,) int64.
 
-        sample_weight: optional (N,) float32 — per-bar confidence from rule labeling.
+        sample_weight: optional (N,) float32 — per-bar confidence from labeling.
           Implemented as weighted CrossEntropyLoss (reduction='none' × weight).
           When REGIME_DROP_AMBIGUOUS=1, low-confidence bars are removed before this
-          method is called. If they are kept, softer per-bar targets and entropy
-          regularisation prevent the model from memorising noisy hard labels.
+          method is called. If they are kept, confidence weights scale each bar's
+          contribution without softening the realised structural target.
         """
         try:
             import torch
@@ -1078,6 +1270,16 @@ class RegimeClassifier(BaseModel):
                     "RegimeClassifier[mode=%s]: classes with <1%% of samples: %s — "
                     "model may collapse to majority class", self._mode, rare
                 )
+            max_class_share = max(class_counts.values()) / max(len(y), 1)
+            max_allowed_share = float(os.getenv("REGIME_MAX_CLASS_SHARE", "0.90"))
+            if max_class_share > max_allowed_share:
+                return {
+                    "error": (
+                        f"Regime label distribution is degenerate: max_class_share="
+                        f"{max_class_share:.1%} > {max_allowed_share:.1%}. "
+                        "Refusing to train a classifier that can pass by predicting one regime."
+                    )
+                }
 
             # ── Temporal split ────────────────────────────────────────────────
             split      = int(len(X) * 0.8)
@@ -1130,13 +1332,10 @@ class RegimeClassifier(BaseModel):
             counts  = np.bincount(y_tr, minlength=_n_cls).astype(np.float32)
             counts  = np.where(counts == 0, 1.0, counts)
             class_w = counts.sum() / (_n_cls * counts)
-            # Extra boost for the hardest-to-learn classes:
-            # LTF RANGING (1) collapses to 0% — 2× boost on top of inverse-freq weight.
-            # HTF BIAS_NEUTRAL (2) stalls at ~33% — 1.5× boost.
-            if self._mode == "ltf_behaviour":
-                class_w[1] *= 3.0   # RANGING
-            elif self._mode == "htf_bias":
-                class_w[2] *= 4.0   # BIAS_NEUTRAL: raised 1.5→4.0 to overcome low bar_w suppression
+            # Do not apply legacy manual class boosts here. They were tuned for
+            # the old sparse rule-label set and collapse the structural-label
+            # classifier into BIAS_NEUTRAL/RANGING by overweighting majority
+            # classes. Inverse-frequency weighting is enough for the new target.
             class_w = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
 
             # ── GPU-resident tensors ──────────────────────────────────────────
@@ -1152,78 +1351,24 @@ class RegimeClassifier(BaseModel):
             tr_idx = np.arange(n_tr, dtype=np.int64)
 
             # ── Loss functions ────────────────────────────────────────────────
-            # Base CE with class weights (no label_smoothing — we do per-bar soft targets below)
+            # Structural labels are hard supervised targets. The old soft-target
+            # entropy loss was built for noisy hand rules and suppressed directional
+            # learning on the new forward-path labels.
             _base_ce = nn.CrossEntropyLoss(weight=class_w, reduction="none")
-            # Entropy regularisation coefficient: penalises overconfident outputs on ALL bars.
-            # Raised 0.05 → 0.10: the HTF model was hitting proba=1.0 on BIAS_UP/DOWN by
-            # epoch 20 (pure memorisation). Higher λ forces the model to spread probability
-            # mass, which also naturally reduces the BIAS_NEUTRAL / RANGING collapse.
-            _entropy_lambda = 0.10
 
             def _hybrid_loss(logits: "torch.Tensor", labels: "torch.Tensor",
                              bar_weights: "torch.Tensor") -> "torch.Tensor":
                 """
-                Weighted CE with per-bar soft targets + entropy regularisation.
+                Class-weighted hard CE with per-bar confidence weighting.
 
-                Soft targets: for bar i with confidence w_i:
-                  target[i, true_class] = w_i * (1 - ε) + ε/4
-                  target[i, other]      = (1 - w_i) * ε/4 + ε/4
-                  where ε = 0.1 (base smoothing).
-                This means high-confidence bars get near-hard targets; ambiguous
-                bars get flatter targets — the model learns "I'm not sure here".
-
-                Entropy term: -λ × mean(H(p)) where H(p) = -Σ p log p.
-                Subtracting entropy from the loss penalises low-entropy (overconfident)
-                predictions, pushing the model to spread probability mass when uncertain.
+                Class weights prevent majority-regime shortcuts. Confidence
+                weights only scale contribution strength; they no longer soften
+                the target distribution, because these are realised path labels.
                 """
                 logits_f = logits.float()
-                eps = 0.1
-                n_c = logits_f.shape[1]
-
-                # Build per-bar soft targets
-                one_hot = torch.zeros_like(logits_f).scatter_(1, labels.unsqueeze(1), 1.0)
-                w = bar_weights.unsqueeze(1)                      # (B, 1)
-                # High-confidence bar → near one-hot; low-confidence → flat
-                smooth_targets = w * (one_hot * (1 - eps) + eps / n_c) + \
-                                 (1 - w) * torch.full_like(logits_f, 1.0 / n_c)
-
-                # KL(soft_target || softmax(logits)) = soft CE - H(soft_target)
-                log_probs = torch.log_softmax(logits_f, dim=1)
-                soft_ce   = -(smooth_targets * log_probs).sum(dim=1)
-
-                # Class-imbalance re-weighting applied INDEPENDENTLY of bar confidence.
-                # Multiplying cw_per_bar × bar_weights suppresses minority classes
-                # (RANGING, BIAS_NEUTRAL) because they are inherently low-confidence,
-                # causing the model to collapse and never predict them.
-                # Fix: class weight and bar confidence weight are additive influences,
-                # not multiplicative. Class weight ensures rare classes are learned;
-                # bar weight scales each bar's contribution to training stability.
-                cw_per_bar = class_w[labels]
-                # Hard floor on bar_weights so ambiguous bars still contribute.
-                # Lowered from 0.4 → 0.1: RANGING bars have legitimately low confidence
-                # (they're defined as "not trending/volatile/consolidating") but were
-                # over-weighted at 0.4, drowning out high-confidence TRENDING/VOLATILE
-                # gradient signal. 0.1 keeps ambiguous bars in training without
-                # overwhelming the loss.
-                bar_w_floored = torch.clamp(bar_weights, min=0.1)
-                # Detach class weight from bar confidence: use an additive blend instead
-                # of pure multiplication. Pure product cw × bar_w crushes NEUTRAL bars
-                # (low-confidence by definition) even after raising the class_w multiplier.
-                # Additive blend: 0.5*(cw_norm) + 0.5*(bar_w_floored) means a NEUTRAL bar
-                # with bar_w=0.1 still gets ~50% of its class weight contribution rather
-                # than 10%. cw_norm is normalised to have the same mean as bar_w_floored
-                # so the two components are on the same scale.
-                cw_norm = cw_per_bar / (cw_per_bar.mean() + 1e-9) * bar_w_floored.mean()
-                effective_w = 0.5 * cw_norm + 0.5 * bar_w_floored
-                weighted_ce = (soft_ce * effective_w).mean()
-
-                # Entropy regularisation: encourages uncertainty on ambiguous bars
-                probs   = torch.softmax(logits_f, dim=1)
-                entropy = -(probs * (probs + 1e-9).log()).sum(dim=1)  # H(p) per bar
-                entropy_term = _entropy_lambda * entropy.mean()
-
-                # Maximise entropy = subtract it from loss
-                return weighted_ce - entropy_term
+                ce = _base_ce(logits_f, labels)
+                effective_w = torch.clamp(bar_weights.float(), min=0.25)
+                return (ce * effective_w).sum() / (effective_w.sum() + 1e-9)
 
             # ── Optimiser + scheduler ─────────────────────────────────────────
             # Fine-tuning uses a lower LR to preserve learned structure.
@@ -1348,6 +1493,16 @@ class RegimeClassifier(BaseModel):
                     all_preds.extend(preds)
             all_preds_arr = np.array(all_preds)
             accuracy = float(np.mean(all_preds_arr == y_va))
+            pred_counts = np.bincount(all_preds_arr.astype(np.int64), minlength=_n_cls)
+            pred_share = pred_counts / max(len(all_preds_arr), 1)
+            max_pred_share = float(pred_share.max()) if len(pred_share) else 0.0
+            max_pred_allowed = float(os.getenv("REGIME_MAX_PRED_SHARE", "0.85"))
+            min_pred_share = float(os.getenv("REGIME_MIN_PRED_CLASS_SHARE", "0.01"))
+            collapsed_classes = [
+                _classes[c]
+                for c in range(_n_cls)
+                if (y_va == c).sum() > 0 and pred_share[c] < min_pred_share
+            ]
             per_class_accuracy = {
                 _classes[c]: (
                     round(float((all_preds_arr[y_va == c] == c).mean()), 3)
@@ -1358,8 +1513,48 @@ class RegimeClassifier(BaseModel):
             del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu, tr_idx_t
             if DEVICE.type == "cuda":
                 torch.cuda.empty_cache()
-            if accuracy < 0.65:
-                logger.warning("RegimeClassifier accuracy %.2f < 0.65 threshold", accuracy)
+            if max_pred_share > max_pred_allowed or collapsed_classes:
+                return {
+                    "error": (
+                        f"Regime prediction distribution collapsed: "
+                        f"pred_share={dict(zip(_classes, np.round(pred_share, 4).tolist()))}, "
+                        f"max_pred_share={max_pred_share:.1%}, "
+                        f"collapsed_classes={collapsed_classes}. "
+                        "Refusing to save misleading regime weights."
+                    )
+                }
+            default_min_overall = (1.0 / max(_n_cls, 1)) + 0.03
+            min_overall_accuracy = float(
+                os.getenv("REGIME_MIN_OVERALL_ACCURACY", f"{default_min_overall:.6f}")
+            )
+            min_class_accuracy = float(os.getenv("REGIME_MIN_CLASS_ACCURACY", "0.10"))
+            weak_classes = [
+                name
+                for name, acc in per_class_accuracy.items()
+                if (y_va == _classes.index(name)).sum() > 0 and float(acc) < min_class_accuracy
+            ]
+            if accuracy < min_overall_accuracy or weak_classes:
+                return {
+                    "error": (
+                        f"Regime validation below acceptance floor: accuracy={accuracy:.3f} "
+                        f"min_overall={min_overall_accuracy:.3f} "
+                        f"per_class={per_class_accuracy} "
+                        f"min_class={min_class_accuracy:.3f} "
+                        f"weak_classes={weak_classes}. "
+                        "Refusing to save misleading regime weights."
+                    )
+                }
+            default_warn_accuracy = (1.0 / max(_n_cls, 1)) + 0.15
+            warn_accuracy = float(
+                os.getenv("REGIME_WARN_ACCURACY", f"{default_warn_accuracy:.6f}")
+            )
+            if accuracy < warn_accuracy:
+                logger.warning(
+                    "RegimeClassifier accuracy %.3f < warning floor %.3f "
+                    "(harder structural labels; check blind backtest economics)",
+                    accuracy,
+                    warn_accuracy,
+                )
 
             self.save(self.weight_path)
             logger.info("RegimeClassifier[%s] saved to %s",

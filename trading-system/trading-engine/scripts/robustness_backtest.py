@@ -611,14 +611,17 @@ def _build_ml_cache(
 
 # Signal config — resolved once at module level (env vars don't change mid-run).
 _SCFG = {
-    "max_uncertainty": float(os.getenv("MAX_UNCERTAINTY",          "2.0")),
-    "dir_thresh":      float(os.getenv("ML_DIRECTION_THRESHOLD",   "0.50")),
+    "max_uncertainty": float(os.getenv("MAX_UNCERTAINTY",          "0.25")),
+    "dir_thresh":      float(os.getenv("ML_DIRECTION_THRESHOLD",   "0.62")),
     "neutral_thresh":  float(os.getenv("NEUTRAL_BIAS_THRESHOLD",   "0.50")),
     "vol_thr":         float(os.getenv("VOLATILE_ENTRY_THRESHOLD",
-                                       os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))),
+                                       os.getenv("ML_DIRECTION_THRESHOLD", "0.62"))),
     "block_consol":    os.getenv("BLOCK_LTF_CONSOLIDATING", "0").lower() in ("1","true","yes"),
-    "sl_mult":         float(os.getenv("SL_ATR_MULT", "1.5")),
-    "rr":              float(os.getenv("RR_DEFAULT",  "2.0")),
+    "sl_mult":         float(os.getenv("ATR_STOP_MULTIPLIER", "1.5")),
+    "target_mult":     float(os.getenv("ATR_TARGET_MULTIPLIER",  "2.5")),
+    "gold_sl_mult":    float(os.getenv("GOLD_ATR_STOP_MULTIPLIER", "2.0")),
+    "gold_target_mult": float(os.getenv("GOLD_ATR_TARGET_MULTIPLIER", "3.5")),
+    "min_rr":          float(os.getenv("MIN_REWARD_TO_RISK", "1.5")),
 }
 
 
@@ -657,23 +660,24 @@ def _compute_signal(symbol: str, ml_preds: dict, bar: dict) -> dict | None:
     if _ltf == "TRENDING"  and _pv and _ps and _ps != side: return None
     if _ltf == "RANGING"   and _rv and _rs and _rs != side: return None
 
-    _sl_mult = _SCFG["sl_mult"]
-    _rr      = _SCFG["rr"]
+    _is_gold = symbol == "XAUUSD"
+    _sl_mult = _SCFG["gold_sl_mult"] if _is_gold else _SCFG["sl_mult"]
+    _tp_mult = _SCFG["gold_target_mult"] if _is_gold else _SCFG["target_mult"]
     sl_dist  = atr * _sl_mult
 
     if _ltf == "RANGING" and _rv:
         if side == "buy":
             sl  = float(bar.get("range_support", close - sl_dist)) - atr * 0.3
-            tp  = float(bar.get("range_resist",  close + sl_dist * _rr))
+            tp  = float(bar.get("range_resist",  close + sl_dist * _tp_mult))
         else:
             sl  = float(bar.get("range_resist",  close + sl_dist)) + atr * 0.3
-            tp  = float(bar.get("range_support", close - sl_dist * _rr))
-        if abs(tp - close) / (abs(close - sl) + 1e-9) < 1.5:
+            tp  = float(bar.get("range_support", close - sl_dist * _tp_mult))
+        if abs(tp - close) / (abs(close - sl) + 1e-9) < _SCFG["min_rr"]:
             sl = (close - sl_dist) if side == "buy" else (close + sl_dist)
-            tp = (close + sl_dist * _rr) if side == "buy" else (close - sl_dist * _rr)
+            tp = (close + sl_dist * _tp_mult) if side == "buy" else (close - sl_dist * _tp_mult)
     else:
         sl = (close - sl_dist) if side == "buy" else (close + sl_dist)
-        tp = (close + sl_dist * _rr) if side == "buy" else (close - sl_dist * _rr)
+        tp = (close + sl_dist * _tp_mult) if side == "buy" else (close - sl_dist * _tp_mult)
 
     return {
         "side": side, "entry": close, "stop_loss": sl, "take_profit": tp,
@@ -888,7 +892,7 @@ def _run_symbol_epoch(
     halted       = False
     first_live_idx = max(200, int(df.index.searchsorted(start_ts, side="left")))
 
-    _dir_thresh     = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.50"))
+    _dir_thresh     = float(os.getenv("ML_DIRECTION_THRESHOLD", "0.62"))
     _density_lambda = float(os.getenv("DENSITY_LAMBDA", "0.12"))
 
     for i in range(first_live_idx, len(df)):
