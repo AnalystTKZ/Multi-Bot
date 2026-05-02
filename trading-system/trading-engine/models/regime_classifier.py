@@ -255,16 +255,14 @@ class RegimeClassifier(BaseModel):
                     }
                     # Backward-compatible aliases used by older gates/reports.
                     score_payload["volatility_score"] = score_payload["volatility_percentile"]
-                    try:
-                        from services.regime_scores import build_regime_score_frame
+                    from services.regime_scores import build_regime_score_frame
 
-                        primitive_df = build_regime_score_frame(df, symbol=symbol)
-                        if not primitive_df.empty:
-                            primitive_last = primitive_df.iloc[-1]
-                            score_payload["efficiency_ratio_20"] = float(primitive_last.get("efficiency_ratio_20", 0.0))
-                            score_payload["atr_percentile_500"] = float(primitive_last.get("atr_percentile_500", 0.5))
-                    except Exception as score_exc:
-                        logger.debug("RegimeClassifier.predict primitive overlay unavailable: %s", score_exc)
+                    primitive_df = build_regime_score_frame(df, symbol=symbol)
+                    if primitive_df.empty:
+                        raise ValueError("RegimeClassifier.predict primitive score frame is empty")
+                    primitive_last = primitive_df.iloc[-1]
+                    score_payload["efficiency_ratio_20"] = float(primitive_last["efficiency_ratio_20"])
+                    score_payload["atr_percentile_500"] = float(primitive_last["atr_percentile_500"])
                     from services.regime_scores import classify_trade_regime, legacy_ltf_label_from_scores
 
                     legacy_label = legacy_ltf_label_from_scores(score_payload)
@@ -2292,27 +2290,25 @@ class RegimeClassifier(BaseModel):
             # 4-class softmax classifiers; the current LTF model is a 5-output
             # score head and must cold-start instead of silently loading them.
             if n_cls != self._n_output_classes or saved_output_type != self._output_type:
-                logger.warning(
+                raise ModelNotTrainedError(
                     "RegimeClassifier.load: incompatible artifact saved_mode=%s saved_output=%s "
-                    "saved_n=%d expected_mode=%s expected_output=%s expected_n=%d — ignoring %s",
-                    saved_mode,
-                    saved_output_type,
-                    n_cls,
-                    self._mode,
-                    self._output_type,
-                    self._n_output_classes,
-                    path,
+                    "saved_n=%d expected_mode=%s expected_output=%s expected_n=%d. "
+                    "Delete the stale file and retrain regime weights: %s"
+                    % (
+                        saved_mode,
+                        saved_output_type,
+                        n_cls,
+                        self._mode,
+                        self._output_type,
+                        self._n_output_classes,
+                        path,
+                    )
                 )
-                self._model = None
-                self._loaded = False
-                self._n_features = n_feat
-                self._n_classes = n_cls
-                return
             if saved_mode != self._mode:
-                logger.warning(
+                raise ModelNotTrainedError(
                     "RegimeClassifier.load: mode mismatch saved=%s current=%s "
-                    "— predictions may be incorrect until retrained",
-                    saved_mode, self._mode,
+                    "for %s. Delete the stale file and retrain regime weights."
+                    % (saved_mode, self._mode, path)
                 )
 
             m = _build_mlp(n_feat, n_cls)

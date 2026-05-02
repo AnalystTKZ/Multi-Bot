@@ -1290,7 +1290,7 @@ def _precompute_ml_cache(
       4. Returns a dict {bar_index → preds_dict} for O(1) per-bar lookup.
 
     Speedup on T4: ~40–80× vs per-bar inference for a 50k-bar symbol.
-    Falls back to empty dict (triggering per-bar inference) on any error.
+    Regime-cache failures are fatal; missing context must be fixed upstream.
     """
     import time as _time
     _t0_cache = _time.perf_counter()
@@ -1335,141 +1335,159 @@ def _precompute_ml_cache(
 
         _do_4h = bool(regime_4h and regime_4h.is_trained and regime_4h._model is not None)
         _do_1h = bool(regime_1h and regime_1h.is_trained and regime_1h._model is not None)
+        if regime_4h is not None and not _do_4h:
+            raise RuntimeError("ML cache requires a loaded HTF regime model; regime_htf is not ready")
+        if regime_1h is not None and not _do_1h:
+            raise RuntimeError("ML cache requires a loaded LTF regime model; regime_ltf is not ready")
+        if (_do_4h and not _do_1h) or (_do_1h and not _do_4h):
+            raise RuntimeError("ML cache requires both HTF and LTF regime models together")
 
         _df_src_4h = None
         if _do_4h:
             _df_src_4h = htf.get("4H")
             if _df_src_4h is None:
                 _df_src_4h = htf.get("H4")
-        if _df_src_4h is None or len(_df_src_4h) < 50:
-            _df_src_4h = df if _do_4h else None
+            if _df_src_4h is None or len(_df_src_4h) < 50:
+                raise RuntimeError(f"ML cache requires 4H HTF context for {symbol}; got {_df_src_4h is not None and len(_df_src_4h)} bars")
         _df_src_1h = None
         if _do_1h:
             _df_src_1h = htf.get("1H")
             if _df_src_1h is None:
                 _df_src_1h = htf.get("H1")
-        if _df_src_1h is None or len(_df_src_1h) < 50:
-            _df_src_1h = df if _do_1h else None
+            if _df_src_1h is None or len(_df_src_1h) < 50:
+                raise RuntimeError(f"ML cache requires 1H LTF context for {symbol}; got {_df_src_1h is not None and len(_df_src_1h)} bars")
 
         _X_4h = _X_1h = None
-        try:
-            if _do_4h:
-                _t_fm = _time.perf_counter()
-                _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
-        except Exception as _exc:
-            logger.error("ML cache: regime 4H feature build failed %s: %s", symbol, _exc)
-        try:
-            if _do_1h:
-                # Reuse matrix when both models fall back to the same source df
-                if _do_4h and _df_src_1h is _df_src_4h and _X_4h is not None:
-                    _X_1h = _X_4h
-                else:
-                    _t_fm = _time.perf_counter()
-                    _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
-        except Exception as _exc:
-            logger.error("ML cache: regime 1H feature build failed %s: %s", symbol, _exc)
+        if _do_4h:
+            _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
+        if _do_1h:
+            if _do_4h and _df_src_1h is _df_src_4h and _X_4h is not None:
+                _X_1h = _X_4h
+            else:
+                _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
 
         def _infer_regime(rc_model, X_feat, df_src):
             _mode = getattr(rc_model, "_mode", "ltf_behaviour")
-            if _mode == "htf_bias":
-                _classes, _default_id = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], 2
-            else:
-                _classes, _default_id = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], 1
+            if X_feat is None or df_src is None:
+                raise RuntimeError(f"ML cache regime inference missing feature/source data for {symbol}")
             _n    = len(df_src)
             _step = max(1, _n // 20_000)
-            try:
-                row_idx = list(range(50, _n, _step))
-                X = X_feat[row_idx]
-                if len(X) == 0:
-                    return None, None, None
-                if hasattr(rc_model, "predict_batch_scores"):
-                    ids, conf, score_mat = rc_model.predict_batch_scores(X)
-                else:
-                    ids, conf = rc_model.predict_batch(X)
-                    score_mat = None
-                del X
-                arr = np.full(_n, -1, dtype=np.int8)
-                arr[row_idx] = ids.astype(np.int8)
-                filled = (pd.Series(arr.astype(float))
-                          .replace(-1, np.nan).ffill().fillna(_default_id).astype(int).values)
-                c_arr = np.full(_n, np.nan, dtype=np.float32)
-                c_arr[row_idx] = conf
-                filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
-                score_frame = None
-                if score_mat is not None:
-                    from services.regime_scores import LTF_SCORE_COLUMNS
+            row_idx = list(range(0, _n, _step))
+            X = X_feat[row_idx]
+            if len(X) == 0:
+                raise RuntimeError(f"ML cache regime inference produced no rows for {symbol}")
+            if hasattr(rc_model, "predict_batch_scores"):
+                ids, conf, score_mat = rc_model.predict_batch_scores(X)
+            else:
+                ids, conf = rc_model.predict_batch(X)
+                score_mat = None
+            del X
+            if _mode == "ltf_behaviour" and score_mat is None:
+                raise RuntimeError("LTF behaviour regime model did not return score matrix")
+            arr = np.full(_n, np.nan, dtype=np.float32)
+            arr[row_idx] = ids.astype(np.float32)
+            filled = pd.Series(arr, index=df_src.index).ffill()
+            if filled.isna().any():
+                raise RuntimeError(f"ML cache regime inference left label gaps for {symbol}/{_mode}")
+            c_arr = np.full(_n, np.nan, dtype=np.float32)
+            c_arr[row_idx] = conf
+            filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
+            if filled_conf.isna().any():
+                raise RuntimeError(f"ML cache regime inference left confidence gaps for {symbol}/{_mode}")
+            score_frame = None
+            if score_mat is not None:
+                from services.regime_scores import LTF_SCORE_COLUMNS
 
-                    score_data = {
-                        name: np.full(_n, np.nan, dtype=np.float32)
-                        for name in LTF_SCORE_COLUMNS
-                    }
-                    for col_i, name in enumerate(LTF_SCORE_COLUMNS):
-                        score_data[name][row_idx] = score_mat[:, col_i]
-                    score_frame = pd.DataFrame(score_data, index=df_src.index).ffill().fillna(0.0)
-                    if "volatility_percentile" in score_frame.columns:
-                        score_frame["volatility_score"] = score_frame["volatility_percentile"]
-                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, score_frame
-            except Exception as _e:
-                logger.error("ML cache: regime infer failed %s: %s", symbol, _e)
-                return None, None, None
+                score_data = {
+                    name: np.full(_n, np.nan, dtype=np.float32)
+                    for name in LTF_SCORE_COLUMNS
+                }
+                for col_i, name in enumerate(LTF_SCORE_COLUMNS):
+                    score_data[name][row_idx] = score_mat[:, col_i]
+                score_frame = pd.DataFrame(score_data, index=df_src.index).ffill()
+                if score_frame[LTF_SCORE_COLUMNS].isna().any().any():
+                    raise RuntimeError(f"ML cache regime score inference left score gaps for {symbol}")
+                score_frame["volatility_score"] = score_frame["volatility_percentile"]
+            return filled.astype(int), filled_conf, score_frame
+
+        def _align_complete(series: pd.Series, target_index: pd.Index, name: str, dtype=None) -> pd.Series:
+            aligned = series.reindex(target_index, method="ffill")
+            if aligned.isna().any():
+                raise RuntimeError(f"ML cache alignment left gaps in {name} for {symbol}")
+            return aligned.astype(dtype) if dtype is not None else aligned
 
         if _do_4h and _X_4h is not None:
             _t_ri = _time.perf_counter()
             _r4h, _c4h, _ = _infer_regime(regime_4h, _X_4h, _df_src_4h)
             del _X_4h
-            if _r4h is not None:
-                if _df_src_4h is not df:
-                    _regime_htf_series = _r4h.reindex(df.index, method="ffill").fillna(2).astype(int)
-                    _regime_htf_conf   = _c4h.reindex(df.index, method="ffill").fillna(1/3)
-                else:
-                    _regime_htf_series, _regime_htf_conf = _r4h, _c4h
+            if _df_src_4h is not df:
+                _regime_htf_series = _align_complete(_r4h, df.index, "regime_htf", int)
+                _regime_htf_conf   = _align_complete(_c4h, df.index, "regime_htf_conf")
+            else:
+                _regime_htf_series, _regime_htf_conf = _r4h, _c4h
             gc.collect()
 
         if _do_1h and _X_1h is not None:
             _t_ri = _time.perf_counter()
             _r1h, _c1h, _score_model_frame = _infer_regime(regime_1h, _X_1h, _df_src_1h)
             del _X_1h
-            if _r1h is not None:
-                if _df_src_1h is not df:
-                    _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
-                    _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
-                    if _score_model_frame is not None:
-                        _regime_ltf_score_frame = _score_model_frame.reindex(df.index, method="ffill")
-                else:
-                    _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
-                    _regime_ltf_score_frame = _score_model_frame
+            if _df_src_1h is not df:
+                _regime_ltf_series = _align_complete(_r1h, df.index, "regime_ltf", int)
+                _regime_ltf_conf   = _align_complete(_c1h, df.index, "regime_ltf_conf")
+                if _score_model_frame is None:
+                    raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
+                _regime_ltf_score_frame = _score_model_frame.reindex(df.index, method="ffill")
+                if _regime_ltf_score_frame.isna().any().any():
+                    raise RuntimeError(f"ML cache alignment left gaps in LTF score frame for {symbol}")
+            else:
+                _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
+                if _score_model_frame is None:
+                    raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
+                _regime_ltf_score_frame = _score_model_frame
             gc.collect()
 
         if _do_1h and _df_src_1h is not None:
-            try:
-                from services.regime_scores import (
-                    LTF_SCORE_COLUMNS,
-                    build_regime_score_frame,
-                    classify_trade_regime,
-                )
+            from services.regime_scores import (
+                LTF_SCORE_COLUMNS,
+                build_regime_score_frame,
+                classify_trade_regime,
+            )
 
-                _score_src = build_regime_score_frame(_df_src_1h, symbol=symbol)
-                if _regime_ltf_score_frame is not None:
-                    _model_score_src = (
-                        _regime_ltf_score_frame
-                        if _df_src_1h is df
-                        else _regime_ltf_score_frame.reindex(_df_src_1h.index, method="ffill")
-                    )
-                    for _score_name in LTF_SCORE_COLUMNS:
-                        if _score_name in _model_score_src.columns:
-                            _score_src[_score_name] = _model_score_src[_score_name]
-                    if "volatility_percentile" in _score_src.columns:
-                        _score_src["volatility_score"] = _score_src["volatility_percentile"]
-                if _df_src_1h is not df:
-                    _regime_ltf_score_frame = _score_src.reindex(df.index, method="ffill")
-                else:
-                    _regime_ltf_score_frame = _score_src
-                _trade_regime_series = _regime_ltf_score_frame.apply(
-                    lambda row: _TRADE_REGIME_TO_ID.get(classify_trade_regime(row), -1),
-                    axis=1,
-                ).astype(np.int8)
-            except Exception as _exc:
-                logger.warning("ML cache: regime score overlay failed %s: %s", symbol, _exc)
+            _score_src = build_regime_score_frame(_df_src_1h, symbol=symbol)
+            if _regime_ltf_score_frame is None:
+                raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
+            _model_score_src = (
+                _regime_ltf_score_frame
+                if _df_src_1h is df
+                else _regime_ltf_score_frame.reindex(_df_src_1h.index, method="ffill")
+            )
+            if _model_score_src[LTF_SCORE_COLUMNS].isna().any().any():
+                raise RuntimeError(f"ML cache model LTF score frame has gaps for {symbol}")
+            for _score_name in LTF_SCORE_COLUMNS:
+                _score_src[_score_name] = _model_score_src[_score_name]
+            _score_src["volatility_score"] = _score_src["volatility_percentile"]
+            if _df_src_1h is not df:
+                _regime_ltf_score_frame = _score_src.reindex(df.index, method="ffill")
+                if _regime_ltf_score_frame.isna().any().any():
+                    raise RuntimeError(f"ML cache score overlay alignment left gaps for {symbol}")
+            else:
+                _regime_ltf_score_frame = _score_src
+            _trade_regime_series = _regime_ltf_score_frame.apply(
+                lambda row: _TRADE_REGIME_TO_ID.get(classify_trade_regime(row), -1),
+                axis=1,
+            ).astype(np.int8)
+            if (_trade_regime_series < 0).any():
+                raise RuntimeError(f"ML cache trade regime classification produced unknown states for {symbol}")
+
+        if _do_4h and (_regime_htf_series is None or _regime_htf_conf is None):
+            raise RuntimeError(f"ML cache did not produce HTF regime context for {symbol}")
+        if _do_1h and (
+            _regime_ltf_series is None
+            or _regime_ltf_conf is None
+            or _regime_ltf_score_frame is None
+            or _trade_regime_series is None
+        ):
+            raise RuntimeError(f"ML cache did not produce complete LTF regime context for {symbol}")
 
 
         # ── Build sequence features (with dual-regime context) ────────────────
@@ -1593,15 +1611,15 @@ def _precompute_ml_cache(
                 "efficiency_ratio_20",
             ]:
                 if _score_key in _regime_ltf_score_frame.columns:
-                    cache[_score_key] = (
-                        _regime_ltf_score_frame[_score_key]
-                        .reindex(df.index, method="ffill")
-                        .to_numpy(dtype=np.float32, copy=False)
-                    )
+                    _aligned_score = _regime_ltf_score_frame[_score_key].reindex(df.index, method="ffill")
+                    if _aligned_score.isna().any():
+                        raise RuntimeError(f"ML cache score {_score_key} has gaps for {symbol}")
+                    cache[_score_key] = _aligned_score.to_numpy(dtype=np.float32, copy=False)
         if _trade_regime_series is not None:
-            cache["trade_regime"] = _trade_regime_series.reindex(df.index, method="ffill").fillna(-1).to_numpy(
-                dtype=np.int8, copy=False
-            )
+            _aligned_trade_regime = _trade_regime_series.reindex(df.index, method="ffill")
+            if _aligned_trade_regime.isna().any() or (_aligned_trade_regime < 0).any():
+                raise RuntimeError(f"ML cache trade_regime has gaps for {symbol}")
+            cache["trade_regime"] = _aligned_trade_regime.to_numpy(dtype=np.int8, copy=False)
 
         n_gru = int(np.count_nonzero(~np.isnan(cache["p_bull"])))
         n_htf = int(np.count_nonzero(cache["regime"] >= 0))
@@ -3360,17 +3378,18 @@ def main():
                 ml_models["regime_htf"] = regime_htf
                 ml_models["regime_4h"] = regime_htf
             else:
-                logger.warning("RegimeClassifier[HTF] unavailable (weights missing)")
+                raise RuntimeError("RegimeClassifier[HTF] unavailable; train regime_htf.pkl before backtesting with ML")
             regime_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
             if _model_ready(regime_ltf):
                 ml_models["regime_ltf"] = regime_ltf
                 ml_models["regime_1h"] = regime_ltf
             else:
-                logger.warning("RegimeClassifier[LTF] unavailable (weights missing)")
+                raise RuntimeError("RegimeClassifier[LTF] unavailable; train regime_ltf.pkl before backtesting with ML")
             if "regime_htf" in ml_models:
                 ml_models["regime"] = ml_models["regime_htf"]
         except Exception as exc:
-            logger.warning("RegimeClassifier load failed: %s", exc)
+            logger.error("RegimeClassifier load failed: %s", exc)
+            raise
 
         try:
             from models.quality_scorer import QualityScorer

@@ -180,12 +180,15 @@ def build_regime_score_frame(
 ) -> pd.DataFrame:
     """Build causal regime primitives, scores, and final score inputs."""
     if df is None or len(df) == 0:
-        return pd.DataFrame(columns=REGIME_SCORE_COLUMNS)
+        raise ValueError("build_regime_score_frame requires a non-empty OHLC dataframe")
+    missing = {"open", "high", "low", "close"} - set(df.columns)
+    if missing:
+        raise ValueError(f"build_regime_score_frame missing required OHLC columns: {sorted(missing)}")
 
     close = df["close"].astype(float)
     high = df["high"].astype(float)
     low = df["low"].astype(float)
-    open_ = df["open"].astype(float) if "open" in df.columns else close.shift(1).fillna(close)
+    open_ = df["open"].astype(float)
 
     atr = compute_atr(df, 14).astype(float).replace(0.0, np.nan).ffill().bfill().fillna(1e-9)
     adx_df = compute_adx_components(df, 14)
