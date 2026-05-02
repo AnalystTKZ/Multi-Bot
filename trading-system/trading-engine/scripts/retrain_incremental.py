@@ -117,9 +117,9 @@ ALL_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D", "1W", "1MN"]
 # later by the decision engine, not learned as GRU labels/features.
 GRU_TIMEFRAMES = ["15M"]
 # Hierarchical regime cascade:
-# HTF (4H): 3-class bias (BIAS_UP/DOWN/NEUTRAL) — trained with mode="htf_bias"
+# HTF (4H): independent bias_up/bias_down scores — trained with mode="htf_bias"
 # LTF (1H): five behaviour scores (trend/range/chop/volatility/consolidation) — trained with mode="ltf_behaviour"
-REGIME_HTF_TF = ["4H"]         # HTF bias classifier source timeframe (was REGIME_TF_4H)
+REGIME_HTF_TF = ["4H"]         # HTF bias score-head source timeframe (was REGIME_TF_4H)
 REGIME_LTF_TF = ["1H"]         # LTF behaviour classifier source timeframe (was REGIME_TF_1H)
 REGIME_TF_4H = REGIME_HTF_TF   # backward compat alias
 REGIME_TF_1H = REGIME_LTF_TF   # backward compat alias
@@ -780,10 +780,10 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
 
     source_tf: the TF we build feature matrices on (e.g. "4H" or "1H").
     label_tf:  source TF for rule labels.
-    mode: "htf_bias" → 3-class labels for HTF classifier.
+    mode: "htf_bias" → 2-column directional score targets for HTF bias.
           "ltf_behaviour" → 5-column score targets for LTF behaviour head.
     Returns (X, y, sample_weight, n_samples).
-    sample_weight: float32 array (N,) — per-bar confidence from create_rule_labels.
+    sample_weight: float32 array (N,) — per-bar confidence from the labeller.
     """
     from models.regime_classifier import RegimeClassifier as _RC
     from services.feature_engine import REGIME_4H_FEATURES, REGIME_1H_FEATURES
@@ -794,7 +794,8 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
     y_parts:  list = []
     sw_parts: list = []
     samples = 0
-    _score_mode = mode == "ltf_behaviour"
+    _bias_score_mode = mode == "htf_bias"
+    _score_mode = mode in {"htf_bias", "ltf_behaviour"}
     if mode not in {"htf_bias", "ltf_behaviour"}:
         raise ValueError(f"Unsupported regime mode={mode!r}; expected htf_bias or ltf_behaviour")
     _classes = (
@@ -810,11 +811,15 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
     _group_score_counts: dict[str, int] = {}
     _year_score_sums: dict[int, _np.ndarray] = {}
     _year_score_counts: dict[int, int] = {}
-    if _score_mode:
+    if _bias_score_mode:
+        from models.regime_classifier import HTF_SCORE_OUTPUTS as _HTF_SCORE_OUTPUTS
+
+        _score_outputs = list(_HTF_SCORE_OUTPUTS)
+    elif _score_mode:
         from models.regime_classifier import LTF_SCORE_OUTPUTS as _LTF_SCORE_OUTPUTS
 
         _score_outputs = list(_LTF_SCORE_OUTPUTS)
-    _feature_names = list(REGIME_1H_FEATURES if _score_mode else REGIME_4H_FEATURES)
+    _feature_names = list(REGIME_4H_FEATURES if _bias_score_mode else REGIME_1H_FEATURES)
     _need_bos = "swing_hh_hl_count" in _feature_names
     _need_sweep = "liquidity_sweep_24h" in _feature_names
 
@@ -875,11 +880,11 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
             feature_names=_feature_names,
         )
 
-        # HTF uses outcome-aware structural labels. LTF behaviour uses causal
-        # multi-output score targets instead of a forced class.
+        # Both heads use score targets. HTF up/down are independent directional
+        # targets; LTF behaviour is the five-axis market-state score vector.
         if mode == "htf_bias":
-            labels, conf = _RC.create_structural_labels(
-                df, timeframe=source_tf, mode="htf_bias", return_confidence=True, symbol=sym,
+            labels, conf = _RC.create_bias_score_targets(
+                df, timeframe=source_tf, symbol=sym, return_confidence=True,
             )
         else:
             labels, conf = _RC.create_behaviour_score_targets(
@@ -907,6 +912,17 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
             _group_score_sums.setdefault(grp, _np.zeros(len(_score_outputs), dtype=_np.float64))
             _group_score_counts[grp] = _group_score_counts.get(grp, 0) + len(y_sample)
             _group_score_sums[grp] += _np.nansum(y_sample, axis=0)
+            label_dist = None
+            clean_dist = None
+            if _bias_score_mode:
+                label_ids = _RC._bias_score_targets_to_labels(y_sample)
+                clean_mask = conf.iloc[idx].values.astype(_np.float32) >= float(
+                    os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4")
+                )
+                label_dist = _np.bincount(label_ids, minlength=_n_classes)[:_n_classes]
+                clean_dist = _np.bincount(label_ids[clean_mask], minlength=_n_classes)[:_n_classes]
+                _group_counts.setdefault(grp, _np.zeros(_n_classes, dtype=_np.int64))
+                _group_counts[grp] += label_dist
             if hasattr(labels.index, "year"):
                 years = labels.index[idx].year
                 for _yr in _np.unique(years):
@@ -914,8 +930,15 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
                     _year_score_sums.setdefault(int(_yr), _np.zeros(len(_score_outputs), dtype=_np.float64))
                     _year_score_counts[int(_yr)] = _year_score_counts.get(int(_yr), 0) + int(_mask.sum())
                     _year_score_sums[int(_yr)] += _np.nansum(y_sample[_mask], axis=0)
+                    if _bias_score_mode:
+                        _year_counts.setdefault(int(_yr), _np.zeros(_n_classes, dtype=_np.int64))
+                        _year_counts[int(_yr)] += _np.bincount(
+                            label_ids[_mask],
+                            minlength=_n_classes,
+                        )[:_n_classes]
             logger.info(
-                "Regime[%s mode=%s split=%s fold=%s]: collected %s — %d samples (group=%s) score_means=%s",
+                "Regime[%s mode=%s split=%s fold=%s]: collected %s — %d samples "
+                "(group=%s) score_means=%s%s",
                 source_tf,
                 mode,
                 data_split,
@@ -924,6 +947,15 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
                 len(idx),
                 grp,
                 {_score_outputs[i]: round(float(means[i]), 4) for i in range(len(_score_outputs))},
+                (
+                    " labels=%s clean=%s"
+                    % (
+                        {_classes[i]: int(label_dist[i]) for i in range(_n_classes)},
+                        {_classes[i]: int(clean_dist[i]) for i in range(_n_classes)},
+                    )
+                    if _bias_score_mode and label_dist is not None and clean_dist is not None
+                    else ""
+                ),
             )
         else:
             clean_mask = conf.iloc[idx].values.astype(_np.float32) >= float(os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"))
@@ -1093,8 +1125,8 @@ def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str,
 def retrain_regime(dry_run: bool = False) -> dict:
     """
     Train hierarchical regime cascade:
-      1. HTF classifier (regime_htf.pkl) — 3-class bias (BIAS_UP/DOWN/NEUTRAL).
-         mode="htf_bias", trained on 4H bars with realised forward-path bias labels.
+      1. HTF score head (regime_htf.pkl) — independent bias_up/bias_down scores.
+         mode="htf_bias", trained on 4H bars with realised forward-path bias targets.
          GPU-parallel across both T4s via DataParallel.
       2. LTF score head (regime_ltf.pkl) — five independent behaviour scores.
          mode="ltf_behaviour", trained on 1H bars with causal score targets.
@@ -1105,7 +1137,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
     """
     import time as _time
     _t0_regime = _time.perf_counter()
-    logger.info("=== RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 5-score behaviour) ===")
+    logger.info("=== RegimeClassifier retrain (hierarchical: HTF 2-score bias + LTF 5-score behaviour) ===")
     from models.regime_classifier import RegimeClassifier as _RC
     import gc as _gc
 
@@ -1172,8 +1204,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
         logger.info("=== Regime rolling fold %s/%s: %s ===",
                     fold_i + 1, len(active_folds), fold_key)
 
-        # ── HTF bias classifier (3-class) ────────────────────────────────────
-        logger.info("Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...")
+        # ── HTF bias score head (2 independent outputs) ─────────────────────
+        logger.info("Regime: training HTF bias score head (bias_up_score/bias_down_score)...")
         _t_htf_ds = _time.perf_counter()
         X_4h, y_4h, sw_4h, n_4h = _build_regime_dataset(
             symbols, source_tf="4H", label_tf="4H",
@@ -1195,9 +1227,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
             if htf_path not in backed_up:
                 _backup_weights(htf_path)
                 backed_up.add(htf_path)
-            model_htf = _RC(timeframe="4H", mode="htf_bias")
-            model_htf._model = None
-            model_htf._loaded = False
+            model_htf = _RC(timeframe="4H", mode="htf_bias", load_existing=False)
             _t_htf_train = _time.perf_counter()
             res_4h = model_htf.train_on_arrays(
                 X_4h, y_4h, sample_weight=sw_4h,
@@ -1208,9 +1238,19 @@ def retrain_regime(dry_run: bool = False) -> dict:
             if res_4h.get("error"):
                 raise RuntimeError(f"Regime HTF training failed fold={fold_key}: {res_4h['error']}")
             else:
-                logger.info("Regime HTF complete fold=%s: acc=%.3f, train=%d val=%d per_class=%s",
-                            fold_key, res_4h.get("accuracy", 0), n_4h, n_4h_val,
-                            res_4h.get("per_class_accuracy", {}))
+                logger.info(
+                    "Regime HTF complete fold=%s: acc=%.3f bal=%.3f train=%d val=%d "
+                    "per_class=%s precision=%s threshold=%.3f margin=%.3f",
+                    fold_key,
+                    res_4h.get("accuracy", 0),
+                    res_4h.get("balanced_accuracy", 0),
+                    n_4h,
+                    n_4h_val,
+                    res_4h.get("per_class_accuracy", {}),
+                    res_4h.get("per_class_precision", {}),
+                    res_4h.get("decision_threshold", 0),
+                    res_4h.get("decision_margin", 0),
+                )
                 _regime_diagnostics(model_htf, group_gmms_htf, symbols, "4H", fold_id=fold_id)
                 fold_results["HTF"] = res_4h
                 log_retrain("regime_classifier_htf", {**res_4h, "status": "complete", "fold_id": fold_key})
@@ -1240,9 +1280,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
             if ltf_path not in backed_up:
                 _backup_weights(ltf_path)
                 backed_up.add(ltf_path)
-            model_ltf = _RC(timeframe="1H", mode="ltf_behaviour")
-            model_ltf._model = None
-            model_ltf._loaded = False
+            model_ltf = _RC(timeframe="1H", mode="ltf_behaviour", load_existing=False)
             _t_ltf_train = _time.perf_counter()
             res_1h = model_ltf.train_on_arrays(
                 X_1h, y_1h, sample_weight=sw_1h,

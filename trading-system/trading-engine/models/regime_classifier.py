@@ -2,8 +2,9 @@
 regime_classifier.py — GPU-native PyTorch MLP hierarchical regime classifier.
 
 Hierarchical market structure framework:
-  HTF classifier (4H) — "What is overall direction?" (mode="htf_bias")
-    3 classes: 0=BIAS_UP, 1=BIAS_DOWN, 2=BIAS_NEUTRAL
+  HTF score head (4H) — "Is there usable directional pressure?" (mode="htf_bias")
+    2 independent scores: bias_up_score, bias_down_score. BIAS_NEUTRAL is
+    derived when neither direction clears threshold/margin.
   LTF score model (1H) — "How is price behaving NOW?" (mode="ltf_behaviour")
     5 independent scores: trend/range/chop/volatility/consolidation
 
@@ -31,7 +32,8 @@ from services.regime_scores import LTF_SCORE_COLUMNS
 logger = logging.getLogger(__name__)
 
 # ── New hierarchical class definitions ───────────────────────────────────────
-HTF_CLASSES = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]          # 3-class HTF bias
+HTF_CLASSES = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]          # derived HTF bias labels
+HTF_SCORE_OUTPUTS = ["bias_up_score", "bias_down_score"]        # independent score outputs
 LTF_CLASSES = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]  # legacy derived labels
 LTF_SCORE_OUTPUTS = list(LTF_SCORE_COLUMNS)
 
@@ -51,7 +53,7 @@ _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHT_PATH = os.path.join(_MODEL_ROOT, "weights", "regime_classifier.pkl")
 
 # Per-mode weight paths for the hierarchical cascade.
-# regime_htf.pkl: 3-class HTF bias (BIAS_UP/DOWN/NEUTRAL) — trained on 4H data.
+# regime_htf.pkl: 2-score HTF bias head — trained on 4H data.
 # regime_ltf.pkl: 5-output LTF behaviour scores — trained on 1H data.
 # Legacy paths kept for backward compat during transition.
 WEIGHT_PATH_HTF = os.path.join(_MODEL_ROOT, "weights", "regime_htf.pkl")
@@ -145,7 +147,7 @@ class RegimeClassifier(BaseModel):
     GPU-native PyTorch MLP hierarchical regime classifier.
 
     timeframe: "4H" (HTF bias) | "1H" (LTF behaviour) | None (legacy default).
-    mode: "htf_bias" → 3-class (BIAS_UP/DOWN/NEUTRAL) trained on 4H data.
+    mode: "htf_bias" → 2 independent directional scores trained on 4H data.
           "ltf_behaviour" → 5 independent behaviour scores trained on 1H data.
     Each mode trains and saves to its own weight file so both can coexist.
     DataParallel is used across all available GPUs for both training and batch predict.
@@ -158,7 +160,12 @@ class RegimeClassifier(BaseModel):
         "1H": WEIGHT_PATH_LTF,
     }
 
-    def __init__(self, timeframe: Optional[str] = None, mode: Optional[str] = None):
+    def __init__(
+        self,
+        timeframe: Optional[str] = None,
+        mode: Optional[str] = None,
+        load_existing: bool = True,
+    ):
         super().__init__()
         self._model = None
         self._hysteresis_buffer: List[int] = []
@@ -178,8 +185,8 @@ class RegimeClassifier(BaseModel):
         # Pick class list and output size based on mode
         if self._mode == "htf_bias":
             self._class_list = HTF_CLASSES
-            self._n_output_classes = len(HTF_CLASSES)  # 3
-            self._output_type = "classification"
+            self._n_output_classes = len(HTF_SCORE_OUTPUTS)  # 2 independent scores
+            self._output_type = "bias_scores"
             self._current_regime_id: int = 2   # default BIAS_NEUTRAL
         else:
             self._class_list = LTF_CLASSES
@@ -198,11 +205,44 @@ class RegimeClassifier(BaseModel):
                      self._timeframe or "default", self._mode, self._n_features,
                      self._n_output_classes, self.weight_path)
         os.makedirs(os.path.join(_MODEL_ROOT, "weights"), exist_ok=True)
-        if self.is_trained:
+        if load_existing and self.is_trained:
             self.load(self.weight_path)
             self._last_mtime = os.path.getmtime(self.weight_path)
 
     # ── Predict ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _htf_scores_to_proba(scores: np.ndarray) -> np.ndarray:
+        """Convert independent HTF direction scores to a 3-slot legacy payload."""
+        s = np.asarray(scores, dtype=np.float32)
+        if s.ndim == 1:
+            s2 = s.reshape(1, -1)
+        else:
+            s2 = s
+        if s2.shape[1] != len(HTF_SCORE_OUTPUTS):
+            raise ValueError(
+                f"HTF score payload expected {len(HTF_SCORE_OUTPUTS)} columns, got {s2.shape[1]}"
+            )
+        p_up = np.clip(s2[:, 0], 0.0, 1.0)
+        p_down = np.clip(s2[:, 1], 0.0, 1.0)
+        neutral = np.clip(1.0 - np.maximum(p_up, p_down), 0.0, 1.0)
+        return np.stack([p_up, p_down, neutral], axis=1).astype(np.float32)
+
+    @staticmethod
+    def _bias_score_targets_to_labels(targets: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+        """Derive legacy HTF ids from two-column score targets for diagnostics."""
+        y = np.asarray(targets, dtype=np.float32)
+        if y.ndim != 2 or y.shape[1] != len(HTF_SCORE_OUTPUTS):
+            raise ValueError(
+                f"HTF bias score targets must have shape (N, {len(HTF_SCORE_OUTPUTS)}); "
+                f"got {tuple(y.shape)}"
+            )
+        labels = np.full(len(y), 2, dtype=np.int32)
+        up = y[:, 0]
+        down = y[:, 1]
+        labels[(up >= threshold) & (up >= down)] = 0
+        labels[(down >= threshold) & (down > up)] = 1
+        return labels
 
     @staticmethod
     def _htf_bias_decision(
@@ -210,20 +250,28 @@ class RegimeClassifier(BaseModel):
         threshold: float,
         margin: float,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Neutral-default HTF decision policy for imbalanced directional labels."""
+        """Neutral-default HTF decision policy for independent directional scores."""
         p = np.asarray(proba, dtype=np.float32)
         if p.ndim == 1:
             p2 = p.reshape(1, -1)
         else:
             p2 = p
-        if p2.shape[1] != len(HTF_CLASSES):
-            raise ValueError(f"HTF decision expected {len(HTF_CLASSES)} probabilities, got {p2.shape[1]}")
+        if p2.shape[1] not in {len(HTF_SCORE_OUTPUTS), len(HTF_CLASSES)}:
+            raise ValueError(
+                f"HTF decision expected {len(HTF_SCORE_OUTPUTS)} scores or "
+                f"{len(HTF_CLASSES)} probabilities, got {p2.shape[1]}"
+            )
         p_up = p2[:, 0]
         p_down = p2[:, 1]
-        p_neutral = p2[:, 2]
         labels = np.full(len(p2), 2, dtype=np.int32)
-        up_ok = (p_up >= threshold) & (p_up >= p_neutral + margin) & (p_up >= p_down + margin)
-        down_ok = (p_down >= threshold) & (p_down >= p_neutral + margin) & (p_down >= p_up + margin)
+        if p2.shape[1] == len(HTF_SCORE_OUTPUTS):
+            p_neutral = 1.0 - np.maximum(p_up, p_down)
+            up_ok = (p_up >= threshold) & (p_up >= p_down + margin)
+            down_ok = (p_down >= threshold) & (p_down >= p_up + margin)
+        else:
+            p_neutral = p2[:, 2]
+            up_ok = (p_up >= threshold) & (p_up >= p_neutral + margin) & (p_up >= p_down + margin)
+            down_ok = (p_down >= threshold) & (p_down >= p_neutral + margin) & (p_down >= p_up + margin)
         labels[up_ok] = 0
         labels[down_ok] = 1
         confidence = np.where(labels == 0, p_up, np.where(labels == 1, p_down, p_neutral)).astype(np.float32)
@@ -262,10 +310,16 @@ class RegimeClassifier(BaseModel):
 
     @classmethod
     def _select_htf_bias_policy(cls, proba: np.ndarray, y_true: np.ndarray) -> tuple[float, float, dict]:
-        min_precision = float(os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"))
-        min_recall = float(os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.20"))
-        thresholds = np.linspace(0.40, 0.85, 10)
-        margins = np.linspace(0.00, 0.25, 6)
+        min_precision = float(os.getenv(
+            "REGIME_HTF_MIN_DIRECTIONAL_PRECISION",
+            os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"),
+        ))
+        min_recall = float(os.getenv(
+            "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
+            os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.10"),
+        ))
+        thresholds = np.linspace(0.35, 0.85, 11)
+        margins = np.linspace(0.00, 0.30, 7)
         best: tuple[float, float, dict] | None = None
         best_score = -1e9
         for threshold in thresholds:
@@ -370,6 +424,23 @@ class RegimeClassifier(BaseModel):
                         "regime_scores": score_payload,
                         "trade_regime": classify_trade_regime(score_payload),
                     }
+                elif self._output_type == "bias_scores":
+                    score_t = torch.sigmoid(logits_f)[0]
+                    raw_scores = score_t.cpu().numpy().astype(np.float32)
+                    proba = self._htf_scores_to_proba(raw_scores)[0].tolist()
+                    ids, conf = self._htf_bias_decision(
+                        raw_scores,
+                        self._htf_directional_threshold,
+                        self._htf_directional_margin,
+                    )
+                    raw_id = int(ids[0])
+                    confidence = float(conf[0])
+                    extra = {
+                        "bias_scores": {
+                            name: float(raw_scores[i])
+                            for i, name in enumerate(HTF_SCORE_OUTPUTS)
+                        }
+                    }
                 else:
                     proba_t = torch.softmax(logits_f, dim=1)[0]
                     proba = proba_t.cpu().numpy().tolist()
@@ -465,6 +536,15 @@ class RegimeClassifier(BaseModel):
                         all_labels.append(np.asarray(labels, dtype=np.int32))
                         all_conf.append(scores.max(axis=1).astype(np.float32))
                         all_scores.append(scores)
+                    elif self._output_type == "bias_scores":
+                        scores = torch.sigmoid(logits).numpy().astype(np.float32)
+                        labels, conf = self._htf_bias_decision(
+                            scores,
+                            self._htf_directional_threshold,
+                            self._htf_directional_margin,
+                        )
+                        all_labels.append(labels.astype(np.int32))
+                        all_conf.append(conf.astype(np.float32))
                     else:
                         proba = torch.softmax(logits, dim=1).numpy()
                         labels, conf = self._htf_bias_decision(
@@ -1091,6 +1171,43 @@ class RegimeClassifier(BaseModel):
         if return_confidence:
             return targets, conf
         return targets
+
+    @staticmethod
+    def create_bias_score_targets(
+        df: pd.DataFrame,
+        timeframe: str = "4H",
+        symbol: Optional[str] = None,
+        return_confidence: bool = False,
+    ):
+        """
+        Outcome-aware HTF directional score targets.
+
+        This replaces the old forced 3-class HTF softmax target. Up and down
+        are trained as independent binary targets, and neutral remains the
+        default downstream decision when neither score is strong enough.
+        """
+        labels, conf = RegimeClassifier.create_structural_labels(
+            df,
+            timeframe=timeframe,
+            mode="htf_bias",
+            return_confidence=True,
+            symbol=symbol,
+        )
+        targets = pd.DataFrame(
+            0.0,
+            index=df.index,
+            columns=HTF_SCORE_OUTPUTS,
+            dtype=np.float32,
+        )
+        clean = conf.astype(float) >= float(os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"))
+        up_mask = clean & (labels.astype(int) == 0)
+        down_mask = clean & (labels.astype(int) == 1)
+        targets.loc[up_mask, "bias_up_score"] = 1.0
+        targets.loc[down_mask, "bias_down_score"] = 1.0
+
+        if return_confidence:
+            return targets.astype(np.float32), conf.astype(np.float32)
+        return targets.astype(np.float32)
 
     @staticmethod
     def create_rule_labels(
@@ -1741,8 +1858,9 @@ class RegimeClassifier(BaseModel):
         """
         Train directly on pre-built feature matrix X.
 
-        HTF bias uses a 3-class label array y (N,). LTF behaviour uses a
-        5-column score target y (N, 5), ordered by LTF_SCORE_OUTPUTS.
+        HTF bias uses a 2-column score target y (N, 2), ordered by
+        HTF_SCORE_OUTPUTS. LTF behaviour uses a 5-column score target y (N, 5),
+        ordered by LTF_SCORE_OUTPUTS.
         sample_weight: float32 array (N,) in [0, 1] — confidence per bar from rule labeling.
           High-confidence bars (strong ADX + full stack + clear drift) get weight 1.0.
           Ambiguous bars (borderline ADX, partial stack, weak drift) are dropped by
@@ -1750,6 +1868,15 @@ class RegimeClassifier(BaseModel):
           would remove a class.
         """
         X = np.asarray(X)
+        if self._output_type == "bias_scores":
+            return self._fit_bias_scores(
+                X,
+                np.asarray(y, dtype=np.float32),
+                sample_weight=sample_weight,
+                X_val=X_val,
+                y_val=y_val,
+                sample_weight_val=sample_weight_val,
+            )
         if self._output_type == "behaviour_scores":
             return self._fit_behaviour_scores(
                 X,
@@ -1827,6 +1954,406 @@ class RegimeClassifier(BaseModel):
             y_val=y_val_arr,
             sample_weight_val=sample_weight_val,
         )
+
+    def _fit_bias_scores(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+        X_val: Optional[np.ndarray] = None,
+        y_val: Optional[np.ndarray] = None,
+        sample_weight_val: Optional[np.ndarray] = None,
+        _cold_start: bool = False,
+    ) -> dict:
+        """Train the HTF bias head as two independent directional scores."""
+        try:
+            import torch
+            import torch.nn.functional as F
+
+            X = np.asarray(X, dtype=np.float32)
+            y = np.asarray(y, dtype=np.float32)
+            if y.ndim != 2 or y.shape[1] != len(HTF_SCORE_OUTPUTS):
+                return {
+                    "error": (
+                        f"HTF bias score targets must have shape (N, {len(HTF_SCORE_OUTPUTS)}); "
+                        f"got {tuple(y.shape)}"
+                    )
+                }
+            if len(X) < 100:
+                return {"error": f"Insufficient data ({len(X)} rows)"}
+
+            if X.shape[1] != len(self._feature_names):
+                raise ValueError(
+                    f"RegimeClassifier[{self._timeframe} mode={self._mode}] expected "
+                    f"{len(self._feature_names)} features {self._feature_names}; got {X.shape[1]}"
+                )
+            if X_val is not None:
+                X_val = np.asarray(X_val, dtype=np.float32)
+                if X_val.shape[1] != len(self._feature_names):
+                    raise ValueError(
+                        f"RegimeClassifier[{self._timeframe} mode={self._mode}] validation expected "
+                        f"{len(self._feature_names)} features; got {X_val.shape[1]}"
+                    )
+
+            y = (np.nan_to_num(y, nan=0.0, posinf=1.0, neginf=0.0) >= 0.5).astype(np.float32)
+            finite_mask = np.isfinite(X).all(axis=1) & np.isfinite(y).all(axis=1)
+            if sample_weight is not None and len(sample_weight) == len(y):
+                finite_mask &= np.isfinite(sample_weight)
+            if not finite_mask.all():
+                X = X[finite_mask]
+                y = y[finite_mask]
+                if sample_weight is not None and len(sample_weight) == len(finite_mask):
+                    sample_weight = np.asarray(sample_weight, dtype=np.float32)[finite_mask]
+
+            if X_val is not None and y_val is not None:
+                y_val = np.asarray(y_val, dtype=np.float32)
+                if y_val.ndim != 2 or y_val.shape[1] != len(HTF_SCORE_OUTPUTS):
+                    return {
+                        "error": (
+                            f"HTF validation targets must have shape (N, {len(HTF_SCORE_OUTPUTS)}); "
+                            f"got {tuple(y_val.shape)}"
+                        )
+                    }
+                y_val = (np.nan_to_num(y_val, nan=0.0, posinf=1.0, neginf=0.0) >= 0.5).astype(np.float32)
+                val_mask = np.isfinite(X_val).all(axis=1) & np.isfinite(y_val).all(axis=1)
+                X_va = X_val[val_mask]
+                y_va = y_val[val_mask]
+                X_tr, y_tr = X, y
+                sw_tr = (
+                    np.asarray(sample_weight, dtype=np.float32)
+                    if sample_weight is not None and len(sample_weight) == len(y)
+                    else np.ones(len(X_tr), dtype=np.float32)
+                )
+            else:
+                split = int(len(X) * 0.8)
+                X_tr, X_va = X[:split], X[split:]
+                y_tr, y_va = y[:split], y[split:]
+                sw_tr = (
+                    np.asarray(sample_weight[:split], dtype=np.float32)
+                    if sample_weight is not None and len(sample_weight) == len(X)
+                    else np.ones(len(X_tr), dtype=np.float32)
+                )
+
+            if len(X_tr) < 50 or len(X_va) < 10:
+                return {"error": "Not enough HTF bias score data after split"}
+
+            y_tr_labels = self._bias_score_targets_to_labels(y_tr)
+            y_va_labels = self._bias_score_targets_to_labels(y_va)
+            train_counts = {
+                HTF_CLASSES[c]: int((y_tr_labels == c).sum())
+                for c in range(len(HTF_CLASSES))
+            }
+            val_counts = {
+                HTF_CLASSES[c]: int((y_va_labels == c).sum())
+                for c in range(len(HTF_CLASSES))
+            }
+            logger.info(
+                "RegimeClassifier[mode=%s]: HTF score samples train=%d val=%d train_labels=%s val_labels=%s",
+                self._mode,
+                len(X_tr),
+                len(X_va),
+                train_counts,
+                val_counts,
+            )
+            missing_train = [name for name in ("BIAS_UP", "BIAS_DOWN") if train_counts.get(name, 0) == 0]
+            missing_val = [name for name in ("BIAS_UP", "BIAS_DOWN") if val_counts.get(name, 0) == 0]
+            if missing_train or missing_val:
+                return {
+                    "error": (
+                        f"HTF bias score targets missing directional evidence: "
+                        f"missing_train={missing_train} missing_val={missing_val} "
+                        f"train_counts={train_counts} val_counts={val_counts}"
+                    )
+                }
+
+            n_feat = X_tr.shape[1]
+            _loaded_n_cls = getattr(self, "_n_classes", len(HTF_SCORE_OUTPUTS))
+            _feature_mismatch = self._model is not None and self._n_features != n_feat
+            _output_mismatch = self._model is not None and _loaded_n_cls != len(HTF_SCORE_OUTPUTS)
+            _warm_start = (
+                self._model is not None
+                and not _feature_mismatch
+                and not _output_mismatch
+                and not _cold_start
+            )
+            if not _warm_start:
+                self._model = _build_mlp(n_feat, len(HTF_SCORE_OUTPUTS)).to(DEVICE)
+                self._n_features = n_feat
+                self._n_classes = len(HTF_SCORE_OUTPUTS)
+                logger.info("RegimeClassifier[mode=%s]: cold start HTF score head", self._mode)
+            else:
+                logger.info("RegimeClassifier[mode=%s]: warm start HTF score head", self._mode)
+            if DEVICE.type == "cuda" and torch.cuda.device_count() > 1:
+                if not isinstance(self._model, torch.nn.DataParallel):
+                    self._model = torch.nn.DataParallel(self._model)
+                logger.info("RegimeClassifier HTF score head: DataParallel across %d GPUs",
+                            torch.cuda.device_count())
+
+            pos_counts = np.maximum((y_tr >= 0.5).sum(axis=0).astype(np.float32), 1.0)
+            neg_counts = np.maximum(len(y_tr) - pos_counts, 1.0)
+            pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, 20.0).astype(np.float32)
+            logger.info(
+                "RegimeClassifier[mode=%s]: HTF BCE pos_weight=%s",
+                self._mode,
+                {HTF_SCORE_OUTPUTS[i]: round(float(pos_weight_np[i]), 3) for i in range(len(HTF_SCORE_OUTPUTS))},
+            )
+
+            batch_size = 4096
+            X_tr_gpu = torch.from_numpy(X_tr).to(DEVICE)
+            y_tr_gpu = torch.from_numpy(y_tr).to(DEVICE)
+            sw_tr_gpu = torch.from_numpy(np.clip(sw_tr, 0.03, 1.0)).to(DEVICE)
+            X_va_gpu = torch.from_numpy(X_va.astype(np.float32, copy=False)).to(DEVICE)
+            y_va_gpu = torch.from_numpy(y_va.astype(np.float32, copy=False)).to(DEVICE)
+            pos_weight = torch.from_numpy(pos_weight_np).to(DEVICE)
+            n_tr = len(X_tr_gpu)
+            n_va = len(X_va_gpu)
+            steps_per_epoch = max(1, (n_tr + batch_size - 1) // batch_size)
+            tr_idx = np.arange(n_tr, dtype=np.int64)
+
+            optimiser = torch.optim.AdamW(
+                self._model.parameters(),
+                lr=6e-4 if not _warm_start else 1.5e-4,
+                weight_decay=1e-2,
+            )
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimiser,
+                max_lr=6e-4 if not _warm_start else 1.5e-4,
+                epochs=50,
+                steps_per_epoch=steps_per_epoch,
+                pct_start=0.2,
+            )
+            use_amp = DEVICE.type == "cuda"
+            amp_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+            best_score = -1e9
+            best_loss = float("inf")
+            best_state = None
+            patience, no_improve = 8, 0
+
+            def _score_loss(logits: "torch.Tensor", target: "torch.Tensor",
+                            weight: "torch.Tensor") -> "torch.Tensor":
+                per_cell = F.binary_cross_entropy_with_logits(
+                    logits.float(),
+                    target.float(),
+                    reduction="none",
+                    pos_weight=pos_weight,
+                )
+                per_row = torch.mean(per_cell, dim=1)
+                weight = torch.clamp(weight.float(), min=0.03)
+                return (per_row * weight).sum() / (weight.sum() + 1e-9)
+
+            def _val_stats() -> tuple[float, np.ndarray]:
+                all_pred = []
+                loss_acc = 0.0
+                with torch.no_grad():
+                    for v_s in range(0, n_va, batch_size * 2):
+                        xb = X_va_gpu[v_s: v_s + batch_size * 2]
+                        yb = y_va_gpu[v_s: v_s + batch_size * 2]
+                        with torch.amp.autocast("cuda", enabled=use_amp):
+                            logits_v = self._model(xb)
+                        pred = torch.sigmoid(logits_v.float())
+                        loss_acc += F.binary_cross_entropy_with_logits(
+                            logits_v.float(),
+                            yb.float(),
+                            reduction="mean",
+                            pos_weight=pos_weight,
+                        ).item() * len(xb)
+                        all_pred.append(pred.cpu().numpy())
+                return loss_acc / max(1, n_va), np.concatenate(all_pred, axis=0)
+
+            for epoch in range(50):
+                self._model.train()
+                np.random.shuffle(tr_idx)
+                tr_idx_t = torch.from_numpy(tr_idx).to(DEVICE)
+                optimiser.zero_grad()
+                tr_loss = 0.0
+                for step in range(steps_per_epoch):
+                    b_s = step * batch_size
+                    b_e = min(b_s + batch_size, n_tr)
+                    idx_b = tr_idx_t[b_s:b_e]
+                    xb = X_tr_gpu[idx_b]
+                    yb = y_tr_gpu[idx_b]
+                    wb = sw_tr_gpu[idx_b]
+                    with torch.amp.autocast("cuda", enabled=use_amp):
+                        logits_tr = self._model(xb)
+                    loss = _score_loss(logits_tr, yb, wb)
+                    amp_scaler.scale(loss).backward()
+                    amp_scaler.unscale_(optimiser)
+                    torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
+                    amp_scaler.step(optimiser)
+                    amp_scaler.update()
+                    optimiser.zero_grad()
+                    scheduler.step()
+                    tr_loss += loss.item() * (b_e - b_s)
+                tr_loss /= max(1, n_tr)
+
+                self._model.eval()
+                va_loss, va_pred = _val_stats()
+                threshold, margin, metrics = self._select_htf_bias_policy(va_pred, y_va_labels)
+                score = (
+                    metrics["balanced_accuracy"]
+                    + min(metrics["f1"]["BIAS_UP"], metrics["f1"]["BIAS_DOWN"])
+                    + 0.25 * min(metrics["precision"]["BIAS_UP"], metrics["precision"]["BIAS_DOWN"])
+                )
+                if epoch == 0 or (epoch + 1) % 5 == 0:
+                    logger.info(
+                        "Regime HTF score epoch %2d/50 — tr=%.4f va=%.4f acc=%.3f bal=%.3f "
+                        "threshold=%.2f margin=%.2f recall=%s precision=%s",
+                        epoch + 1,
+                        tr_loss,
+                        va_loss,
+                        metrics["accuracy"],
+                        metrics["balanced_accuracy"],
+                        threshold,
+                        margin,
+                        {k: round(float(v), 3) for k, v in metrics["recall"].items()},
+                        {k: round(float(v), 3) for k, v in metrics["precision"].items()},
+                    )
+                else:
+                    logger.info("Regime HTF score epoch %2d/50 — tr=%.4f va=%.4f bal=%.3f",
+                                epoch + 1, tr_loss, va_loss, metrics["balanced_accuracy"])
+
+                if score > best_score:
+                    best_score = score
+                    best_loss = va_loss
+                    no_improve = 0
+                    m_bs = self._model.module if isinstance(
+                        self._model, torch.nn.DataParallel) else self._model
+                    best_state = {k: v.cpu().clone() for k, v in m_bs.state_dict().items()}
+                else:
+                    no_improve += 1
+                    if no_improve >= patience and epoch + 1 >= 10:
+                        logger.info("Regime HTF score early stop at epoch %d", epoch + 1)
+                        break
+
+            if best_state is not None:
+                m = self._model.module if isinstance(
+                    self._model, torch.nn.DataParallel) else self._model
+                m.load_state_dict(best_state)
+
+            self._model.eval()
+            va_loss, val_pred = _val_stats()
+            threshold, margin, final_metrics = self._select_htf_bias_policy(val_pred, y_va_labels)
+            self._htf_directional_threshold = threshold
+            self._htf_directional_margin = margin
+            all_preds_arr, _ = self._htf_bias_decision(val_pred, threshold, margin)
+            pred_counts = np.bincount(all_preds_arr.astype(np.int64), minlength=len(HTF_CLASSES))
+            pred_share = pred_counts / max(len(all_preds_arr), 1)
+            per_class_accuracy = {
+                name: round(float(final_metrics["recall"][name]), 3)
+                for name in HTF_CLASSES
+            }
+            per_class_precision = {
+                name: round(float(final_metrics["precision"][name]), 3)
+                for name in HTF_CLASSES
+            }
+            per_class_f1 = {
+                name: round(float(final_metrics["f1"][name]), 3)
+                for name in HTF_CLASSES
+            }
+            confusion = final_metrics["confusion"]
+            score_mae = {
+                HTF_SCORE_OUTPUTS[i]: round(float(np.mean(np.abs(val_pred[:, i] - y_va[:, i]))), 4)
+                for i in range(len(HTF_SCORE_OUTPUTS))
+            }
+            logger.info(
+                "RegimeClassifier[mode=%s] HTF score validation threshold=%.3f margin=%.3f "
+                "precision=%s recall=%s f1=%s confusion=%s score_mae=%s pred_share=%s",
+                self._mode,
+                threshold,
+                margin,
+                per_class_precision,
+                per_class_accuracy,
+                per_class_f1,
+                confusion.tolist(),
+                score_mae,
+                dict(zip(HTF_CLASSES, np.round(pred_share, 4).tolist())),
+            )
+
+            del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu, pos_weight
+            if DEVICE.type == "cuda":
+                torch.cuda.empty_cache()
+
+            max_pred_allowed = float(os.getenv("REGIME_HTF_MAX_PRED_SHARE", "0.98"))
+            min_pred_share = float(os.getenv("REGIME_HTF_MIN_PRED_CLASS_SHARE", "0.002"))
+            max_pred_share = float(pred_share.max()) if len(pred_share) else 0.0
+            collapsed_classes = [
+                HTF_CLASSES[c]
+                for c in range(len(HTF_CLASSES))
+                if val_counts.get(HTF_CLASSES[c], 0) > 0 and pred_share[c] < min_pred_share
+            ]
+            if max_pred_share > max_pred_allowed or collapsed_classes:
+                return {
+                    "error": (
+                        f"Regime HTF score prediction distribution collapsed: "
+                        f"pred_share={dict(zip(HTF_CLASSES, np.round(pred_share, 4).tolist()))}, "
+                        f"max_pred_share={max_pred_share:.1%}, "
+                        f"collapsed_classes={collapsed_classes}. "
+                        "Refusing to save misleading directional-bias score weights."
+                    )
+                }
+
+            min_directional_precision = float(os.getenv(
+                "REGIME_HTF_MIN_DIRECTIONAL_PRECISION",
+                os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"),
+            ))
+            min_directional_recall = float(os.getenv(
+                "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
+                os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.10"),
+            ))
+            min_directional_f1 = float(os.getenv(
+                "REGIME_HTF_MIN_DIRECTIONAL_F1",
+                os.getenv("REGIME_MIN_DIRECTIONAL_F1", "0.15"),
+            ))
+            min_neutral_recall = float(os.getenv("REGIME_HTF_MIN_NEUTRAL_RECALL", "0.50"))
+            weak_precision = [
+                name for name in ("BIAS_UP", "BIAS_DOWN")
+                if float(final_metrics["precision"].get(name, 0.0)) < min_directional_precision
+            ]
+            weak_recall = [
+                name for name in ("BIAS_UP", "BIAS_DOWN")
+                if float(final_metrics["recall"].get(name, 0.0)) < min_directional_recall
+            ]
+            weak_f1 = [
+                name for name in ("BIAS_UP", "BIAS_DOWN")
+                if float(final_metrics["f1"].get(name, 0.0)) < min_directional_f1
+            ]
+            weak_neutral = float(final_metrics["recall"].get("BIAS_NEUTRAL", 0.0)) < min_neutral_recall
+            if weak_precision or weak_recall or weak_f1 or weak_neutral:
+                return {
+                    "error": (
+                        f"Regime HTF directional score validation below acceptance floor: "
+                        f"precision={per_class_precision} min_precision={min_directional_precision:.3f} "
+                        f"recall={per_class_accuracy} min_recall={min_directional_recall:.3f} "
+                        f"f1={per_class_f1} min_f1={min_directional_f1:.3f} "
+                        f"min_neutral_recall={min_neutral_recall:.3f} "
+                        f"weak_precision={weak_precision} weak_recall={weak_recall} "
+                        f"weak_f1={weak_f1} weak_neutral={weak_neutral}. "
+                        "Refusing to save directional-bias score weights."
+                    )
+                }
+
+            self.save(self.weight_path)
+            logger.info("RegimeClassifier[%s] HTF score head saved to %s",
+                        self._timeframe or "default", self.weight_path)
+            return {
+                "accuracy": round(float(final_metrics["accuracy"]), 4),
+                "balanced_accuracy": round(float(final_metrics["balanced_accuracy"]), 4),
+                "n_train": len(X_tr),
+                "n_val": len(X_va),
+                "val_loss": round(float(best_loss if np.isfinite(best_loss) else va_loss), 6),
+                "per_class_accuracy": per_class_accuracy,
+                "per_class_precision": per_class_precision,
+                "per_class_f1": per_class_f1,
+                "confusion_matrix": confusion.tolist(),
+                "score_mae": score_mae,
+                "score_outputs": list(HTF_SCORE_OUTPUTS),
+                "decision_threshold": round(float(threshold), 4),
+                "decision_margin": round(float(margin), 4),
+                "timeframe": self._timeframe or "default",
+            }
+        except Exception as exc:
+            logger.error("RegimeClassifier._fit_bias_scores failed: %s", exc)
+            raise
 
     def _fit_behaviour_scores(
         self,
@@ -2238,7 +2765,8 @@ class RegimeClassifier(BaseModel):
             n_feat = X.shape[1]
             _feature_mismatch = (self._model is not None and self._n_features != n_feat)
             # Force cold start if loaded model has wrong number of output classes.
-            # This fires when old pkl is loaded but mode changed (e.g. 5-class → 3-class HTF).
+            # This fires when old pkl is loaded but mode changed
+            # (e.g. 3-class HTF softmax -> 2-score HTF head).
             _loaded_n_cls = getattr(self, "_n_classes", _n_cls)
             _class_mismatch = (self._model is not None and _loaded_n_cls != _n_cls)
             if _feature_mismatch:
@@ -2273,8 +2801,8 @@ class RegimeClassifier(BaseModel):
             counts  = np.where(counts == 0, 1.0, counts)
             # Squared inverse-frequency: boosts minority classes more aggressively
             # than linear inverse-frequency. Linear weights weren't sufficient to
-            # prevent the LTF classifier from collapsing (TRENDING/RANGING recall
-            # 0.20/0.24) and the HTF classifier from predicting mostly BIAS_DOWN.
+            # prevent the legacy LTF classifier from collapsing (TRENDING/RANGING recall
+            # 0.20/0.24) and the old HTF softmax from predicting mostly BIAS_DOWN.
             inv_freq = counts.sum() / (_n_cls * counts)
             _weight_power = float(os.getenv(
                 "REGIME_HTF_CLASS_WEIGHT_POWER" if self._mode == "htf_bias" else "REGIME_CLASS_WEIGHT_POWER",
@@ -2667,7 +3195,12 @@ class RegimeClassifier(BaseModel):
             step = max(1, (n - 50) // MAX_ROWS)
             idx  = np.arange(50, n, step)
             X    = X_all[idx]
-            if self._output_type == "behaviour_scores":
+            if self._output_type == "bias_scores":
+                labels_frame = self.create_bias_score_targets(
+                    df, timeframe=self._timeframe or "4H", symbol=symbol
+                )
+                y = labels_frame.iloc[idx].to_numpy(dtype=np.float32)
+            elif self._output_type == "behaviour_scores":
                 labels_frame = self.create_behaviour_score_targets(
                     df, timeframe=self._timeframe or "1H", symbol=symbol
                 )
@@ -2698,7 +3231,13 @@ class RegimeClassifier(BaseModel):
                 "mode":       self._mode,
                 "output_type": self._output_type,
                 "feature_names": list(self._feature_names),
-                "score_outputs": list(LTF_SCORE_OUTPUTS) if self._output_type == "behaviour_scores" else [],
+                "score_outputs": (
+                    list(LTF_SCORE_OUTPUTS)
+                    if self._output_type == "behaviour_scores"
+                    else list(HTF_SCORE_OUTPUTS)
+                    if self._output_type == "bias_scores"
+                    else []
+                ),
                 "htf_directional_threshold": self._htf_directional_threshold,
                 "htf_directional_margin": self._htf_directional_margin,
             }
