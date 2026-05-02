@@ -40,6 +40,7 @@ REGIME_PRIMITIVE_COLUMNS = [
     "wick_ratio",
     "range_expansion_zscore",
     "hh_hl_structure",
+    "lh_ll_structure",
     "symbol_group_code",
 ]
 
@@ -248,12 +249,14 @@ def build_regime_score_frame(
     hl = low > low.shift(window // 2).fillna(low)
     ll = low < low.shift(1).rolling(window, min_periods=max(3, window // 2)).min()
     lh = high < high.shift(window // 2).fillna(high)
-    hh_hl_structure = (
+    signed_structure = (
         (hh.astype(float) + hl.astype(float) - ll.astype(float) - lh.astype(float))
         .rolling(window, min_periods=1)
         .mean()
         .clip(-1.0, 1.0)
     )
+    hh_hl_structure = signed_structure.clip(lower=0.0, upper=1.0)
+    lh_ll_structure = (-signed_structure).clip(lower=0.0, upper=1.0)
 
     er = efficiency_ratio(close, window)
     di_total = plus_di + minus_di + 1e-9
@@ -267,13 +270,14 @@ def build_regime_score_frame(
     ema_dist50 = ((close - ema50) / (atr + 1e-9)).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-10, 10)
     ema_dist200 = ((close - ema200) / (atr + 1e-9)).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-20, 20)
     stack_direction = np.sign(ema_dist50) + np.sign(ema_dist200) + np.sign(ema50_slope)
+    structure_strength = np.maximum(hh_hl_structure, lh_ll_structure)
 
     trend_score = _clip01(
         0.30 * adx_strength
         + 0.30 * er_trend
         + 0.20 * ema_slope_strength
         + 0.10 * di_spread
-        + 0.10 * hh_hl_structure.abs()
+        + 0.10 * structure_strength
     )
     range_score = _clip01(
         0.30 * adx_weak
@@ -338,6 +342,7 @@ def build_regime_score_frame(
             "wick_ratio": wick_ratio,
             "range_expansion_zscore": range_expansion_z,
             "hh_hl_structure": hh_hl_structure,
+            "lh_ll_structure": lh_ll_structure,
             "symbol_group_code": np.full(len(df), symbol_group_code(symbol), dtype=np.float32),
             "efficiency_ratio_20": er,
             "directional_bias_score": directional_bias_score,

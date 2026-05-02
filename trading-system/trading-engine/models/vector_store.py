@@ -6,12 +6,8 @@ Three separate indices:
   - market_structures : len(REGIME_4H_FEATURES) (HTF bias features, clean for similarity search)
   - regime_embeddings : 64-dim  (GRU shared-layer encoding, richer than raw features)
 
-market_structures uses REGIME_4H_FEATURES rather than the full REGIME_FEATURES
-because:
-  1. REGIME_FEATURES includes 5M/15M noise features and prev_regime one-hots that add
-     irrelevant dimensions to cross-symbol structural similarity search.
-  2. REGIME_4H_FEATURES is the clean "structural fingerprint" for finding similar
-     market regimes in history.
+market_structures uses the same compact REGIME_4H_FEATURES contract as the HTF
+bias model, so similarity search and regime training are aligned.
 
 Each index stores:
   - The raw float32 vector
@@ -59,10 +55,7 @@ _STORE_DIR = os.path.join(_MODEL_ROOT, "weights", "vector_store")
 # Index dimensionalities — must match the feature engines exactly.
 # trade_patterns:    SEQUENCE_FEATURES list in feature_engine.py.
 # market_structures: REGIME_4H_FEATURES in feature_engine.py.
-#                    Intentionally uses the 4H-only feature set, NOT the full REGIME_FEATURES.
-#                    REGIME_FEATURES is bloated for similarity search: it includes 5M/15M per-bar noise,
-#                    prev_regime one-hots, and S/R zeroed-out stubs. REGIME_4H_FEATURES gives a clean
-#                    structural fingerprint.
+#                    Same compact structural fingerprint used by the HTF bias model.
 # regime_embeddings: GRU hidden_size (64-dim shared-layer encoding).
 INDEX_DIMS = {
     "trade_patterns":    len(SEQUENCE_FEATURES),

@@ -468,15 +468,22 @@ def _build_ml_cache(
         _X_4h = _X_1h = None
         try:
             if _do_4h:
-                _X_4h = _RC._build_feature_matrix(_df_src_4h, htf, symbol)
+                _X_4h = _RC._build_feature_matrix(
+                    _df_src_4h,
+                    htf,
+                    symbol,
+                    feature_names=regime_4h._feature_names,
+                )
         except Exception as _exc:
             logger.error("regime 4H feature build failed %s: %s", symbol, _exc)
         try:
             if _do_1h:
-                if _do_4h and _df_src_1h is _df_src_4h and _X_4h is not None:
-                    _X_1h = _X_4h
-                else:
-                    _X_1h = _RC._build_feature_matrix(_df_src_1h, htf, symbol)
+                _X_1h = _RC._build_feature_matrix(
+                    _df_src_1h,
+                    htf,
+                    symbol,
+                    feature_names=regime_1h._feature_names,
+                )
         except Exception as _exc:
             logger.error("regime 1H feature build failed %s: %s", symbol, _exc)
 

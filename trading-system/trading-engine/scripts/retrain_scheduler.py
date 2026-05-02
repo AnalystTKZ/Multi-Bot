@@ -11,7 +11,7 @@ Schedule (all times UTC):
 All models warm-start from existing weights — lower LR preserves learned structure.
 Full cold-start retraining (step7a on Kaggle) should be triggered manually when:
   - New historical data added (3+ months)
-  - Feature contract changed (SEQUENCE_FEATURES / REGIME_FEATURES modified)
+  - Feature contract changed (SEQUENCE_FEATURES / REGIME_4H_FEATURES / REGIME_1H_FEATURES modified)
   - Model accuracy degrades significantly in live monitoring
 
 Env vars:

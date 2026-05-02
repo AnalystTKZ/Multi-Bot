@@ -19,13 +19,13 @@ import logging
 import os
 import pickle
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 from models.base_model import BaseModel
-from services.feature_engine import REGIME_FEATURES, REGIME_4H_FEATURES, REGIME_1H_FEATURES
+from services.feature_engine import REGIME_4H_FEATURES, REGIME_1H_FEATURES
 from services.regime_scores import LTF_SCORE_COLUMNS
 
 logger = logging.getLogger(__name__)
@@ -37,20 +37,15 @@ LTF_SCORE_OUTPUTS = list(LTF_SCORE_COLUMNS)
 
 # CLASSES kept as LTF_CLASSES for backward compat (most code paths use LTF or check by name)
 CLASSES = LTF_CLASSES
-N_FEATURES  = len(REGIME_FEATURES)   # full matrix width for _build_feature_matrix
+N_FEATURES  = len(REGIME_1H_FEATURES)   # default LTF score-head input width
 N_CLASSES   = len(CLASSES)           # legacy default label count
+_ALLOWED_FEATURE_NAMES = frozenset(REGIME_4H_FEATURES) | frozenset(REGIME_1H_FEATURES)
 
-# Per-TF feature subsets: indices into the full REGIME_FEATURES column order.
-# _build_feature_matrix always builds the full matrix; classifiers index these columns.
-_FULL_NAMES = REGIME_FEATURES
-_4H_COL_IDX = [_FULL_NAMES.index(f) for f in REGIME_4H_FEATURES if f in _FULL_NAMES]
-_1H_COL_IDX = [_FULL_NAMES.index(f) for f in REGIME_1H_FEATURES if f in _FULL_NAMES]
-
-# Mapping: timeframe → (column indices, feature names)
+# Mapping: timeframe → feature names
 _TF_FEATURE_MAP: dict = {
-    "4H": (_4H_COL_IDX, REGIME_4H_FEATURES),
-    "1H": (_1H_COL_IDX, REGIME_1H_FEATURES),
-    None: (list(range(N_FEATURES)), REGIME_FEATURES),
+    "4H": REGIME_4H_FEATURES,
+    "1H": REGIME_1H_FEATURES,
+    None: REGIME_1H_FEATURES,
 }
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHT_PATH = os.path.join(_MODEL_ROOT, "weights", "regime_classifier.pkl")
@@ -194,10 +189,9 @@ class RegimeClassifier(BaseModel):
 
         # Route weight file: per-TF/mode if specified, else legacy path
         self.weight_path = self._TF_TO_PATH.get(self._timeframe, WEIGHT_PATH)
-        # Feature column indices and count for this TF's classifier
-        _col_idx, _feat_names = _TF_FEATURE_MAP.get(self._timeframe, _TF_FEATURE_MAP[None])
-        self._col_idx   = _col_idx
-        self._n_features = len(_col_idx)
+        # Feature names and count for this TF's classifier
+        self._feature_names = list(_TF_FEATURE_MAP.get(self._timeframe, _TF_FEATURE_MAP[None]))
+        self._n_features = len(self._feature_names)
         logger.debug("RegimeClassifier[%s mode=%s]: %d features, %d classes, weight=%s",
                      self._timeframe or "default", self._mode, self._n_features,
                      self._n_output_classes, self.weight_path)
@@ -231,12 +225,15 @@ class RegimeClassifier(BaseModel):
 
         try:
             import torch
-            from services.feature_engine import FeatureEngine, REGIME_FEATURES
-            fe = FeatureEngine()
-            feat = fe.get_regime_features(df, df_htf=htf, symbol=symbol)
-            # Slice to TF-specific columns if model was built on a feature subset
-            if len(feat) == N_FEATURES and len(self._col_idx) < N_FEATURES:
-                feat = feat[self._col_idx]
+            X_feat = self._build_feature_matrix(
+                df,
+                htf,
+                symbol,
+                feature_names=self._feature_names,
+            )
+            if len(X_feat) == 0:
+                raise ValueError("RegimeClassifier.predict built an empty feature matrix")
+            feat = X_feat[-1]
             x = torch.tensor(feat.reshape(1, -1), dtype=torch.float32).to(DEVICE)
 
             # Unwrap DataParallel — DP cannot split a batch of 1 across 2 GPUs
@@ -300,8 +297,7 @@ class RegimeClassifier(BaseModel):
 
     def predict_batch(self, X: np.ndarray, batch_size: int = 4096) -> tuple:
         """
-        CPU inference on a pre-built feature matrix X (N, F_full or F_tf).
-        If X has the full REGIME_FEATURES width, slices TF-specific columns first.
+        CPU inference on a pre-built feature matrix X (N, F_tf).
         Returns (labels: np.ndarray int32, confidences: np.ndarray float32).
 
         Small MLP (input→128→64→classes): CPU is faster than GPU for this because
@@ -335,9 +331,11 @@ class RegimeClassifier(BaseModel):
                 "RegimeClassifier weights are missing or incompatible with the current regime architecture."
             )
         with self._inference_lock:
-            # Slice to TF-specific columns if full matrix provided
-            if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
-                X = X[:, self._col_idx]
+            if X.shape[1] != len(self._feature_names):
+                raise ValueError(
+                    f"RegimeClassifier[{self._timeframe} mode={self._mode}] expected "
+                    f"{len(self._feature_names)} features {self._feature_names}; got {X.shape[1]}"
+                )
             # Clone to CPU for inference — never mutate the live shared model.
             _raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
             _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
@@ -1167,179 +1165,344 @@ class RegimeClassifier(BaseModel):
     # ── Train ─────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_feature_matrix(df: pd.DataFrame, htf_full: dict,
-                               symbol: Optional[str]) -> np.ndarray:
-        """
-        Vectorised feature extraction: computes all indicator series for the full df
-        at once, then assembles the (N, n_features) matrix in a single numpy stack.
-        O(N) — no per-bar Python loop.
+    def _ensure_structure_columns(
+        df: pd.DataFrame,
+        *,
+        require_bos: bool = True,
+        require_sweep: bool = True,
+    ) -> pd.DataFrame:
+        """Populate causal BOS and sweep columns used by regime features."""
+        required = {"open", "high", "low", "close"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"Regime feature input missing OHLC columns: {sorted(missing)}")
 
-        Returns float32 array shape (N, N_FEATURES) aligned to df.index.
+        bos_columns = {
+            "swing_high", "swing_low", "bos_bull", "bos_bear",
+            "last_swing_high", "last_swing_low",
+        }
+        sweep_columns = {
+            "sweep_bull", "sweep_bear", "sweep_low_level",
+            "sweep_high_level", "sweep_bull_wick", "sweep_bear_wick",
+        }
+        needs_bos = require_bos and not bos_columns.issubset(df.columns)
+        needs_sweep = require_sweep and not sweep_columns.issubset(df.columns)
+        if not needs_bos and not needs_sweep:
+            return df
+
+        from indicators.market_structure import detect_break_of_structure, detect_liquidity_sweeps
+
+        out = df.copy()
+        if needs_bos:
+            bos = detect_break_of_structure(out)
+            missing_bos = bos_columns - set(bos.columns)
+            if missing_bos:
+                raise RuntimeError(f"BOS detector did not return required columns: {sorted(missing_bos)}")
+            for col in bos_columns:
+                out[col] = bos[col]
+        if needs_sweep:
+            sweeps = detect_liquidity_sweeps(out)
+            missing_sweep = sweep_columns - set(sweeps.columns)
+            if missing_sweep:
+                raise RuntimeError(f"Sweep detector did not return required columns: {sorted(missing_sweep)}")
+            for col in sweep_columns:
+                out[col] = sweeps[col]
+        return out
+
+    @staticmethod
+    def _build_feature_matrix(df: pd.DataFrame, htf_full: dict,
+                               symbol: Optional[str],
+                               feature_names: Optional[Sequence[str]] = None) -> np.ndarray:
+        """
+        Vectorised feature extraction for an explicit feature contract.
+
+        Only the named columns are computed and the return shape is
+        (N, len(feature_names)).
         """
         from indicators.market_structure import (
             compute_adx, compute_atr, compute_ema_stack_score,
-            compute_bollinger_bands, detect_break_of_structure,
-            detect_liquidity_sweeps, detect_sr_zones,
+            compute_bollinger_bands,
         )
-        from services.feature_engine import FeatureEngine, REGIME_FEATURES, INDEX_NAMES
+        from services.feature_engine import INDEX_NAMES, _vec_atr_pctile, _vec_autocorr
 
+        if feature_names is None:
+            raise ValueError("_build_feature_matrix requires explicit feature_names")
+        requested = list(feature_names)
+        unknown = [name for name in requested if name not in _ALLOWED_FEATURE_NAMES]
+        if unknown:
+            raise ValueError(f"_build_feature_matrix requested unknown regime features: {unknown}")
+        if len(set(requested)) != len(requested):
+            raise ValueError("_build_feature_matrix received duplicate feature names")
+
+        requested_set = set(requested)
+        strict_requested = feature_names is not None
+        need_bos = "swing_hh_hl_count" in requested_set
+        need_sweep = "liquidity_sweep_24h" in requested_set
+        df = RegimeClassifier._ensure_structure_columns(
+            df,
+            require_bos=need_bos,
+            require_sweep=need_sweep,
+        )
         n = len(df)
-        n_feat = len(REGIME_FEATURES)
+        n_feat = len(requested)
         X = np.zeros((n, n_feat), dtype=np.float32)
+        pos = {name: i for i, name in enumerate(requested)}
+        assigned: set[str] = set()
         regime_n_bar = RegimeClassifier._infer_nbar_from_index(df.index)
 
-        close = df["close"].values
-        # ── Base structural features (indices 0–7) ────────────────────────────
-        adx = df["adx_14"].values if "adx_14" in df.columns else compute_adx(df, 14).values
-        X[:, 0] = np.clip(np.nan_to_num(adx), 0, 100)
+        close_s = df["close"].astype(float)
+        close = close_s.to_numpy(dtype=np.float64)
+        atr_series = None
+        adx_series = None
+        stack_series = None
+        bb_width_series = None
 
-        stk = df["ema_stack"].values if "ema_stack" in df.columns else compute_ema_stack_score(df).values
-        X[:, 1] = np.clip(np.nan_to_num(stk), -2, 2)
+        def _has(name: str) -> bool:
+            return name in pos
 
-        atr = compute_atr(df, 14).values
-        X[:, 2] = np.clip(np.nan_to_num(atr / (close + 1e-9) * 1000), 0, 10)
+        def _has_any(names: Sequence[str]) -> bool:
+            return any(name in pos for name in names)
 
-        if "bb_width" in df.columns:
-            bb_w = df["bb_width"].values
-        else:
-            bb_u, bb_m, bb_l = compute_bollinger_bands(df["close"])
-            bb_w = ((bb_u - bb_l) / (bb_m + 1e-9)).values
-        X[:, 3] = np.clip(np.nan_to_num(bb_w), 0, 0.1)
+        def _set(name: str, values) -> None:
+            if name not in pos:
+                return
+            arr = np.asarray(values, dtype=np.float32)
+            if arr.ndim == 0:
+                arr = np.full(n, float(arr), dtype=np.float32)
+            if len(arr) != n:
+                raise RuntimeError(
+                    f"_build_feature_matrix produced wrong length for {name}: {len(arr)} != {n}"
+                )
+            X[:, pos[name]] = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            assigned.add(name)
 
-        ret = pd.Series(close).pct_change().values
-        rv  = pd.Series(ret).rolling(20).std().values * 100
-        X[:, 4] = np.clip(np.nan_to_num(rv), 0, 5)
+        def _atr() -> pd.Series:
+            nonlocal atr_series
+            if atr_series is None:
+                atr_series = compute_atr(df, 14).astype(float)
+            return atr_series
 
-        if hasattr(df.index, "hour"):
+        def _adx() -> pd.Series:
+            nonlocal adx_series
+            if adx_series is None:
+                adx_series = (
+                    df["adx_14"].astype(float)
+                    if "adx_14" in df.columns
+                    else compute_adx(df, 14).astype(float)
+                )
+            return adx_series
+
+        def _stack() -> pd.Series:
+            nonlocal stack_series
+            if stack_series is None:
+                stack_series = (
+                    df["ema_stack"].astype(float)
+                    if "ema_stack" in df.columns
+                    else compute_ema_stack_score(df).astype(float)
+                )
+            return stack_series
+
+        def _bb_width() -> pd.Series:
+            nonlocal bb_width_series
+            if bb_width_series is None:
+                if "bb_width" in df.columns:
+                    bb_width_series = df["bb_width"].astype(float)
+                else:
+                    bb_u, bb_m, bb_l = compute_bollinger_bands(df["close"])
+                    bb_width_series = ((bb_u - bb_l) / (bb_m + 1e-9)).astype(float)
+            return bb_width_series
+
+        # ── Base structural features ────────────────────────────────────────
+        if _has("adx_14_base"):
+            _set("adx_14_base", np.clip(_adx().to_numpy(dtype=np.float64), 0, 100))
+        if _has("ema_stack_score"):
+            _set("ema_stack_score", np.clip(_stack().to_numpy(dtype=np.float64), -2, 2))
+        if _has("atr_ratio"):
+            _set("atr_ratio", np.clip((_atr() / (close_s + 1e-9) * 1000).to_numpy(dtype=np.float64), 0, 10))
+        if _has("bb_width_pct"):
+            _set("bb_width_pct", np.clip(_bb_width().to_numpy(dtype=np.float64), 0, 0.1))
+        if _has("realized_vol_20"):
+            ret = pd.Series(close, index=df.index).pct_change()
+            rv = ret.rolling(20).std() * 100
+            _set("realized_vol_20", np.clip(rv.to_numpy(dtype=np.float64), 0, 5))
+        if _has("session_code"):
+            if not hasattr(df.index, "hour"):
+                raise ValueError("_build_feature_matrix requires a DatetimeIndex for session_code")
             h = df.index.hour
             sc = np.where((h >= 2) & (h < 7), 1,
                  np.where((h >= 7) & (h < 12), 2,
                  np.where(h == 12, 4,
                  np.where((h >= 13) & (h < 18), 3, 0))))
-            X[:, 5] = sc.astype(np.float32)
+            _set("session_code", sc.astype(np.float32))
 
-        # BOS and sweep counts — causal rolling sums over 24 bars.
-        _bos_window = 24
-        if "bos_bull" in df.columns or "bos_bear" in df.columns:
-            _bos_bull = df["bos_bull"].fillna(0) if "bos_bull" in df.columns else pd.Series(0, index=df.index)
-            _bos_bear = df["bos_bear"].fillna(0) if "bos_bear" in df.columns else pd.Series(0, index=df.index)
-            _bos_count = (_bos_bull + _bos_bear).rolling(_bos_window, min_periods=1).sum()
-            X[:, 6] = np.clip(np.nan_to_num(_bos_count.values.astype(np.float32), nan=0.0), 0, 20)
-        if "sweep_bull" in df.columns or "sweep_bear" in df.columns:
-            _sw_bull = df["sweep_bull"].fillna(0) if "sweep_bull" in df.columns else pd.Series(0, index=df.index)
-            _sw_bear = df["sweep_bear"].fillna(0) if "sweep_bear" in df.columns else pd.Series(0, index=df.index)
-            _sw_count = (_sw_bull + _sw_bear).rolling(_bos_window, min_periods=1).sum()
-            X[:, 7] = np.clip(np.nan_to_num(_sw_count.values.astype(np.float32), nan=0.0), 0, 20)
+        if _has("swing_hh_hl_count"):
+            _bos_count = (
+                df["bos_bull"].fillna(False).astype(np.int8)
+                + df["bos_bear"].fillna(False).astype(np.int8)
+            ).rolling(24, min_periods=1).sum()
+            _set("swing_hh_hl_count", np.clip(_bos_count.to_numpy(dtype=np.float32), 0, 20))
+        if _has("liquidity_sweep_24h"):
+            _sw_count = (
+                df["sweep_bull"].fillna(False).astype(np.int8)
+                + df["sweep_bear"].fillna(False).astype(np.int8)
+            ).rolling(24, min_periods=1).sum()
+            _set("liquidity_sweep_24h", np.clip(_sw_count.to_numpy(dtype=np.float32), 0, 20))
 
-        # ── MTF features (indices 8–27): 5 TFs × 4 features each ─────────────
-        _tf_map = {"5M": (8, "5M"), "15M": (12, "15M"), "1H": (16, "1H"),
-                   "4H": (20, "4H"), "1D": (24, "1D")}
-        for tf, (offset, tf_key) in _tf_map.items():
-            tf_df = htf_full.get(tf_key)
-            if tf_df is None:
-                tf_df = htf_full.get(tf)
-            if tf_df is None or len(tf_df) < 14:
+        # ── MTF features ─────────────────────────────────────────────────────
+        _tf_specs = {
+            "5M": ("5m", ("5M", "5m")),
+            "15M": ("15m", ("15M", "15m")),
+            "1H": ("1h", ("1H", "H1")),
+            "4H": ("4h", ("4H", "H4")),
+            "1D": ("1d", ("1D", "D1")),
+        }
+        htf_full = htf_full or {}
+        for canonical_tf, (slug, aliases) in _tf_specs.items():
+            names = {
+                "adx": f"mtf_{slug}_adx",
+                "ema_stack": f"mtf_{slug}_ema_stack",
+                "atr_ratio": f"mtf_{slug}_atr_ratio",
+                "bb_width": f"mtf_{slug}_bb_width",
+            }
+            needed = {metric: fname for metric, fname in names.items() if fname in requested_set}
+            if not needed:
                 continue
+            tf_df = None
+            for alias in aliases:
+                if alias in htf_full and htf_full[alias] is not None:
+                    tf_df = htf_full[alias]
+                    break
+            if tf_df is None or len(tf_df) < 14:
+                raise RuntimeError(
+                    f"_build_feature_matrix requires {canonical_tf} context for {sorted(needed.values())}"
+                )
+
+            def _align_mtf(series: pd.Series, feature_name: str) -> np.ndarray:
+                aligned = pd.Series(series.to_numpy(dtype=np.float32), index=tf_df.index).reindex(
+                    df.index, method="ffill"
+                )
+                first_valid = aligned.first_valid_index()
+                if first_valid is None:
+                    raise RuntimeError(
+                        f"_build_feature_matrix could not causally align any {feature_name} values"
+                    )
+                if aligned.loc[first_valid:].isna().any():
+                    raise RuntimeError(
+                        f"_build_feature_matrix found internal alignment gaps for {feature_name}"
+                    )
+                aligned = aligned.fillna(0.0)
+                return aligned.to_numpy(dtype=np.float32)
+
             try:
-                tf_adx = tf_df["adx_14"].values if "adx_14" in tf_df.columns else compute_adx(tf_df, 14).values
-                tf_stk = tf_df["ema_stack"].values if "ema_stack" in tf_df.columns else compute_ema_stack_score(tf_df).values
-                tf_atr = compute_atr(tf_df, 14).values
-                tf_c   = tf_df["close"].values
-                if "bb_width" in tf_df.columns:
-                    tf_bbw = tf_df["bb_width"].values
-                else:
-                    tf_bu, tf_bm, tf_bl = compute_bollinger_bands(tf_df["close"])
-                    tf_bbw = ((tf_bu - tf_bl) / (tf_bm + 1e-9)).values
-                # Forward-fill HTF values onto base df index
-                tf_series = {
-                    offset:     pd.Series(np.clip(np.nan_to_num(tf_adx), 0, 100), index=tf_df.index),
-                    offset + 1: pd.Series(np.clip(np.nan_to_num(tf_stk), -2, 2), index=tf_df.index),
-                    offset + 2: pd.Series(np.clip(np.nan_to_num(tf_atr / (tf_c + 1e-9) * 1000), 0, 10), index=tf_df.index),
-                    offset + 3: pd.Series(np.clip(np.nan_to_num(tf_bbw), 0, 0.1), index=tf_df.index),
-                }
-                for col_idx, s in tf_series.items():
-                    aligned = s.reindex(df.index, method="ffill").fillna(0).values
-                    X[:, col_idx] = aligned.astype(np.float32)
+                if "adx" in needed:
+                    tf_adx = (
+                        tf_df["adx_14"].astype(float)
+                        if "adx_14" in tf_df.columns
+                        else compute_adx(tf_df, 14).astype(float)
+                    )
+                    _set(needed["adx"], np.clip(_align_mtf(tf_adx, needed["adx"]), 0, 100))
+                if "ema_stack" in needed:
+                    tf_stk = (
+                        tf_df["ema_stack"].astype(float)
+                        if "ema_stack" in tf_df.columns
+                        else compute_ema_stack_score(tf_df).astype(float)
+                    )
+                    _set(needed["ema_stack"], np.clip(_align_mtf(tf_stk, needed["ema_stack"]), -2, 2))
+                if "atr_ratio" in needed:
+                    tf_atr = compute_atr(tf_df, 14).astype(float)
+                    tf_c = tf_df["close"].astype(float)
+                    _set(
+                        needed["atr_ratio"],
+                        np.clip(_align_mtf(tf_atr / (tf_c + 1e-9) * 1000, needed["atr_ratio"]), 0, 10),
+                    )
+                if "bb_width" in needed:
+                    if "bb_width" in tf_df.columns:
+                        tf_bbw = tf_df["bb_width"].astype(float)
+                    else:
+                        tf_bu, tf_bm, tf_bl = compute_bollinger_bands(tf_df["close"])
+                        tf_bbw = ((tf_bu - tf_bl) / (tf_bm + 1e-9)).astype(float)
+                    _set(needed["bb_width"], np.clip(_align_mtf(tf_bbw, needed["bb_width"]), 0, 0.1))
             except Exception as exc:
-                raise RuntimeError(f"_build_feature_matrix: MTF feature extraction failed for tf={tf}: {exc}") from exc
+                raise RuntimeError(
+                    f"_build_feature_matrix: MTF feature extraction failed for tf={canonical_tf}: {exc}"
+                ) from exc
 
         # ── S/R zone features (indices 28–33) ─────────────────────────────────
         # Kept zero to preserve the trained regime feature distribution. The
         # underlying detector is causal now; enabling these columns requires a
         # deliberate retrain and manifest update.
-        # X[:, 28:34] already initialised to 0 above.
+        # Full legacy matrix callers still receive zeroes for these columns.
 
-        # ── Regime dynamics (indices 34–35) ──────────────────────────────────
+        # ── Regime dynamics ──────────────────────────────────────────────────
         # vol_slope: Δ(ATR/close) over the regime lookback — positive = expanding.
-        try:
-            atr_series = compute_atr(df, 14)
-            rel_vol = atr_series / (df["close"] + 1e-9)
-            vol_slope = rel_vol.diff(regime_n_bar)
-            X[:, 34] = np.clip(np.nan_to_num(vol_slope.values * 1000, nan=0.0), -5, 5)
-        except Exception as exc:
-            raise RuntimeError(f"_build_feature_matrix: vol_slope failed: {exc}") from exc
+        if _has("vol_slope"):
+            try:
+                rel_vol = _atr() / (df["close"] + 1e-9)
+                vol_slope = rel_vol.diff(regime_n_bar)
+                _set("vol_slope", np.clip(np.nan_to_num(vol_slope.values * 1000, nan=0.0), -5, 5))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: vol_slope failed: {exc}") from exc
 
         # regime_duration: bars since last close-direction flip (fully vectorised, O(N))
         # At each flip the counter resets; between flips it counts up.
-        try:
-            direction = np.sign(np.diff(df["close"].values, prepend=df["close"].values[0]))
-            flip_mask = np.concatenate(([True], direction[1:] != direction[:-1]))
-            # flip_positions[i] = index of the most recent flip at or before bar i
-            flip_indices = np.where(flip_mask)[0].astype(np.int64)
-            # For each bar, find which flip group it belongs to using searchsorted
-            bar_indices  = np.arange(n, dtype=np.int64)
-            group_starts = flip_indices[np.searchsorted(flip_indices, bar_indices, side="right") - 1]
-            duration     = (bar_indices - group_starts).astype(np.float32)
-            X[:, 35] = np.clip(duration, 0, 50) / 50.0
-        except Exception as exc:
-            raise RuntimeError(f"_build_feature_matrix: regime_duration failed: {exc}") from exc
+        if _has("regime_duration"):
+            try:
+                direction = np.sign(np.diff(df["close"].values, prepend=df["close"].values[0]))
+                flip_mask = np.concatenate(([True], direction[1:] != direction[:-1]))
+                flip_indices = np.where(flip_mask)[0].astype(np.int64)
+                bar_indices = np.arange(n, dtype=np.int64)
+                group_starts = flip_indices[np.searchsorted(flip_indices, bar_indices, side="right") - 1]
+                duration = (bar_indices - group_starts).astype(np.float32)
+                _set("regime_duration", np.clip(duration, 0, 50) / 50.0)
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: regime_duration failed: {exc}") from exc
 
         # ── ATR percentile (index 36) ─────────────────────────────────────────
         # Mirrors the timeframe-specific regime label window.
-        try:
-            _atr_feat = compute_atr(df, 14)
-            _atr_hist_window = regime_n_bar * 3
-            from services.feature_engine import _vec_atr_pctile
-            X[:, 36] = _vec_atr_pctile(
-                _atr_feat.to_numpy(dtype=np.float64),
-                window=_atr_hist_window, min_periods=min(regime_n_bar, 14),
-            )
-        except Exception as exc:
-            raise RuntimeError(f"_build_feature_matrix: atr_pctile failed: {exc}") from exc
+        if _has("atr_pctile"):
+            try:
+                _atr_hist_window = regime_n_bar * 3
+                _set(
+                    "atr_pctile",
+                    _vec_atr_pctile(
+                        _atr().to_numpy(dtype=np.float64),
+                        window=_atr_hist_window, min_periods=min(regime_n_bar, 14),
+                    ),
+                )
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: atr_pctile failed: {exc}") from exc
 
-        # ── Time-series discriminators (indices 45–47) ───────────────────────
-        # efficiency_ratio, autocorr_lag1, hurst_proxy — same features used
-        # for GMM labeling but never given to the MLP. Without them, the MLP
-        # cannot separate RANGING (autocorr≈0, eff≈0.2) from TRENDING (autocorr>0,
-        # eff>0.7) because ADX and ATR look identical for both at the boundary.
-        try:
-            _n_bar = regime_n_bar
-            _close = df["close"]
-            _log_ret = np.log(_close / _close.shift(1))
-            _abs_moves = np.abs(_close.diff()).rolling(_n_bar, min_periods=_n_bar).sum()
-            _net_move  = np.abs(_close - _close.shift(_n_bar))
-            _eff_ratio = (_net_move / (_abs_moves + 1e-9)).clip(0, 1)
-            X[:, 45] = np.nan_to_num(_eff_ratio.values.astype(np.float32), nan=0.5)
-
-            from services.feature_engine import _vec_autocorr
-            _autocorr_arr = _vec_autocorr(
-                np.nan_to_num(np.asarray(_log_ret, dtype=np.float64), nan=0.0),
-                window=_n_bar,
-            )
-            X[:, 46] = _autocorr_arr
-
-            _hi_n    = df["high"].rolling(_n_bar, min_periods=_n_bar).max()
-            _lo_n    = df["low"].rolling(_n_bar, min_periods=_n_bar).min()
-            _range_n = (_hi_n - _lo_n).clip(1e-9)
-            _hi_h    = df["high"].rolling(max(2, _n_bar // 2), min_periods=2).max()
-            _lo_h    = df["low"].rolling(max(2, _n_bar // 2), min_periods=2).min()
-            _range_h = (_hi_h - _lo_h).clip(1e-9)
-            # Normalise Hurst proxy to [0,1]: raw range is [0.2,3.0] → (val-0.2)/2.8
-            _hurst_raw = (_range_n / _range_h / (2 ** 0.5)).clip(0.2, 3.0)
-            _hurst_norm = ((_hurst_raw - 0.2) / 2.8).clip(0.0, 1.0)
-            X[:, 47] = np.nan_to_num(_hurst_norm.values.astype(np.float32), nan=0.5)
-        except Exception as exc:
-            raise RuntimeError(f"_build_feature_matrix: ts_discriminators failed: {exc}") from exc
+        # ── Time-series discriminators ───────────────────────────────────────
+        ts_features = {"efficiency_ratio", "autocorr_lag1", "hurst_proxy"}
+        if requested_set & ts_features:
+            try:
+                _n_bar = regime_n_bar
+                _close = df["close"]
+                if _has_any(("efficiency_ratio", "autocorr_lag1")):
+                    _log_ret = np.log(_close / _close.shift(1))
+                if _has("efficiency_ratio"):
+                    _abs_moves = np.abs(_close.diff()).rolling(_n_bar, min_periods=_n_bar).sum()
+                    _net_move = np.abs(_close - _close.shift(_n_bar))
+                    _eff_ratio = (_net_move / (_abs_moves + 1e-9)).clip(0, 1)
+                    _set("efficiency_ratio", np.nan_to_num(_eff_ratio.values.astype(np.float32), nan=0.5))
+                if _has("autocorr_lag1"):
+                    _autocorr_arr = _vec_autocorr(
+                        np.nan_to_num(np.asarray(_log_ret, dtype=np.float64), nan=0.0),
+                        window=_n_bar,
+                    )
+                    _set("autocorr_lag1", _autocorr_arr)
+                if _has("hurst_proxy"):
+                    _hi_n = df["high"].rolling(_n_bar, min_periods=_n_bar).max()
+                    _lo_n = df["low"].rolling(_n_bar, min_periods=_n_bar).min()
+                    _range_n = (_hi_n - _lo_n).clip(1e-9)
+                    _hi_h = df["high"].rolling(max(2, _n_bar // 2), min_periods=2).max()
+                    _lo_h = df["low"].rolling(max(2, _n_bar // 2), min_periods=2).min()
+                    _range_h = (_hi_h - _lo_h).clip(1e-9)
+                    _hurst_raw = (_range_n / _range_h / (2 ** 0.5)).clip(0.2, 3.0)
+                    _hurst_norm = ((_hurst_raw - 0.2) / 2.8).clip(0.0, 1.0)
+                    _set("hurst_proxy", np.nan_to_num(_hurst_norm.values.astype(np.float32), nan=0.5))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: ts_discriminators failed: {exc}") from exc
 
         # ── Causal regime primitives (direction, volatility percentiles, candle
         # structure, symbol group). These are per-symbol normalised and match the
@@ -1347,28 +1510,48 @@ class RegimeClassifier(BaseModel):
         try:
             from services.regime_scores import REGIME_PRIMITIVE_COLUMNS, build_regime_score_frame
 
-            score_df = build_regime_score_frame(df, symbol=symbol, window=regime_n_bar)
-            for name in REGIME_PRIMITIVE_COLUMNS:
-                if name in REGIME_FEATURES and name in score_df.columns:
-                    X[:, REGIME_FEATURES.index(name)] = np.nan_to_num(
-                        score_df[name].to_numpy(dtype=np.float32), nan=0.0
-                    )
+            primitive_requested = requested_set.intersection(REGIME_PRIMITIVE_COLUMNS)
+            if primitive_requested:
+                score_df = build_regime_score_frame(df, symbol=symbol, window=regime_n_bar)
+                missing_primitives = [name for name in primitive_requested if name not in score_df.columns]
+                if missing_primitives:
+                    raise RuntimeError(f"regime score frame missing primitives: {missing_primitives}")
+                for name in primitive_requested:
+                    _set(name, score_df[name].to_numpy(dtype=np.float32))
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: regime score primitives failed: {exc}") from exc
 
         # ── Macro features ───────────────────────────────────────────────────
-        try:
-            fe = FeatureEngine()
-            macro_df = fe._build_macro_frame(df.index, symbol)
-            base_macro = REGIME_FEATURES.index(f"idx_{INDEX_NAMES[0]}_ret")
-            for i, name in enumerate(INDEX_NAMES):
-                col = f"idx_{name}_ret"
-                if col in macro_df.columns:
-                    X[:, base_macro + i] = np.clip(macro_df[col].fillna(0).values * 100, -5, 5)
-            X[:, base_macro + len(INDEX_NAMES)]     = np.clip(macro_df["macro_vix_level"].fillna(0).values, 0, 2)
-            X[:, base_macro + len(INDEX_NAMES) + 1] = np.clip(macro_df["macro_yield_spread"].fillna(0).values, -0.2, 0.4)
-        except Exception as exc:
-            raise RuntimeError(f"_build_feature_matrix: macro features failed: {exc}") from exc
+        macro_names = [f"idx_{name}_ret" for name in INDEX_NAMES] + [
+            "macro_vix_level",
+            "macro_yield_spread",
+        ]
+        if requested_set.intersection(macro_names):
+            try:
+                from services.feature_engine import FeatureEngine
+
+                fe = FeatureEngine()
+                macro_df = fe._build_macro_frame(df.index, symbol)
+                for index_name in INDEX_NAMES:
+                    feature_name = f"idx_{index_name}_ret"
+                    if _has(feature_name):
+                        if feature_name not in macro_df.columns:
+                            raise RuntimeError(f"macro frame missing {feature_name}")
+                        _set(feature_name, np.clip(macro_df[feature_name].to_numpy(dtype=np.float64) * 100, -5, 5))
+                if _has("macro_vix_level"):
+                    _set("macro_vix_level", np.clip(macro_df["macro_vix_level"].to_numpy(dtype=np.float64), 0, 2))
+                if _has("macro_yield_spread"):
+                    _set(
+                        "macro_yield_spread",
+                        np.clip(macro_df["macro_yield_spread"].to_numpy(dtype=np.float64), -0.2, 0.4),
+                    )
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: macro features failed: {exc}") from exc
+
+        if strict_requested:
+            missing = [name for name in requested if name not in assigned]
+            if missing:
+                raise RuntimeError(f"_build_feature_matrix did not build requested features: {missing}")
 
         return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -1452,12 +1635,16 @@ class RegimeClassifier(BaseModel):
                             for i in range(_n_cls)
                         },
                     )
-        if len(self._col_idx) < N_FEATURES:
-            X = X[:, self._col_idx]
-            if X_val_arr is not None and X_val_arr.shape[1] == N_FEATURES:
-                X_val_arr = X_val_arr[:, self._col_idx]
-            if sample_weight is not None and len(sample_weight) == len(y):
-                pass  # weight aligns to rows, not features — no slicing needed
+        if X.shape[1] != len(self._feature_names):
+            raise ValueError(
+                f"RegimeClassifier[{self._timeframe} mode={self._mode}] expected "
+                f"{len(self._feature_names)} features {self._feature_names}; got {X.shape[1]}"
+            )
+        if X_val_arr is not None and X_val_arr.shape[1] != len(self._feature_names):
+            raise ValueError(
+                f"RegimeClassifier[{self._timeframe} mode={self._mode}] validation expected "
+                f"{len(self._feature_names)} features; got {X_val_arr.shape[1]}"
+            )
         return self._fit(
             X,
             y,
@@ -1493,12 +1680,18 @@ class RegimeClassifier(BaseModel):
             if len(X) < 100:
                 return {"error": f"Insufficient data ({len(X)} rows)"}
 
-            if len(self._col_idx) < N_FEATURES and X.shape[1] == N_FEATURES:
-                X = X[:, self._col_idx]
+            if X.shape[1] != len(self._feature_names):
+                raise ValueError(
+                    f"RegimeClassifier[{self._timeframe} mode={self._mode}] expected "
+                    f"{len(self._feature_names)} features {self._feature_names}; got {X.shape[1]}"
+                )
             if X_val is not None:
                 X_val = np.asarray(X_val, dtype=np.float32)
-                if len(self._col_idx) < N_FEATURES and X_val.shape[1] == N_FEATURES:
-                    X_val = X_val[:, self._col_idx]
+                if X_val.shape[1] != len(self._feature_names):
+                    raise ValueError(
+                        f"RegimeClassifier[{self._timeframe} mode={self._mode}] validation expected "
+                        f"{len(self._feature_names)} features; got {X_val.shape[1]}"
+                    )
             y = np.clip(np.nan_to_num(y, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
             finite_mask = np.isfinite(X).all(axis=1) & np.isfinite(y).all(axis=1)
             if sample_weight is not None and len(sample_weight) == len(y):
@@ -2230,7 +2423,12 @@ class RegimeClassifier(BaseModel):
                 htf_full["4H"] = df_h4
 
             n = len(df)
-            X_all = self._build_feature_matrix(df, htf_full, symbol)
+            X_all = self._build_feature_matrix(
+                df,
+                htf_full,
+                symbol,
+                feature_names=self._feature_names,
+            )
 
             MAX_ROWS = 100_000
             step = max(1, (n - 50) // MAX_ROWS)
@@ -2266,6 +2464,7 @@ class RegimeClassifier(BaseModel):
                 "n_classes":  self._n_output_classes,
                 "mode":       self._mode,
                 "output_type": self._output_type,
+                "feature_names": list(self._feature_names),
                 "score_outputs": list(LTF_SCORE_OUTPUTS) if self._output_type == "behaviour_scores" else [],
             }
             with open(path, "wb") as f:
@@ -2284,6 +2483,7 @@ class RegimeClassifier(BaseModel):
             n_cls      = payload.get("n_classes", self._n_output_classes)
             saved_mode = payload.get("mode", self._mode)
             saved_output_type = payload.get("output_type", "classification")
+            saved_feature_names = payload.get("feature_names")
             state_dict = payload["state_dict"]
 
             # Detect stale/incompatible artifacts. Old regime_ltf.pkl files were
@@ -2309,6 +2509,18 @@ class RegimeClassifier(BaseModel):
                     "RegimeClassifier.load: mode mismatch saved=%s current=%s "
                     "for %s. Delete the stale file and retrain regime weights."
                     % (saved_mode, self._mode, path)
+                )
+            if list(saved_feature_names or []) != list(self._feature_names):
+                raise ModelNotTrainedError(
+                    "RegimeClassifier.load: feature contract mismatch for %s. "
+                    "saved=%s expected=%s. Delete the stale file and retrain regime weights."
+                    % (path, list(saved_feature_names or []), list(self._feature_names))
+                )
+            if n_feat != len(self._feature_names):
+                raise ModelNotTrainedError(
+                    "RegimeClassifier.load: saved feature count %d does not match expected contract %d "
+                    "for %s. Delete the stale file and retrain regime weights."
+                    % (n_feat, len(self._feature_names), path)
                 )
 
             m = _build_mlp(n_feat, n_cls)

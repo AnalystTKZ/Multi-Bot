@@ -126,8 +126,7 @@ REGIME_TIMEFRAMES = ["1H", "4H"]  # kept for backwards compat (covers both)
 # Root of the pipeline processed data
 _PROCESSED_DIR = str(_ENV["processed"] / "histdata")
 MACRO_CORR_PATH = str(_ENV["weights"] / "macro_correlations.json")
-# Fixed list — must match feature_engine.INDEX_NAMES exactly so macro correlations
-# and REGIME_FEATURES use the same 17 indices regardless of directory contents.
+# Fixed list — must match feature_engine.INDEX_NAMES exactly for macro correlations.
 INDEX_KEYS = [
     "asx200", "cac40", "dax", "djia", "dxy",
     "eurostoxx", "ftse", "gold_fut", "hsi", "nasdaq",
@@ -782,6 +781,7 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
     sample_weight: float32 array (N,) — per-bar confidence from create_rule_labels.
     """
     from models.regime_classifier import RegimeClassifier as _RC
+    from services.feature_engine import REGIME_4H_FEATURES, REGIME_1H_FEATURES
     import gc as _gc
     import numpy as _np
 
@@ -809,6 +809,9 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         from models.regime_classifier import LTF_SCORE_OUTPUTS as _LTF_SCORE_OUTPUTS
 
         _score_outputs = list(_LTF_SCORE_OUTPUTS)
+    _feature_names = list(REGIME_1H_FEATURES if _score_mode else REGIME_4H_FEATURES)
+    _need_bos = "swing_hh_hl_count" in _feature_names
+    _need_sweep = "liquidity_sweep_24h" in _feature_names
 
     # Cache label_tf dfs per symbol
     _label_cache: dict = {}
@@ -834,6 +837,11 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
                 f"Regime[{source_tf} mode={mode} split={data_split} fold={fold_id}] "
                 f"{sym} has only {len(df)} source bars"
             )
+        df = _RC._ensure_structure_columns(
+            df,
+            require_bos=_need_bos,
+            require_sweep=_need_sweep,
+        )
 
         if dry_run:
             logger.info("DRY RUN: Regime[%s mode=%s] %s — %d bars", source_tf, mode, sym, len(df))
@@ -855,7 +863,12 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         if source_tf not in htf_train:
             htf_train[source_tf] = df
 
-        X_sym = _RC._build_feature_matrix(df, htf_train, sym)
+        X_sym = _RC._build_feature_matrix(
+            df,
+            htf_train,
+            sym,
+            feature_names=_feature_names,
+        )
 
         # HTF uses outcome-aware structural labels. LTF behaviour uses causal
         # multi-output score targets instead of a forced class.
@@ -1082,8 +1095,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
          mode="ltf_behaviour", trained on 1H bars with causal score targets.
          Same DataParallel setup — both GPUs stay hot across both trains.
 
-    Both classifiers share the same REGIME_FEATURES contract (same feature matrix),
-    so the same _build_feature_matrix() call produces valid input for both.
+    Each classifier now builds only its own compact feature contract:
+    REGIME_4H_FEATURES for HTF bias and REGIME_1H_FEATURES for LTF behaviour.
     """
     import time as _time
     _t0_regime = _time.perf_counter()
@@ -1366,7 +1379,7 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
         from models.vector_store import VectorStore
         from models.gru_lstm_predictor import GRULSTMPredictor
         from models.regime_classifier import RegimeClassifier as _RC
-        from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_FEATURES, REGIME_4H_FEATURES
+        from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_4H_FEATURES
 
         import time as _time
         _t0_vs = _time.perf_counter()
@@ -1376,7 +1389,6 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
         fe = FeatureEngine()
 
         MAX_BARS_PER_SYMBOL = 50_000
-        _col_idx = [REGIME_FEATURES.index(f) for f in REGIME_4H_FEATURES if f in REGIME_FEATURES]
         _n_workers = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
 
         def _build_sym_vectors(sym: str):
@@ -1409,15 +1421,19 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
             try:
                 all_htf = {tf: _load_ohlcv(sym, tf, split="all")
                            for tf in ("5M", "15M", "1H", "4H", "1D")}
-                X_all = _RC._build_feature_matrix(df, all_htf, sym)
-                X_htf = X_all[:, _col_idx]
+                X_htf = _RC._build_feature_matrix(
+                    df,
+                    all_htf,
+                    sym,
+                    feature_names=REGIME_4H_FEATURES,
+                )
                 step = max(1, len(df) // MAX_BARS_PER_SYMBOL)
                 idx = np.arange(50, len(df), step)
                 idx = idx[idx < len(X_htf)]
                 rvecs = X_htf[idx].astype("float32")
                 rmetas = [{"symbol": sym, "timeframe": "15M", "ts": str(df.index[i])} for i in idx]
                 result["ms"] = (rvecs, rmetas)
-                del all_htf, X_all, X_htf
+                del all_htf, X_htf
             except Exception as exc:
                 logger.warning("VectorStore market_structures failed for %s: %s", sym, exc)
 
@@ -1474,7 +1490,7 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
                 store.add_batch("market_structures", rvecs, rmetas)
                 logger.info(
                     "VectorStore market_structures: +%d vectors (%d-dim 4H) for %s",
-                    len(rvecs), len(_col_idx), sym,
+                    len(rvecs), len(REGIME_4H_FEATURES), sym,
                 )
 
             if "emb_seqs" in r and gru_model.is_trained:

@@ -219,187 +219,54 @@ SEQUENCE_FEATURES = [
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
 # Macro indices belong here — they operate at daily/weekly resolution, match 4H bias.
 REGIME_4H_FEATURES = [
-    # ── 4H base structural features ───────────────────────────────────────────
-    "adx_14_base",          # 0   ADX on 4H df
-    "ema_stack_score",      # 1   EMA stack score on 4H
-    "atr_ratio",            # 2   ATR/close * 1000 on 4H
-    "bb_width_pct",         # 3   BB width on 4H
-    "realized_vol_20",      # 4   20-bar realised vol on 4H
-    # ── HTF context: 1D features ──────────────────────────────────────────────
-    "mtf_1d_adx",           # 5
-    "mtf_1d_ema_stack",     # 6
-    "mtf_1d_atr_ratio",     # 7
-    "mtf_1d_bb_width",      # 8
-    # ── Regime dynamics ────────────────────────────────────────────────────────
-    "vol_slope",            # 9   Δ(ATR/close) over 14 bars — bias expanding/contracting
-    "regime_duration",      # 10  bars since last regime change (capped 50, /50)
-    "atr_pctile",           # 11  ATR percentile rank in own 3×n_bar history — consolidation signal
-    # ── Time-series discriminators (BIAS_NEUTRAL vs BIAS_UP/DOWN) ─────────────
-    # These three features are used to *label* regimes in the GMM but were never
-    # given to the MLP — so the classifier had no signal to separate BIAS_NEUTRAL
-    # (low autocorr, low efficiency) from weak-trend bars (same ADX, different dynamics).
-    "efficiency_ratio",     # 12  |net n-bar move| / sum(|bar moves|) [0→1, 1=clean trend]
-    "autocorr_lag1",        # 13  lag-1 autocorrelation of log-returns — trending>0, ranging≈0
-    "hurst_proxy",          # 14  R/S Hurst proxy — H>1=trending, H<1=mean-reverting
-    # ── Directional structure and per-symbol normalised regime features ──────
+    # Lean HTF directional-bias set. Raw macro/index columns were noisy and
+    # path-dependent, so bias learns from price structure and normalised context.
+    "adx_14_base",
+    "ema_stack_score",
+    "mtf_1d_adx",
+    "mtf_1d_ema_stack",
+    "mtf_1d_atr_ratio",
+    "efficiency_ratio",
     "plus_di",
     "minus_di",
-    "ema_20_slope",
     "ema_50_slope",
     "ema_200_slope",
     "ema_50_dist_atr",
     "ema_200_dist_atr",
     "atr_percentile_500",
-    "rolling_vol_percentile",
-    "bb_width_percentile",
     "rolling_range_percentile",
-    "candle_body_ratio",
-    "wick_ratio",
-    "range_expansion_zscore",
     "hh_hl_structure",
+    "lh_ll_structure",
     "symbol_group_code",
-] + INDEX_FEATURES + [
-    "macro_vix_level",      # macro risk-off/on
-    "macro_yield_spread",   # yield curve regime signal
-]  # structural + symbol-normalised + 19 macro features
+]
 
 # ─── 1H STRUCTURE classifier features ────────────────────────────────────────
 # Trained on 1H data. No macro indices — too coarse for 1H structure decisions.
 REGIME_1H_FEATURES = [
-    # ── 1H base structural features ───────────────────────────────────────────
-    "adx_14_base",          # 0   ADX on 1H df
-    "ema_stack_score",      # 1   EMA stack score on 1H
-    "atr_ratio",            # 2   ATR/close * 1000 on 1H
-    "bb_width_pct",         # 3   BB width on 1H
-    "realized_vol_20",      # 4   20-bar realised vol on 1H
-    # ── Session context ──────────────────────────────────────────────────────
-    "session_code",         # 5   0=inactive 1=asian 2=london 3=ny 4=dead
-    # ── Intraday market structure ─────────────────────────────────────────────
-    "swing_hh_hl_count",    # 6   BOS count in last 40 bars
-    "liquidity_sweep_24h",  # 7   sweep count in last 48 bars
-    # ── 4H context (zoom-out from 1H) ─────────────────────────────────────────
-    "mtf_4h_adx",           # 8
-    "mtf_4h_ema_stack",     # 9
-    "mtf_4h_atr_ratio",     # 10
-    "mtf_4h_bb_width",      # 11
-    # ── Regime dynamics ────────────────────────────────────────────────────────
-    "vol_slope",            # 12  Δ(ATR/close) over 14 bars
-    "regime_duration",      # 13  bars since last regime change
-    "atr_pctile",           # 14  ATR percentile rank — consolidation signal
-    # ── Time-series discriminators (RANGING vs TRENDING — the key missing signal)
-    # RANGING has near-zero autocorr, low efficiency ratio, Hurst≈0.5.
-    # TRENDING has high autocorr, high efficiency, Hurst>0.5.
-    # Without these the MLP sees identical ADX/ATR for both and collapses RANGING to 0%.
-    "efficiency_ratio",     # 15  |net n-bar move| / sum(|bar moves|) [0→1]
-    "autocorr_lag1",        # 16  lag-1 autocorrelation of log-returns
-    "hurst_proxy",          # 17  R/S Hurst proxy
-    # ── Directional structure and per-symbol normalised regime features ──────
+    # Lean LTF behaviour set: trend/range/chop/volatility/consolidation scores
+    # should learn structure, not dozens of duplicated volatility variants.
+    "adx_14_base",
+    "mtf_4h_adx",
+    "mtf_4h_ema_stack",
+    "session_code",
+    "efficiency_ratio",
     "plus_di",
     "minus_di",
-    "ema_20_slope",
     "ema_50_slope",
-    "ema_200_slope",
     "ema_50_dist_atr",
-    "ema_200_dist_atr",
     "atr_percentile_500",
     "rolling_vol_percentile",
     "bb_width_percentile",
     "rolling_range_percentile",
-    "candle_body_ratio",
-    "wick_ratio",
     "range_expansion_zscore",
+    "wick_ratio",
     "hh_hl_structure",
+    "lh_ll_structure",
+    "swing_hh_hl_count",
+    "liquidity_sweep_24h",
+    "vol_slope",
     "symbol_group_code",
-]  # 34 features total
-
-# ─── Legacy REGIME_FEATURES (shared contract kept for backwards compat) ───────
-# Used by _build_feature_matrix which builds ALL columns regardless of which
-# subset each classifier uses. Classifiers then index into the relevant columns.
-REGIME_FEATURES = [
-    # ── Base structural features (computed on the input df TF) ───────────────
-    "adx_14_base",          # 0   ADX of input df (TF-agnostic label)
-    "ema_stack_score",      # 1   EMA stack score of input df
-    "atr_ratio",            # 2   ATR/close * 1000
-    "bb_width_pct",         # 3   BB width
-    "realized_vol_20",      # 4   20-bar realised volatility
-    "session_code",         # 5   0=inactive 1=asian 2=london 3=ny 4=dead
-    "swing_hh_hl_count",    # 6   BOS count in last 40 bars
-    "liquidity_sweep_24h",  # 7   sweep count in last 48 bars
-    # ── 5M TF features ───────────────────────────────────────────────────────
-    "mtf_5m_adx",           # 8
-    "mtf_5m_ema_stack",     # 9
-    "mtf_5m_atr_ratio",     # 10
-    "mtf_5m_bb_width",      # 11
-    # ── 15M TF features ──────────────────────────────────────────────────────
-    "mtf_15m_adx",          # 12
-    "mtf_15m_ema_stack",    # 13
-    "mtf_15m_atr_ratio",    # 14
-    "mtf_15m_bb_width",     # 15
-    # ── 1H TF features ───────────────────────────────────────────────────────
-    "mtf_1h_adx",           # 16
-    "mtf_1h_ema_stack",     # 17
-    "mtf_1h_atr_ratio",     # 18
-    "mtf_1h_bb_width",      # 19
-    # ── 4H TF features ───────────────────────────────────────────────────────
-    "mtf_4h_adx",           # 20
-    "mtf_4h_ema_stack",     # 21
-    "mtf_4h_atr_ratio",     # 22
-    "mtf_4h_bb_width",      # 23
-    # ── 1D TF features ───────────────────────────────────────────────────────
-    "mtf_1d_adx",           # 24
-    "mtf_1d_ema_stack",     # 25
-    "mtf_1d_atr_ratio",     # 26
-    "mtf_1d_bb_width",      # 27
-    # ── S/R and Supply/Demand zone features ──────────────────────────────────
-    "sr_dist_resist_atr",   # 28
-    "sr_dist_support_atr",  # 29
-    "sr_in_supply_zone",    # 30
-    "sr_in_demand_zone",    # 31
-    "sr_resist_strength",   # 32
-    "sr_support_strength",  # 33
-    # ── Regime dynamics ──────────────────────────────────────────────────────
-    "vol_slope",            # 34
-    "regime_duration",      # 35
-    "atr_pctile",           # 36  ATR percentile rank — consolidation signal
-    # ── Regime memory ─────────────────────────────────────────────────────────
-    # HTF bias prev_regime (3 slots)
-    "prev_regime_htf_up",       # 37  one-hot: previous HTF regime was BIAS_UP
-    "prev_regime_htf_down",     # 38  one-hot: previous HTF regime was BIAS_DOWN
-    "prev_regime_htf_neutral",  # 39  one-hot: previous HTF regime was BIAS_NEUTRAL
-    # LTF behaviour prev_regime (4 slots)
-    "prev_regime_ltf_trending",     # 40  one-hot: previous LTF regime was TRENDING
-    "prev_regime_ltf_ranging",      # 41  one-hot: previous LTF regime was RANGING
-    "prev_regime_ltf_consolidating",# 42  one-hot: previous LTF regime was CONSOLIDATING
-    "prev_regime_ltf_volatile",     # 43  one-hot: previous LTF regime was VOLATILE
-    "regime_confidence",    # 44
-    # ── Time-series discriminators ────────────────────────────────────────────
-    # These were only used for GMM labeling — never passed to the MLP.
-    # Without them, RANGING (autocorr≈0, eff≈0, Hurst≈0.5) is indistinguishable
-    # from weak TRENDING in ADX/ATR space, causing the model to predict RANGING=0%.
-    "efficiency_ratio",     # 45  |net n-bar move| / sum(|bar moves|) [0→1]
-    "autocorr_lag1",        # 46  lag-1 autocorrelation of log-returns [-1→1]
-    "hurst_proxy",          # 47  R/S Hurst proxy [0.2→3.0, normalised to 0→1]
-    # ── Regime structure primitives (causal; per-symbol normalised) ─────────
-    "plus_di",                  # 48  positive directional index
-    "minus_di",                 # 49  negative directional index
-    "ema_20_slope",             # 50  EMA20 slope normalised by ATR
-    "ema_50_slope",             # 51  EMA50 slope normalised by ATR
-    "ema_200_slope",            # 52  EMA200 slope normalised by ATR
-    "ema_50_dist_atr",          # 53  close - EMA50 in ATR units
-    "ema_200_dist_atr",         # 54  close - EMA200 in ATR units
-    "atr_percentile_500",       # 55  ATR/close percentile in own rolling history
-    "rolling_vol_percentile",   # 56  return-vol percentile in own rolling history
-    "bb_width_percentile",      # 57  Bollinger bandwidth percentile
-    "rolling_range_percentile", # 58  rolling high-low range percentile
-    "candle_body_ratio",        # 59  |close-open| / candle range
-    "wick_ratio",               # 60  total wick / candle range
-    "range_expansion_zscore",   # 61  true-range expansion z-score
-    "hh_hl_structure",          # 62  higher-high/lower-low structure score [-1,1]
-    "symbol_group_code",        # 63  dollar/cross/yen/gold group scalar
-] + INDEX_FEATURES + [
-    "macro_vix_level",
-    "macro_yield_spread",
-]  # base + MTF + S/R + regime dynamics + memory + ts-discriminators + indices + macro
+]
 
 QUALITY_FEATURES = [
     "strategy_id",          # 0
@@ -1166,186 +1033,21 @@ class FeatureEngine:
         except Exception:
             return {k: 0.0 for k in MACRO_FEATURES}
 
-    # ─── Regime features (LightGBM input) ────────────────────────────────────
+    # ─── Retired regime feature API ──────────────────────────────────────────
 
     def get_regime_features(
         self,
         df: pd.DataFrame,
         df_htf: Optional[Dict[str, pd.DataFrame]] = None,
-        # Legacy keyword kept for backward compat — folded into df_htf["4H"]
         df_h4: Optional[pd.DataFrame] = None,
         symbol: Optional[str] = None,
     ) -> np.ndarray:
-        """Returns shape (N,) float32. No NaN.
-
-        df_htf: dict with keys "5M", "15M", "1H", "4H", "1D".
-                Each TF contributes 4 features: adx, ema_stack, atr_ratio, bb_width.
-                df is used for base structural features (session, swing count, sweeps, vol).
-                df_h4 is accepted for backward compat and merged into df_htf["4H"].
-        """
-        if df is None or len(df) < 20:
-            return np.zeros(len(REGIME_FEATURES), dtype=np.float32)
-
-        # Normalise HTF dict — accept both dict and legacy single-df form
-        htf: Dict[str, Optional[pd.DataFrame]] = {}
-        if isinstance(df_htf, dict):
-            htf.update(df_htf)
-        # Legacy df_h4 fills in "4H" if not already present
-        if df_h4 is not None and "4H" not in htf and "H4" not in htf:
-            htf["4H"] = df_h4
-
-        df_5m  = _first_present_frame(htf, "5M", "5m")
-        df_15m = _first_present_frame(htf, "15M", "15m", default=df)   # default to input df
-        df_1h  = _first_present_frame(htf, "1H", "H1")
-        df_h4_ = _first_present_frame(htf, "4H", "H4")
-        df_1d  = _first_present_frame(htf, "1D", "D1")
-
-        feats = np.zeros(len(REGIME_FEATURES), dtype=np.float32)
-
-        from indicators.market_structure import (
-            compute_adx, compute_atr, compute_ema_stack_score,
-            compute_bollinger_bands, detect_break_of_structure,
-            detect_liquidity_sweeps,
+        """Retired: regime models now require explicit 4H or 1H contracts."""
+        raise RuntimeError(
+            "FeatureEngine.get_regime_features is retired. Use "
+            "RegimeClassifier._build_feature_matrix(..., feature_names=REGIME_4H_FEATURES) "
+            "or REGIME_1H_FEATURES."
         )
-
-        # ── Base features (input df) ──────────────────────────────────────
-        atr = compute_atr(df, 14)
-        atr_val = float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else 0.0
-        close   = float(df["close"].iloc[-1])
-
-        adx = df["adx_14"] if "adx_14" in df.columns else compute_adx(df, 14)
-        feats[0] = float(np.clip(adx.iloc[-1] if not pd.isna(adx.iloc[-1]) else 0.0, 0, 100))
-
-        stk = df["ema_stack"] if "ema_stack" in df.columns else _ema_stack_series(df)
-        feats[1] = float(np.clip(stk.iloc[-1] if not pd.isna(stk.iloc[-1]) else 0.0, -2, 2))
-
-        feats[2] = float(np.clip(atr_val / (close + 1e-9) * 1000, 0, 10))
-
-        bb_width = df["bb_width"] if "bb_width" in df.columns else \
-            (lambda u, m, l: (u - l) / (m + 1e-9))(*compute_bollinger_bands(df["close"]))
-        feats[3] = float(np.clip(bb_width.iloc[-1] if not pd.isna(bb_width.iloc[-1]) else 0.0, 0, 0.1))
-
-        returns = df["close"].pct_change()
-        feats[4] = float(np.clip(returns.rolling(20).std().iloc[-1] * 100, 0, 5))
-
-        if hasattr(df.index, "hour"):
-            h = df.index[-1].hour
-            feats[5] = 1.0 if 2 <= h < 7 else 2.0 if 7 <= h < 12 else \
-                       4.0 if h == 12 else 3.0 if 13 <= h < 18 else 0.0
-
-        if len(df) >= 20:
-            bos = detect_break_of_structure(df.iloc[-40:] if len(df) >= 40 else df)
-            feats[6] = float(np.clip(bos["bos_bull"].sum() + bos["bos_bear"].sum(), 0, 10))
-
-        if len(df) >= 24:
-            sw = detect_liquidity_sweeps(df.iloc[-48:] if len(df) >= 48 else df)
-            feats[7] = float(np.clip(sw["sweep_bull"].sum() + sw["sweep_bear"].sum(), 0, 5))
-
-        # ── Per-TF MTF features (4 features each: adx, ema_stack, atr_ratio, bb_width) ─
-        # Offsets: 5M=8, 15M=12, 1H=16, 4H=20, 1D=24
-        for offset, tf_df in [(8, df_5m), (12, df_15m), (16, df_1h), (20, df_h4_), (24, df_1d)]:
-            adx_v, stk_v, atr_v, bb_v = _mtf_regime_features(tf_df)
-            feats[offset]     = adx_v
-            feats[offset + 1] = stk_v
-            feats[offset + 2] = atr_v
-            feats[offset + 3] = bb_v
-
-        # ── S/R and Supply/Demand zone features (indices 28–33) ──────────
-        # Kept zero to preserve the trained regime feature distribution. The
-        # indicator itself is now causal; enabling these requires retraining.
-        # feats[28:34] already zero from np.zeros init above.
-
-        # ── Regime dynamics (indices 34–36) ──────────────────────────────
-        if len(atr) >= 15:
-            rel_vol_now  = atr.iloc[-1]  / (df["close"].iloc[-1]  + 1e-9)
-            rel_vol_prev = atr.iloc[-15] / (df["close"].iloc[-15] + 1e-9)
-            feats[34] = float(np.clip((rel_vol_now - rel_vol_prev) * 1000, -5, 5))
-
-        if len(df) >= 10:
-            recent_close = df["close"].iloc[-50:] if len(df) >= 50 else df["close"]
-            direction = np.sign(recent_close.diff().fillna(0))
-            sign_changes = (direction != direction.shift(1)).sum()
-            stability = float(np.clip(len(recent_close) - sign_changes, 0, 50))
-            feats[35] = stability / 50.0
-
-        # atr_pctile: ATR percentile rank in own 42-bar history [0→1]
-        if len(atr) >= 14:
-            _atr_window = atr.iloc[-42:].values if len(atr) >= 42 else atr.values
-            _cur_atr = float(atr.iloc[-1])
-            _sorted = np.sort(_atr_window[:-1])
-            feats[36] = float(np.searchsorted(_sorted, _cur_atr)) / max(len(_sorted), 1)
-
-        # ── Regime memory (indices 37–44) — prev_regime one-hot/confidence ───
-        # Populated externally by callers that track regime state over time.
-        # Defaults remain zero here for single-bar live inference.
-
-        # ── Time-series discriminators + score primitives ─────────────────
-        try:
-            if len(df.index) >= 3 and hasattr(df.index, "to_series"):
-                deltas = df.index.to_series().diff().dropna()
-                minutes = float(deltas.median().total_seconds() / 60.0)
-                if minutes <= 7:
-                    regime_n_bar = 10
-                elif minutes <= 30:
-                    regime_n_bar = 14
-                elif minutes <= 90:
-                    regime_n_bar = 24
-                elif minutes <= 300:
-                    regime_n_bar = 50
-                else:
-                    regime_n_bar = 14
-            else:
-                regime_n_bar = 14
-
-            score_frame = None
-            if len(df) >= regime_n_bar:
-                close_s = df["close"]
-                abs_moves = close_s.diff().abs().rolling(regime_n_bar, min_periods=regime_n_bar).sum()
-                net_move = (close_s - close_s.shift(regime_n_bar)).abs()
-                eff_ratio = (net_move / (abs_moves + 1e-9)).clip(0.0, 1.0)
-                feats[REGIME_FEATURES.index("efficiency_ratio")] = float(
-                    np.nan_to_num(eff_ratio.iloc[-1], nan=0.5)
-                )
-
-                log_ret = np.log(close_s / close_s.shift(1)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
-                ac_arr = _vec_autocorr(log_ret.to_numpy(dtype=np.float64), regime_n_bar)
-                feats[REGIME_FEATURES.index("autocorr_lag1")] = float(ac_arr[-1])
-
-                hi_n = df["high"].rolling(regime_n_bar, min_periods=regime_n_bar).max()
-                lo_n = df["low"].rolling(regime_n_bar, min_periods=regime_n_bar).min()
-                hi_h = df["high"].rolling(max(2, regime_n_bar // 2), min_periods=2).max()
-                lo_h = df["low"].rolling(max(2, regime_n_bar // 2), min_periods=2).min()
-                range_n = (hi_n - lo_n).clip(1e-9)
-                range_h = (hi_h - lo_h).clip(1e-9)
-                hurst_raw = (range_n / range_h / (2 ** 0.5)).clip(0.2, 3.0)
-                hurst_norm = ((hurst_raw - 0.2) / 2.8).clip(0.0, 1.0)
-                feats[REGIME_FEATURES.index("hurst_proxy")] = float(
-                    np.nan_to_num(hurst_norm.iloc[-1], nan=0.5)
-                )
-
-            from services.regime_scores import REGIME_PRIMITIVE_COLUMNS, build_regime_score_frame
-
-            score_frame = build_regime_score_frame(df, symbol=symbol, window=max(regime_n_bar, 20))
-            if not score_frame.empty:
-                last_scores = score_frame.iloc[-1]
-                for name in REGIME_PRIMITIVE_COLUMNS:
-                    if name in REGIME_FEATURES and name in last_scores:
-                        feats[REGIME_FEATURES.index(name)] = float(
-                            np.nan_to_num(last_scores[name], nan=0.0)
-                        )
-        except Exception as exc:
-            logger.debug("get_regime_features: regime score primitives unavailable: %s", exc)
-
-        # ── Macro features ────────────────────────────────────────────────
-        macro_df = self._build_macro_frame(df.index, symbol)
-        base_macro = REGIME_FEATURES.index(f"idx_{INDEX_NAMES[0]}_ret")
-        for i, name in enumerate(INDEX_NAMES):
-            feats[base_macro + i] = float(np.clip(macro_df[f"idx_{name}_ret"].iloc[-1] * 100, -5, 5))
-        feats[base_macro + len(INDEX_NAMES)]     = float(np.clip(macro_df["macro_vix_level"].iloc[-1], 0, 2))
-        feats[base_macro + len(INDEX_NAMES) + 1] = float(np.clip(macro_df["macro_yield_spread"].iloc[-1], -0.2, 0.4))
-
-        feats = np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
-        return feats.astype(np.float32)
 
     # ─── Quality features (XGBoost input) ────────────────────────────────────
 
