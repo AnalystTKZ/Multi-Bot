@@ -192,6 +192,8 @@ class RegimeClassifier(BaseModel):
         # Feature names and count for this TF's classifier
         self._feature_names = list(_TF_FEATURE_MAP.get(self._timeframe, _TF_FEATURE_MAP[None]))
         self._n_features = len(self._feature_names)
+        self._htf_directional_threshold = float(os.getenv("REGIME_HTF_DIRECTIONAL_PROBA_THRESHOLD", "0.60"))
+        self._htf_directional_margin = float(os.getenv("REGIME_HTF_DIRECTIONAL_MARGIN", "0.10"))
         logger.debug("RegimeClassifier[%s mode=%s]: %d features, %d classes, weight=%s",
                      self._timeframe or "default", self._mode, self._n_features,
                      self._n_output_classes, self.weight_path)
@@ -201,6 +203,104 @@ class RegimeClassifier(BaseModel):
             self._last_mtime = os.path.getmtime(self.weight_path)
 
     # ── Predict ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _htf_bias_decision(
+        proba: np.ndarray,
+        threshold: float,
+        margin: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Neutral-default HTF decision policy for imbalanced directional labels."""
+        p = np.asarray(proba, dtype=np.float32)
+        if p.ndim == 1:
+            p2 = p.reshape(1, -1)
+        else:
+            p2 = p
+        if p2.shape[1] != len(HTF_CLASSES):
+            raise ValueError(f"HTF decision expected {len(HTF_CLASSES)} probabilities, got {p2.shape[1]}")
+        p_up = p2[:, 0]
+        p_down = p2[:, 1]
+        p_neutral = p2[:, 2]
+        labels = np.full(len(p2), 2, dtype=np.int32)
+        up_ok = (p_up >= threshold) & (p_up >= p_neutral + margin) & (p_up >= p_down + margin)
+        down_ok = (p_down >= threshold) & (p_down >= p_neutral + margin) & (p_down >= p_up + margin)
+        labels[up_ok] = 0
+        labels[down_ok] = 1
+        confidence = np.where(labels == 0, p_up, np.where(labels == 1, p_down, p_neutral)).astype(np.float32)
+        return labels, confidence
+
+    @staticmethod
+    def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray, classes: Sequence[str]) -> dict:
+        n_cls = len(classes)
+        confusion = np.zeros((n_cls, n_cls), dtype=np.int64)
+        for true_id, pred_id in zip(y_true.astype(np.int64), y_pred.astype(np.int64)):
+            if 0 <= true_id < n_cls and 0 <= pred_id < n_cls:
+                confusion[true_id, pred_id] += 1
+        recall = {}
+        precision = {}
+        f1 = {}
+        for c, name in enumerate(classes):
+            tp = float(confusion[c, c])
+            fp = float(confusion[:, c].sum() - confusion[c, c])
+            fn = float(confusion[c, :].sum() - confusion[c, c])
+            rec = tp / (tp + fn + 1e-9)
+            prec = tp / (tp + fp + 1e-9)
+            f1_v = 2.0 * prec * rec / (prec + rec + 1e-9)
+            recall[name] = rec
+            precision[name] = prec
+            f1[name] = f1_v
+        accuracy = float((y_pred == y_true).mean()) if len(y_true) else 0.0
+        balanced = float(np.mean(list(recall.values()))) if recall else 0.0
+        return {
+            "accuracy": accuracy,
+            "balanced_accuracy": balanced,
+            "recall": recall,
+            "precision": precision,
+            "f1": f1,
+            "confusion": confusion,
+        }
+
+    @classmethod
+    def _select_htf_bias_policy(cls, proba: np.ndarray, y_true: np.ndarray) -> tuple[float, float, dict]:
+        min_precision = float(os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"))
+        min_recall = float(os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.20"))
+        thresholds = np.linspace(0.40, 0.85, 10)
+        margins = np.linspace(0.00, 0.25, 6)
+        best: tuple[float, float, dict] | None = None
+        best_score = -1e9
+        for threshold in thresholds:
+            for margin in margins:
+                pred, _ = cls._htf_bias_decision(proba, float(threshold), float(margin))
+                metrics = cls._classification_metrics(y_true, pred, HTF_CLASSES)
+                up_p = metrics["precision"]["BIAS_UP"]
+                down_p = metrics["precision"]["BIAS_DOWN"]
+                up_r = metrics["recall"]["BIAS_UP"]
+                down_r = metrics["recall"]["BIAS_DOWN"]
+                up_f1 = metrics["f1"]["BIAS_UP"]
+                down_f1 = metrics["f1"]["BIAS_DOWN"]
+                neutral_r = metrics["recall"]["BIAS_NEUTRAL"]
+                meets_floor = (
+                    up_p >= min_precision
+                    and down_p >= min_precision
+                    and up_r >= min_recall
+                    and down_r >= min_recall
+                )
+                score = (
+                    2.0 * min(up_p, down_p)
+                    + 1.5 * min(up_f1, down_f1)
+                    + 0.75 * min(up_r, down_r)
+                    + 0.50 * neutral_r
+                    + metrics["accuracy"]
+                )
+                if meets_floor:
+                    score += 10.0
+                if score > best_score:
+                    best_score = score
+                    best = (float(threshold), float(margin), metrics)
+        if best is None:
+            pred, _ = cls._htf_bias_decision(proba, 0.60, 0.10)
+            best = (0.60, 0.10, cls._classification_metrics(y_true, pred, HTF_CLASSES))
+        return best
 
     def predict(self, df: Optional[pd.DataFrame], symbol: Optional[str] = None,
                 df_htf: Optional[dict] = None,
@@ -273,8 +373,13 @@ class RegimeClassifier(BaseModel):
                 else:
                     proba_t = torch.softmax(logits_f, dim=1)[0]
                     proba = proba_t.cpu().numpy().tolist()
-                    raw_id = int(np.argmax(proba))
-                    confidence = float(max(proba))
+                    ids, conf = self._htf_bias_decision(
+                        np.asarray(proba, dtype=np.float32),
+                        self._htf_directional_threshold,
+                        self._htf_directional_margin,
+                    )
+                    raw_id = int(ids[0])
+                    confidence = float(conf[0])
                     extra = {}
 
             # 3-bar hysteresis
@@ -362,8 +467,13 @@ class RegimeClassifier(BaseModel):
                         all_scores.append(scores)
                     else:
                         proba = torch.softmax(logits, dim=1).numpy()
-                        all_labels.append(proba.argmax(axis=1).astype(np.int32))
-                        all_conf.append(proba.max(axis=1).astype(np.float32))
+                        labels, conf = self._htf_bias_decision(
+                            proba,
+                            self._htf_directional_threshold,
+                            self._htf_directional_margin,
+                        )
+                        all_labels.append(labels.astype(np.int32))
+                        all_conf.append(conf.astype(np.float32))
             score_mat = np.concatenate(all_scores) if all_scores else None
             return np.concatenate(all_labels), np.concatenate(all_conf), score_mat
 
@@ -2056,18 +2166,15 @@ class RegimeClassifier(BaseModel):
                 }
 
             # ── Majority-class undersampling ──────────────────────────────────
-            # BIAS_NEUTRAL (HTF) is ~57% of bars; RANGING (LTF) is ~42%.
-            # Even with focal loss + class weights, a 2.7× majority ratio causes
-            # the optimiser to collapse minority-class gradients on warm starts
-            # (observed: BIAS_NEUTRAL recall 0.405 → 0.078 over 50 epochs, loss
-            # still decreasing). Cap the majority class at 2× the smallest present
-            # class so all class gradients are comparable in magnitude.
+            # Preserve most of the HTF neutral base rate. Directional bias is rare;
+            # forcing an almost-balanced training set makes the model flood neutral
+            # validation bars as UP/DOWN, producing high recall but poor precision.
             _us_counts = np.bincount(y.astype(np.int64), minlength=_n_cls)
             _present = _us_counts[_us_counts > 0]
             _minority_n = int(_present.min()) if len(_present) > 0 else 1
             _cap_ratio = float(os.getenv(
                 "REGIME_HTF_MAJORITY_CAP_RATIO" if self._mode == "htf_bias" else "REGIME_MAJORITY_CAP_RATIO",
-                "3.0" if self._mode == "htf_bias" else "2.0",
+                "12.0" if self._mode == "htf_bias" else "2.0",
             ))
             _majority_cap = max(_minority_n, int(_minority_n * _cap_ratio))
             _keep_mask = np.ones(len(y), dtype=bool)
@@ -2171,7 +2278,7 @@ class RegimeClassifier(BaseModel):
             inv_freq = counts.sum() / (_n_cls * counts)
             _weight_power = float(os.getenv(
                 "REGIME_HTF_CLASS_WEIGHT_POWER" if self._mode == "htf_bias" else "REGIME_CLASS_WEIGHT_POWER",
-                "0.75" if self._mode == "htf_bias" else "1.0",
+                "0.25" if self._mode == "htf_bias" else "1.0",
             ))
             class_w  = inv_freq ** _weight_power
             class_w  = class_w / class_w.mean()   # normalise so mean weight = 1.0
@@ -2258,7 +2365,16 @@ class RegimeClassifier(BaseModel):
                         with torch.amp.autocast("cuda", enabled=use_amp):
                             logits_v = self._model(xb).float()
                         va_loss_acc += _base_ce(logits_v, yb).mean().item() * len(xb)
-                        all_preds_v.append(logits_v.argmax(1).cpu().numpy())
+                        if self._mode == "htf_bias":
+                            proba_v = torch.softmax(logits_v, dim=1).cpu().numpy()
+                            pred_v, _ = self._htf_bias_decision(
+                                proba_v,
+                                self._htf_directional_threshold,
+                                self._htf_directional_margin,
+                            )
+                            all_preds_v.append(pred_v)
+                        else:
+                            all_preds_v.append(logits_v.argmax(1).cpu().numpy())
                         all_true_v.append(yb.cpu().numpy())
                 va_loss_out = va_loss_acc / max(1, n_va)
                 va_preds = np.concatenate(all_preds_v)
@@ -2370,14 +2486,36 @@ class RegimeClassifier(BaseModel):
             # Final accuracy on val set (reuse GPU tensors already resident)
             self._model.eval()
             all_preds = []
+            all_proba = []
             with torch.no_grad():
                 val_bs = batch_size * 2
                 for v_s in range(0, n_va, val_bs):
                     xb = X_va_gpu[v_s: v_s + val_bs]
                     with torch.amp.autocast("cuda", enabled=use_amp):
-                        preds = self._model(xb).float().argmax(1).cpu().numpy()
-                    all_preds.extend(preds)
-            all_preds_arr = np.array(all_preds)
+                        logits_eval = self._model(xb).float()
+                    if self._mode == "htf_bias":
+                        proba_eval = torch.softmax(logits_eval, dim=1).cpu().numpy()
+                        all_proba.append(proba_eval)
+                    else:
+                        preds = logits_eval.argmax(1).cpu().numpy()
+                        all_preds.extend(preds)
+            if self._mode == "htf_bias":
+                proba_arr = np.concatenate(all_proba, axis=0)
+                threshold, margin, policy_metrics = self._select_htf_bias_policy(proba_arr, y_va)
+                self._htf_directional_threshold = threshold
+                self._htf_directional_margin = margin
+                all_preds_arr, _ = self._htf_bias_decision(proba_arr, threshold, margin)
+                logger.info(
+                    "RegimeClassifier[mode=%s] selected HTF decision policy threshold=%.3f margin=%.3f "
+                    "policy_accuracy=%.3f policy_balanced=%.3f",
+                    self._mode,
+                    threshold,
+                    margin,
+                    policy_metrics["accuracy"],
+                    policy_metrics["balanced_accuracy"],
+                )
+            else:
+                all_preds_arr = np.array(all_preds)
             accuracy = float(np.mean(all_preds_arr == y_va))
             pred_counts = np.bincount(all_preds_arr.astype(np.int64), minlength=_n_cls)
             pred_share = pred_counts / max(len(all_preds_arr), 1)
@@ -2561,6 +2699,8 @@ class RegimeClassifier(BaseModel):
                 "output_type": self._output_type,
                 "feature_names": list(self._feature_names),
                 "score_outputs": list(LTF_SCORE_OUTPUTS) if self._output_type == "behaviour_scores" else [],
+                "htf_directional_threshold": self._htf_directional_threshold,
+                "htf_directional_margin": self._htf_directional_margin,
             }
             with open(path, "wb") as f:
                 pickle.dump(payload, f)
@@ -2579,6 +2719,12 @@ class RegimeClassifier(BaseModel):
             saved_mode = payload.get("mode", self._mode)
             saved_output_type = payload.get("output_type", "classification")
             saved_feature_names = payload.get("feature_names")
+            self._htf_directional_threshold = float(
+                payload.get("htf_directional_threshold", self._htf_directional_threshold)
+            )
+            self._htf_directional_margin = float(
+                payload.get("htf_directional_margin", self._htf_directional_margin)
+            )
             state_dict = payload["state_dict"]
 
             # Detect stale/incompatible artifacts. Old regime_ltf.pkl files were
