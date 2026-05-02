@@ -537,13 +537,7 @@ def _build_ml_cache(
             gc.collect()
 
         logger.info("Building sequence features %s (%d bars)...", symbol, n)
-        feat_df = fe._build_sequence_df(
-            df, htf, symbol=symbol,
-            regime_4h_series=_regime_htf_series,
-            regime_4h_conf_series=_regime_htf_conf,
-            regime_1h_series=_regime_ltf_series,
-            regime_1h_conf_series=_regime_ltf_conf,
-        )
+        feat_df = fe._build_sequence_df(df, htf, symbol=symbol)
         seq_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
         seq_arr = np.nan_to_num(seq_arr, nan=0.0, posinf=0.0, neginf=0.0)
         del feat_df

@@ -1497,16 +1497,10 @@ def _precompute_ml_cache(
             raise RuntimeError(f"ML cache did not produce complete LTF regime context for {symbol}")
 
 
-        # ── Build sequence features (with dual-regime context) ────────────────
+        # ── Build technical GRU sequence features ─────────────────────────────
         _t_sf = _time.perf_counter()
         try:
-            feat_df = fe._build_sequence_df(
-                df, htf, symbol=symbol,
-                regime_4h_series=_regime_htf_series,
-                regime_4h_conf_series=_regime_htf_conf,
-                regime_1h_series=_regime_ltf_series,
-                regime_1h_conf_series=_regime_ltf_conf,
-            )
+            feat_df = fe._build_sequence_df(df, htf, symbol=symbol)
             seq_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
             seq_arr = np.nan_to_num(seq_arr, nan=0.0, posinf=0.0, neginf=0.0)
             del feat_df
@@ -2248,7 +2242,7 @@ def _backtest_trader(
                         shared_ml_cache[sym] = c
                         symbol_ml_cache[sym] = c
                     except Exception as exc:
-                        logger.warning("ML cache build failed for %s: %s", sym, exc)
+                        raise RuntimeError(f"ML cache build failed for {sym}: {exc}") from exc
     elif ml_models:
         logger.info("%s: building ML cache for %d symbols...", trader_id, len(symbol_dfs))
         with ThreadPoolExecutor(max_workers=_cache_workers) as ex:
@@ -2259,7 +2253,7 @@ def _backtest_trader(
                     _, c = fut.result()
                     symbol_ml_cache[sym] = c
                 except Exception as exc:
-                    logger.warning("ML cache build failed for %s: %s", sym, exc)
+                    raise RuntimeError(f"ML cache build failed for {sym}: {exc}") from exc
     logger.info("%s: ML cache phase DONE: %.1fs", trader_id, _time.perf_counter() - _t_cache_all)
 
     # ── Pre-extract bar arrays as numpy (eliminates df.iloc[i] per bar) ─────────

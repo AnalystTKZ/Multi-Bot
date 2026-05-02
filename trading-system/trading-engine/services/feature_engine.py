@@ -106,114 +106,73 @@ MACRO_FEATURES = INDEX_FEATURES + [
 ]
 
 SEQUENCE_FEATURES = [
-    # ── Base TF (15M execution) ──────────────────────────────────────────────
-    "log_return",           # 0
-    "high_low_range",       # 1
-    "close_vs_open",        # 2
-    "atr_normalized",       # 3
-    "rsi_14",               # 4
-    "ema21_dist",           # 5
-    "ema50_dist",           # 6
-    "bb_position",          # 7
-    "volume_ratio",         # 8
-    "is_asian",             # 9
-    "is_london",            # 10
-    "is_ny",                # 11
-    "bos_bull_flag",        # 12
-    "bos_bear_flag",        # 13
-    "fvg_bull_open",        # 14
-    "fvg_bear_open",        # 15
-    # ── 5M cross-TF features (execution precision) ───────────────────────────
-    "mtf_5m_rsi",           # 16
-    "mtf_5m_ema21_dist",    # 17
-    # ── 1H cross-TF features (intraday trend) ────────────────────────────────
-    "mtf_1h_adx",           # 18
-    "mtf_1h_ema21_dist",    # 19
-    "mtf_1h_ema50_dist",    # 20
-    # ── 4H cross-TF features (structural context) ────────────────────────────
-    "mtf_4h_ema21_ema50_diff",  # 21
-    "mtf_4h_adx",           # 22
-    "mtf_4h_rsi",           # 23
-    # ── 1D cross-TF features (macro structure) ───────────────────────────────
-    "mtf_1d_ema21_dist",    # 24
-    "mtf_1d_ema_stack",     # 25
-    # ── HTF bias context (4H classifier: 3-class) ───────────────────────────
-    "htf_bias_up",          # 26  one-hot: 4H bias is BIAS_UP
-    "htf_bias_down",        # 27  one-hot: 4H bias is BIAS_DOWN
-    "htf_bias_neutral",     # 28  one-hot: 4H bias is BIAS_NEUTRAL
-    "htf_bias_conf",        # 29  4H classifier confidence (max softmax)
-    # ── LTF behaviour context (1H classifier: 4-class) ───────────────────────
-    "ltf_trending",         # 30  one-hot: 1H behaviour is TRENDING
-    "ltf_ranging",          # 31  one-hot: 1H behaviour is RANGING
-    "ltf_consolidating",    # 32  one-hot: 1H behaviour is CONSOLIDATING
-    "ltf_volatile",         # 33  one-hot: 1H behaviour is VOLATILE
-    "ltf_conf",             # 34  1H classifier confidence
-    # ── HTF/LTF alignment + duration (3 slots, indices 35–37) ───────────────
-    "htf_ltf_align",        # 35  1.0 if HTF bias is directional AND LTF is TRENDING
-    "htf_regime_dur",       # 36  bars since last HTF bias change / 100 (capped 1.0)
-    "ltf_regime_dur",       # 37  bars since last LTF behaviour change / 100 (capped 1.0)
-    # ── Volatility dynamics ───────────────────────────────────────────────────
-    "vol_slope_seq",        # 38  Δ(ATR/close) over 14 bars × 1000
-    # ── Time encoding (cyclic) ────────────────────────────────────────────────
-    "time_sin",             # 39  sin(2π × hour / 24)
-    "time_cos",             # 40  cos(2π × hour / 24)
-    # ── ICT structural features ───────────────────────────────────────────────
-    # EMA structure
-    "ema_pullback_zone",    # 41  price in EMA21-50 band normalised by ATR (0=outside, ±1=inside)
-    "ema21_slope_15m",      # 42  EMA21 slope / ATR over 5 bars
-    "ema21_slope_1h",       # 43  1H EMA21 slope / ATR (ffill to 15M)
-    "ema_stack_15m",        # 44  15M EMA stack score / 2
-    # BOS — age + strength
-    "bos_bull_bars_ago",    # 45  bars since last bull BOS / 40 (1.0 = no recent BOS)
-    "bos_bear_bars_ago",    # 46  bars since last bear BOS / 40
-    "bos_bull_strength",    # 47  bull BOS move / ATR at signal bar (0 = no recent BOS)
-    "bos_bear_strength",    # 48  bear BOS move / ATR at signal bar
-    # FVG — distance + fill ratio
-    "fvg_bull_dist_atr",    # 49  distance from close to nearest open bull FVG / ATR
-    "fvg_bear_dist_atr",    # 50  distance from close to nearest open bear FVG / ATR
-    "fvg_bull_fill_ratio",  # 51  how far price has moved into nearest bull FVG [0,1]
-    "fvg_bear_fill_ratio",  # 52  how far price has moved into nearest bear FVG [0,1]
-    # Sweep / liquidity
-    "sweep_wick_depth_atr", # 53  wick beyond recent range extreme / ATR (last 3 bars, else 0)
-    "body_recovery_ratio",  # 54  |close-open| / (high-low) of sweep candle (0 if no sweep)
-    # Liquidity proximity
-    "dist_to_recent_high_atr",  # 55  (20-bar high - close) / ATR
-    "dist_to_recent_low_atr",   # 56  (close - 20-bar low) / ATR
-    # Asian range context
-    "asian_range_width_atr",    # 57  Asian session range width / ATR
-    "price_vs_asian_high_atr",  # 58  (close - asian_high) / ATR
-    "price_vs_asian_low_atr",   # 59  (close - asian_low) / ATR
-    # Candle structure
-    "candle_body_ratio",    # 60  |close-open| / (high-low)
-    "upper_wick_ratio",     # 61  upper wick / (high-low)
-    "lower_wick_ratio",     # 62  lower wick / (high-low)
-    # Oscillators
-    "rsi_extreme",          # 63  (rsi - 50) / 50  — distance from neutral
-    "stoch_k",              # 64  stoch %K / 100
-    "stoch_k_vs_d",         # 65  (stoch K - stoch D) / 100
-    # ADX on 15M
-    "adx_15m",              # 66  ADX / 100
-    # Regime dynamics
-    "regime_duration",      # 67  bars in current regime / 100 (capped at 1.0)
-    "vol_expansion",        # 68  ATR_t / ATR_{t-10} (clipped 0.5–3.0, centred at 1.0)
-    "atr_pctile",           # 69  ATR percentile rank in own 42-bar history [0→1]
-                            #     low = compression/consolidation; high = breakout expansion
-    # Session timing — continuous
-    "mins_since_london_open",   # 70  minutes since 07:00 UTC / 480 (-1 if before open)
-    "mins_since_ny_open",       # 71  minutes since 13:00 UTC / 300 (-1 if before open)
-    # ── Execution-relevant macro context (daily, ffill'd to 15M) ─────────────
-    # Only risk/liquidity signals: 17 index returns omitted (daily resolution
-    # adds noise at 15M execution; they belong in the 4H bias classifier).
-    "macro_vix_level",          # 72  VIX percentile — risk-off context for sizing
-    "macro_yield_spread",       # 73  10Y-2Y spread — macro regime signal
-    # ── Institutional / volume structure ─────────────────────────────────────
-    "vwap_dist_atr",            # 74  (close − VWAP) / ATR — distance from institutional fair value
-    "volume_delta_pct",         # 75  bar-level buy/sell pressure fraction [−1, +1]
-    "cum_delta_norm",           # 76  rolling 20-bar cumulative delta normalised by mean volume
-    "wick_auction_ratio",       # 77  lower_wick / (lower + upper wick) — buyer dominance [0, 1]
+    # ── 15M execution price action ───────────────────────────────────────────
+    "log_return",
+    "high_low_range",
+    "close_vs_open",
+    "atr_normalized",
+    "rsi_14",
+    "ema21_dist",
+    "ema50_dist",
+    "bb_position",
+    "is_asian",
+    "is_london",
+    "is_ny",
+    # ── Cross-timeframe technical context ────────────────────────────────────
+    "mtf_5m_rsi",
+    "mtf_5m_ema21_dist",
+    "mtf_1h_adx",
+    "mtf_1h_ema21_dist",
+    "mtf_1h_ema50_dist",
+    "mtf_4h_ema21_ema50_diff",
+    "mtf_4h_adx",
+    "mtf_4h_rsi",
+    "mtf_1d_ema21_dist",
+    "mtf_1d_ema_stack",
+    # ── Volatility and time ──────────────────────────────────────────────────
+    "vol_slope_seq",
+    "time_sin",
+    "time_cos",
+    "mins_since_london_open",
+    "mins_since_ny_open",
+    # ── EMA / market structure ───────────────────────────────────────────────
+    "ema_pullback_zone",
+    "ema21_slope_15m",
+    "ema21_slope_1h",
+    "ema_stack_15m",
+    "hh_hl_structure",
+    "lh_ll_structure",
+    # ── BOS / FVG / sweeps ───────────────────────────────────────────────────
+    "bos_bull_flag",
+    "bos_bear_flag",
+    "bos_bull_bars_ago",
+    "bos_bear_bars_ago",
+    "bos_bull_strength",
+    "bos_bear_strength",
+    "fvg_bull_open",
+    "fvg_bear_open",
+    "fvg_bull_dist_atr",
+    "fvg_bear_dist_atr",
+    "fvg_bull_fill_ratio",
+    "fvg_bear_fill_ratio",
+    "sweep_wick_depth_atr",
+    "body_recovery_ratio",
+    # ── Liquidity / candle execution context ─────────────────────────────────
+    "dist_to_recent_high_atr",
+    "dist_to_recent_low_atr",
+    "asian_range_width_atr",
+    "price_vs_asian_high_atr",
+    "price_vs_asian_low_atr",
+    "candle_body_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "adx_15m",
+    "vol_expansion",
+    "atr_pctile",
+    "vwap_dist_atr",
+    "wick_auction_ratio",
 ]
-# Total: 78 features (26 base/MTF + 12 regime slots [3 HTF + 1 HTF_conf + 4 LTF + 1 LTF_conf + 3 align/dur]
-#                     + 36 ICT/macro + 4 institutional/volume)
+# Total: 59 technical execution/structure features.
 
 # ─── 4H BIAS classifier features ─────────────────────────────────────────────
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
@@ -429,72 +388,37 @@ class FeatureEngine:
         self, df: pd.DataFrame, length: int = 30,
         df_htf: Optional[Dict[str, pd.DataFrame]] = None,
         symbol: Optional[str] = None,
-        regime_series: Optional["pd.Series"] = None,
-        regime_conf_series: Optional["pd.Series"] = None,
-        # New canonical names
-        regime_htf_series: Optional["pd.Series"] = None,
-        regime_htf_conf_series: Optional["pd.Series"] = None,
-        regime_ltf_series: Optional["pd.Series"] = None,
-        regime_ltf_conf_series: Optional["pd.Series"] = None,
-        # Legacy backward-compat aliases (maps to htf/ltf)
-        regime_4h_series: Optional["pd.Series"] = None,
-        regime_4h_conf_series: Optional["pd.Series"] = None,
-        regime_1h_series: Optional["pd.Series"] = None,
-        regime_1h_conf_series: Optional["pd.Series"] = None,
     ) -> np.ndarray:
         """
         Returns shape (length, N) float32.
-        Pads with zeros at start if len(df) < length. Never raises IndexError.
-        regime_htf_series: int labels (0-2) from HTF bias classifier (3-class).
-        regime_ltf_series: int labels (0-3) from LTF behaviour classifier (4-class).
-        regime_4h/1h_series: legacy aliases for htf/ltf.
-        regime_series/regime_conf_series: legacy params kept for backwards compat,
-            maps to regime_htf if regime_htf_series is None.
+        GRU sequence inputs are technical-only; regime/sentiment context is combined
+        later by the decision layer.
         """
         if df is None or len(df) == 0:
-            return np.zeros((length, len(SEQUENCE_FEATURES)), dtype=np.float32)
+            raise ValueError("FeatureEngine.get_sequence: df cannot be empty")
+        if len(df) < length:
+            raise ValueError(
+                f"FeatureEngine.get_sequence: need at least {length} bars, got {len(df)}"
+            )
 
-        # Resolve aliases: new canonical > legacy 4h/1h > oldest regime_series
-        _r4h = regime_htf_series or regime_4h_series or regime_series
-        _c4h = regime_htf_conf_series or regime_4h_conf_series or regime_conf_series
-        _r1h = regime_ltf_series or regime_1h_series
-        _c1h = regime_ltf_conf_series or regime_1h_conf_series
-
-        feat = self._build_sequence_df(
-            df, df_htf, symbol=symbol,
-            regime_4h_series=_r4h,
-            regime_4h_conf_series=_c4h,
-            regime_1h_series=_r1h,
-            regime_1h_conf_series=_c1h,
-        )
+        feat = self._build_sequence_df(df, df_htf, symbol=symbol)
         arr = feat[SEQUENCE_FEATURES].values.astype(np.float32)
 
         # Replace NaN / Inf
         arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
-        if len(arr) >= length:
-            return arr[-length:]
-        else:
-            pad = np.zeros((length - len(arr), arr.shape[1]), dtype=np.float32)
-            return np.vstack([pad, arr])
+        return arr[-length:]
 
     def _build_sequence_df(
         self, df: pd.DataFrame,
         df_htf: Optional[Dict[str, pd.DataFrame]],
         symbol: Optional[str] = None,
-        regime_series: Optional["pd.Series"] = None,
-        regime_conf_series: Optional["pd.Series"] = None,
-        regime_4h_series: Optional["pd.Series"] = None,
-        regime_4h_conf_series: Optional["pd.Series"] = None,
-        regime_1h_series: Optional["pd.Series"] = None,
-        regime_1h_conf_series: Optional["pd.Series"] = None,
     ) -> pd.DataFrame:
-        """Add all sequence feature columns to a copy of df.
+        """Add technical GRU sequence feature columns to a copy of df.
 
         df_htf: dict of {tf_key: DataFrame} with keys "5M", "1H", "4H", "1D".
-        regime_4h_series: int labels (0-2) from HTF bias classifier — BIAS_UP/DOWN/NEUTRAL.
-        regime_1h_series: int labels (0-3) from LTF behaviour classifier — TRENDING/RANGING/CONSOLIDATING/VOLATILE.
-        regime_series/regime_conf_series: legacy compat, treated as HTF if _4h not provided.
+        Missing HTF context raises; this model should not learn from fabricated
+        zero-filled cross-timeframe features.
         """
         from indicators.market_structure import (
             compute_rsi, compute_adx, compute_bollinger_bands,
@@ -502,17 +426,27 @@ class FeatureEngine:
         )
 
         out = df.copy(deep=False)
-        atr = out.get("atr_14", compute_atr(df, 14))
+        required_cols = {"open", "high", "low", "close", "volume"}
+        missing_cols = sorted(required_cols - set(out.columns))
+        if missing_cols:
+            raise ValueError(f"_build_sequence_df: missing required columns: {missing_cols}")
+
+        atr = out.get("atr_14", compute_atr(df, 14)).astype(float)
+        atr = atr.replace([np.inf, -np.inf], np.nan)
+        initial_range = (out["high"] - out["low"]).abs().replace(0.0, np.nan)
+        atr = atr.fillna(initial_range).ffill()
+        if atr.isna().any():
+            raise ValueError("_build_sequence_df: ATR warmup produced non-finite values")
 
         # ── Base TF features ─────────────────────────────────────────────────
-        out["log_return"]    = np.log(out["close"] / (out["close"].shift(1) + 1e-9)).clip(-0.1, 0.1)
+        out["log_return"]    = np.log(out["close"] / (out["close"].shift(1) + 1e-9)).clip(-0.1, 0.1).fillna(0.0)
         out["high_low_range"]= (out["high"] - out["low"]) / (atr + 1e-9)
         out["close_vs_open"] = (out["close"] - out["open"]) / (atr + 1e-9)
         out["atr_normalized"]= atr / (out["close"] + 1e-9)
 
         if "rsi_14" not in out.columns:
             out["rsi_14"] = compute_rsi(out["close"], 14)
-        out["rsi_14"] = (out["rsi_14"] - 50.0) / 50.0
+        out["rsi_14"] = (out["rsi_14"].fillna(50.0) - 50.0) / 50.0
 
         if "ema_21" not in out.columns:
             out["ema_21"] = compute_ema(out["close"], 21)
@@ -526,10 +460,9 @@ class FeatureEngine:
             bb_u, bb_m, bb_l = compute_bollinger_bands(out["close"])
             out["bb_upper"], out["bb_mid"], out["bb_lower"] = bb_u, bb_m, bb_l
         bb_range = out["bb_upper"] - out["bb_lower"]
-        out["bb_position"] = (out["close"] - out["bb_lower"]) / (bb_range + 1e-9)
-
-        vol_sma = out["volume"].rolling(20).mean()
-        out["volume_ratio"] = out["volume"] / (vol_sma + 1e-9)
+        out["bb_position"] = (
+            (out["close"] - out["bb_lower"]) / (bb_range + 1e-9)
+        ).replace([np.inf, -np.inf], np.nan).fillna(0.5)
 
         if hasattr(out.index, "hour"):
             hour = out.index.hour
@@ -557,13 +490,35 @@ class FeatureEngine:
         out["fvg_bull_open"] = out["fvg_bull"].astype(float)
         out["fvg_bear_open"] = out["fvg_bear"].astype(float)
 
-        # ── Helper: reindex a HTF series onto base df index ──────────────────
-        def _htf_series(htf_df: Optional[pd.DataFrame], compute_fn, fallback=0.0) -> pd.Series:
+        # ── Helper: reindex a required HTF series onto base df index ──────────
+        def _htf_series(htf_df: Optional[pd.DataFrame], tf_name: str, compute_fn) -> pd.Series:
             """Compute a series on htf_df, forward-fill to out.index."""
-            if htf_df is None or len(htf_df) < 14:
-                return pd.Series(fallback, index=out.index)
+            if htf_df is None:
+                raise ValueError(f"_build_sequence_df: missing required HTF frame {tf_name}")
+            if len(htf_df) < 14:
+                raise ValueError(
+                    f"_build_sequence_df: HTF frame {tf_name} has {len(htf_df)} rows, need >= 14"
+                )
+            htf_missing = sorted(required_cols - set(htf_df.columns))
+            if htf_missing:
+                raise ValueError(
+                    f"_build_sequence_df: HTF frame {tf_name} missing columns: {htf_missing}"
+                )
             s = compute_fn(htf_df)
-            return s.reindex(out.index, method="ffill").fillna(fallback)
+            aligned = s.reindex(out.index, method="ffill")
+            if aligned.isna().any():
+                raise ValueError(
+                    f"_build_sequence_df: HTF frame {tf_name} has non-finite warmup or alignment gaps"
+                )
+            return aligned
+
+        def _safe_htf_atr(htf_df: pd.DataFrame) -> pd.Series:
+            htf_atr = compute_atr(htf_df, 14).replace([np.inf, -np.inf], np.nan)
+            htf_range = (htf_df["high"] - htf_df["low"]).abs().replace(0.0, np.nan)
+            htf_atr = htf_atr.fillna(htf_range).ffill()
+            if htf_atr.isna().any():
+                raise ValueError("_build_sequence_df: HTF ATR warmup produced non-finite values")
+            return htf_atr
 
         htf = df_htf if isinstance(df_htf, dict) else {}
 
@@ -573,105 +528,42 @@ class FeatureEngine:
         df_1d = _first_present_frame(htf, "1D", "D1")
 
         # ── 5M cross-TF ──────────────────────────────────────────────────────
-        out["mtf_5m_rsi"]      = _htf_series(df_5m,
-            lambda d: (compute_rsi(d["close"], 14) - 50.0) / 50.0)
-        out["mtf_5m_ema21_dist"] = _htf_series(df_5m,
-            lambda d: (d["close"] - compute_ema(d["close"], 21)) / (compute_atr(d, 14) + 1e-9))
+        out["mtf_5m_rsi"]      = _htf_series(df_5m, "5M",
+            lambda d: (compute_rsi(d["close"], 14).fillna(50.0) - 50.0) / 50.0)
+        out["mtf_5m_ema21_dist"] = _htf_series(df_5m, "5M",
+            lambda d: (d["close"] - compute_ema(d["close"], 21)) / (_safe_htf_atr(d) + 1e-9))
 
         # ── 1H cross-TF ──────────────────────────────────────────────────────
-        out["mtf_1h_adx"]      = _htf_series(df_1h,
-            lambda d: compute_adx(d, 14) / 100.0)
-        out["mtf_1h_ema21_dist"] = _htf_series(df_1h,
-            lambda d: (d["close"] - compute_ema(d["close"], 21)) / (compute_atr(d, 14) + 1e-9))
-        out["mtf_1h_ema50_dist"] = _htf_series(df_1h,
-            lambda d: (d["close"] - compute_ema(d["close"], 50)) / (compute_atr(d, 14) + 1e-9))
+        out["mtf_1h_adx"]      = _htf_series(df_1h, "1H",
+            lambda d: compute_adx(d, 14).fillna(0.0) / 100.0)
+        out["mtf_1h_ema21_dist"] = _htf_series(df_1h, "1H",
+            lambda d: (d["close"] - compute_ema(d["close"], 21)) / (_safe_htf_atr(d) + 1e-9))
+        out["mtf_1h_ema50_dist"] = _htf_series(df_1h, "1H",
+            lambda d: (d["close"] - compute_ema(d["close"], 50)) / (_safe_htf_atr(d) + 1e-9))
 
         # ── 4H cross-TF ──────────────────────────────────────────────────────
-        out["mtf_4h_ema21_ema50_diff"] = _htf_series(df_4h,
+        out["mtf_4h_ema21_ema50_diff"] = _htf_series(df_4h, "4H",
             lambda d: (compute_ema(d["close"], 21) - compute_ema(d["close"], 50)) / (d["close"] + 1e-9))
-        out["mtf_4h_adx"]      = _htf_series(df_4h,
-            lambda d: compute_adx(d, 14) / 100.0)
-        out["mtf_4h_rsi"]      = _htf_series(df_4h,
-            lambda d: (compute_rsi(d["close"], 14) - 50.0) / 50.0)
+        out["mtf_4h_adx"]      = _htf_series(df_4h, "4H",
+            lambda d: compute_adx(d, 14).fillna(0.0) / 100.0)
+        out["mtf_4h_rsi"]      = _htf_series(df_4h, "4H",
+            lambda d: (compute_rsi(d["close"], 14).fillna(50.0) - 50.0) / 50.0)
 
         # ── 1D cross-TF ──────────────────────────────────────────────────────
-        out["mtf_1d_ema21_dist"] = _htf_series(df_1d,
-            lambda d: (d["close"] - compute_ema(d["close"], 21)) / (compute_atr(d, 14) + 1e-9))
-        out["mtf_1d_ema_stack"]  = _htf_series(df_1d,
+        out["mtf_1d_ema21_dist"] = _htf_series(df_1d, "1D",
+            lambda d: (d["close"] - compute_ema(d["close"], 21)) / (_safe_htf_atr(d) + 1e-9))
+        out["mtf_1d_ema_stack"]  = _htf_series(df_1d, "1D",
             lambda d: _ema_stack_series(d) / 2.0)
 
         # ── Late additions — all collected into `extra`, concat'd once ──────────
-        from indicators.market_structure import compute_stochastic, compute_adx as _compute_adx
-        # Execution macro: only VIX and yield spread — daily-resolution index returns
-        # are not informative at 15M execution precision and add noise.
-        macro_df = self._build_macro_frame(out.index, symbol)
-        extra: dict[str, np.ndarray] = {
-            "macro_vix_level":   macro_df["macro_vix_level"].to_numpy(dtype=np.float32),
-            "macro_yield_spread": macro_df["macro_yield_spread"].to_numpy(dtype=np.float32),
-        }
+        from indicators.market_structure import compute_adx as _compute_adx
+        extra: dict[str, np.ndarray] = {}
         n = len(out)
         _close = out["close"].to_numpy(dtype=np.float64)
         _high  = out["high"].to_numpy(dtype=np.float64)
         _low   = out["low"].to_numpy(dtype=np.float64)
         _open  = out["open"].to_numpy(dtype=np.float64)
         _atr   = atr.to_numpy(dtype=np.float64)
-
-        # ── Dual-regime context (4H bias + 1H behaviour) ─────────────────────
-        # Legacy: if old regime_series provided but new _4h not, treat as 4H
-        _r4h = regime_4h_series if regime_4h_series is not None else regime_series
-        _c4h = regime_4h_conf_series if regime_4h_conf_series is not None else regime_conf_series
-
-        # HTF bias (3-class: BIAS_UP=0, BIAS_DOWN=1, BIAS_NEUTRAL=2)
-        if _r4h is not None:
-            cur_htf = _r4h.reindex(out.index, method="ffill").fillna(2).astype(int)
-            extra["htf_bias_up"]      = (cur_htf == 0).to_numpy(dtype=np.float32)
-            extra["htf_bias_down"]    = (cur_htf == 1).to_numpy(dtype=np.float32)
-            extra["htf_bias_neutral"] = (cur_htf == 2).to_numpy(dtype=np.float32)
-        else:
-            cur_htf = pd.Series(2, index=out.index, dtype=int)
-            extra["htf_bias_up"]      = np.zeros(n, dtype=np.float32)
-            extra["htf_bias_down"]    = np.zeros(n, dtype=np.float32)
-            extra["htf_bias_neutral"] = np.ones(n, dtype=np.float32)
-        extra["htf_bias_conf"] = (
-            _c4h.reindex(out.index, method="ffill").fillna(0.33).clip(0, 1).to_numpy(dtype=np.float32)
-            if _c4h is not None else np.full(n, 0.33, dtype=np.float32)
-        )
-
-        # LTF behaviour (4-class: TRENDING=0, RANGING=1, CONSOLIDATING=2, VOLATILE=3)
-        if regime_1h_series is not None:
-            cur_ltf = regime_1h_series.reindex(out.index, method="ffill").fillna(1).astype(int)
-            extra["ltf_trending"]      = (cur_ltf == 0).to_numpy(dtype=np.float32)
-            extra["ltf_ranging"]       = (cur_ltf == 1).to_numpy(dtype=np.float32)
-            extra["ltf_consolidating"] = (cur_ltf == 2).to_numpy(dtype=np.float32)
-            extra["ltf_volatile"]      = (cur_ltf == 3).to_numpy(dtype=np.float32)
-        else:
-            cur_ltf = pd.Series(1, index=out.index, dtype=int)
-            extra["ltf_trending"]      = np.zeros(n, dtype=np.float32)
-            extra["ltf_ranging"]       = np.ones(n, dtype=np.float32)
-            extra["ltf_consolidating"] = np.zeros(n, dtype=np.float32)
-            extra["ltf_volatile"]      = np.zeros(n, dtype=np.float32)
-        extra["ltf_conf"] = (
-            regime_1h_conf_series.reindex(out.index, method="ffill").fillna(0.25).clip(0, 1).to_numpy(dtype=np.float32)
-            if regime_1h_conf_series is not None else np.full(n, 0.25, dtype=np.float32)
-        )
-
-        # HTF/LTF alignment: 1.0 when HTF has directional bias AND LTF is TRENDING
-        _htf_a = cur_htf  # already aligned to out.index
-        _ltf_a = cur_ltf  # already aligned to out.index
-        extra["htf_ltf_align"] = ((_htf_a != 2) & (_ltf_a == 0)).to_numpy(dtype=np.float32)
-
-        # HTF regime duration: bars since last HTF bias change / 100 (capped 1.0)
-        def _regime_duration_vec(series: np.ndarray) -> np.ndarray:
-            flips = np.empty(len(series), dtype=bool)
-            flips[0] = True
-            flips[1:] = series[1:] != series[:-1]
-            flip_pos = np.where(flips)[0]
-            group = np.searchsorted(flip_pos, np.arange(len(series)), side="right") - 1
-            dur = np.arange(len(series)) - flip_pos[group] + 1
-            return np.clip(dur / 100.0, 0.0, 1.0).astype(np.float32)
-
-        extra["htf_regime_dur"] = _regime_duration_vec(_htf_a.to_numpy(dtype=np.int8))
-        extra["ltf_regime_dur"] = _regime_duration_vec(_ltf_a.to_numpy(dtype=np.int8))
 
         # ── Volatility dynamics ───────────────────────────────────────────────
         _rel_vol = atr / (out["close"] + 1e-9)
@@ -704,15 +596,33 @@ class FeatureEngine:
             -5.0, 5.0
         ).astype(np.float32)
         # 1H EMA21 slope (forward-filled to 15M)
-        extra["ema21_slope_1h"] = _htf_series(df_1h,
+        extra["ema21_slope_1h"] = _htf_series(df_1h, "1H",
             lambda d: (compute_ema(d["close"], 21) - compute_ema(d["close"], 21).shift(3)).fillna(0.0)
-                      / (compute_atr(d, 14) + 1e-9)
+                      / (_safe_htf_atr(d) + 1e-9)
         ).clip(-5.0, 5.0).to_numpy(dtype=np.float32)
         # 15M EMA stack score
         from indicators.market_structure import compute_ema_stack_score as _ema_stack_fn
         extra["ema_stack_15m"] = np.clip(
             _ema_stack_fn(out).fillna(0.0).to_numpy() / 2.0, -1.0, 1.0
         ).astype(np.float32)
+
+        # Higher-high/higher-low and lower-high/lower-low directional structure.
+        _structure_window = 20
+        _high_s = pd.Series(_high, index=out.index)
+        _low_s = pd.Series(_low, index=out.index)
+        _hh = _high_s > _high_s.shift(1).rolling(
+            _structure_window, min_periods=max(3, _structure_window // 2)
+        ).max()
+        _hl = _low_s > _low_s.shift(_structure_window // 2).fillna(_low_s)
+        _ll = _low_s < _low_s.shift(1).rolling(
+            _structure_window, min_periods=max(3, _structure_window // 2)
+        ).min()
+        _lh = _high_s < _high_s.shift(_structure_window // 2).fillna(_high_s)
+        _signed_structure = (
+            _hh.astype(float) + _hl.astype(float) - _ll.astype(float) - _lh.astype(float)
+        ).rolling(_structure_window, min_periods=1).mean().clip(-1.0, 1.0)
+        extra["hh_hl_structure"] = _signed_structure.clip(lower=0.0, upper=1.0).to_numpy(dtype=np.float32)
+        extra["lh_ll_structure"] = (-_signed_structure).clip(lower=0.0, upper=1.0).to_numpy(dtype=np.float32)
 
         # ── BOS age + strength ────────────────────────────────────────────────
         # bos_bull/bos_bear already computed above in out["bos_bull"], out["bos_bear"]
@@ -805,8 +715,8 @@ class FeatureEngine:
         extra["body_recovery_ratio"]  = body_rec
 
         # ── Liquidity proximity ───────────────────────────────────────────────
-        _high20 = pd.Series(_high, index=out.index).rolling(20).max().to_numpy(dtype=np.float64)
-        _low20  = pd.Series(_low,  index=out.index).rolling(20).min().to_numpy(dtype=np.float64)
+        _high20 = pd.Series(_high, index=out.index).rolling(20, min_periods=1).max().to_numpy(dtype=np.float64)
+        _low20  = pd.Series(_low,  index=out.index).rolling(20, min_periods=1).min().to_numpy(dtype=np.float64)
         extra["dist_to_recent_high_atr"] = np.clip(
             (_high20 - _close) / (_atr + 1e-9), 0.0, 10.0
         ).astype(np.float32)
@@ -869,27 +779,14 @@ class FeatureEngine:
             (np.minimum(_close, _open) - _low) / _range, 0.0, 1.0
         ).astype(np.float32)
 
-        # ── Oscillators ───────────────────────────────────────────────────────
-        from indicators.market_structure import compute_rsi as _rsi_fn
-        _rsi_raw = _rsi_fn(out["close"], 14).fillna(50.0).to_numpy(dtype=np.float64)
-        extra["rsi_extreme"] = np.clip((_rsi_raw - 50.0) / 50.0, -1.0, 1.0).astype(np.float32)
-        _stoch_k, _stoch_d = compute_stochastic(out)
-        extra["stoch_k"]     = np.clip(
-            _stoch_k.fillna(50.0).to_numpy(dtype=np.float64) / 100.0, 0.0, 1.0
-        ).astype(np.float32)
-        extra["stoch_k_vs_d"] = np.clip(
-            (_stoch_k - _stoch_d).fillna(0.0).to_numpy(dtype=np.float64) / 100.0, -1.0, 1.0
-        ).astype(np.float32)
-
         # ── ADX on 15M ────────────────────────────────────────────────────────
         extra["adx_15m"] = np.clip(
             _compute_adx(out, 14).fillna(0.0).to_numpy(dtype=np.float64) / 100.0, 0.0, 1.0
         ).astype(np.float32)
 
-        # ── Institutional / volume structure ──────────────────────────────────
+        # ── VWAP / wick auction structure ─────────────────────────────────────
         from indicators.market_structure import (
             compute_vwap as _vwap_fn,
-            compute_volume_delta as _vd_fn,
             compute_wick_ratio as _wr_fn,
         )
         _vwap_df = _vwap_fn(out)
@@ -897,31 +794,10 @@ class FeatureEngine:
             _vwap_df["vwap_dist_atr"].fillna(0.0).to_numpy(dtype=np.float64), -3.0, 3.0
         ).astype(np.float32)
 
-        _vd_df = _vd_fn(out)
-        extra["volume_delta_pct"] = (
-            _vd_df["volume_delta_pct"].fillna(0.0).to_numpy(dtype=np.float32)
-        )
-        _vol_mean = (
-            out["volume"].clip(lower=1e-9).rolling(20, min_periods=1).mean()
-        ).to_numpy(dtype=np.float64)
-        extra["cum_delta_norm"] = np.clip(
-            _vd_df["cum_delta_20"].fillna(0.0).to_numpy(dtype=np.float64)
-            / (_vol_mean * 10.0 + 1e-9),
-            -3.0, 3.0,
-        ).astype(np.float32)
-
         _wr_df = _wr_fn(out)
         extra["wick_auction_ratio"] = (
             _wr_df["wick_auction_ratio"].fillna(0.5).to_numpy(dtype=np.float32)
         )
-
-        # ── Regime duration ───────────────────────────────────────────────────
-        # Bars since last regime change; computed from regime_series if provided.
-        if regime_series is not None:
-            _reg = regime_series.reindex(out.index, method="ffill").fillna(2).to_numpy(dtype=np.int8)
-            extra["regime_duration"] = _regime_duration_vec(_reg)
-        else:
-            extra["regime_duration"] = np.full(n, 0.5, dtype=np.float32)
 
         # ── Volatility expansion ──────────────────────────────────────────────
         _atr_s = pd.Series(_atr, index=out.index)
@@ -954,11 +830,18 @@ class FeatureEngine:
             extra["mins_since_ny_open"]     = np.full(n, -1.0, dtype=np.float32)
 
         out = pd.concat([out, pd.DataFrame(extra, index=out.index)], axis=1)
-        # Drop duplicate columns — input df may already have pre-computed indicators
-        # (e.g. stoch_k from _compute_indicators). Keep last occurrence so that the
-        # normalised values computed above always win.
+        # Drop duplicate columns — input df may already have pre-computed indicators.
+        # Keep last occurrence so that the normalised values computed above always win.
         if out.columns.duplicated().any():
             out = out.loc[:, ~out.columns.duplicated(keep="last")]
+        missing_features = [name for name in SEQUENCE_FEATURES if name not in out.columns]
+        if missing_features:
+            raise ValueError(f"_build_sequence_df: missing sequence features: {missing_features}")
+        seq_values = out[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
+        if not np.isfinite(seq_values).all():
+            bad_mask = ~np.isfinite(seq_values)
+            bad_cols = [SEQUENCE_FEATURES[i] for i in np.where(bad_mask.any(axis=0))[0]]
+            raise ValueError(f"_build_sequence_df: non-finite sequence features: {bad_cols}")
         return out
 
     def _macro_mask(self, symbol: Optional[str]) -> set[str]:

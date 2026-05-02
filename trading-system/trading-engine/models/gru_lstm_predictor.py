@@ -193,7 +193,7 @@ class GRULSTMPredictor(BaseModel):
         """
         Returns dict with p_bull, p_bear, entry_depth plus probabilistic move outputs.
         df_htf: full {tf: DataFrame} dict for MTF cross-TF sequence features.
-                Keys: "5M", "1H", "4H", "1D". Missing keys produce zero features.
+                Keys: "5M", "1H", "4H", "1D". Missing keys raise.
         Raises ModelNotTrainedError if weights not available.
         Run: python scripts/retrain_incremental.py --model gru
         """
@@ -212,7 +212,7 @@ class GRULSTMPredictor(BaseModel):
             from services.feature_engine import FeatureEngine
             fe = FeatureEngine()
             seq = fe.get_sequence(df, length=SEQUENCE_LENGTH, df_htf=df_htf, symbol=symbol)  # (30, N)
-            x = torch.tensor(seq[np.newaxis, ...], dtype=torch.float32).to(DEVICE)  # (1, 30, 18)
+            x = torch.tensor(seq[np.newaxis, ...], dtype=torch.float32).to(DEVICE)  # (1, 30, N_FEATURES)
 
             self._model.eval()
             with torch.no_grad():
@@ -404,7 +404,6 @@ class GRULSTMPredictor(BaseModel):
         symbol: Optional[str] = None,
         df_htf: Optional[dict] = None,
         grad_accum_steps: int = 4,
-        regime_series: Optional[pd.Series] = None,
     ) -> dict:
         """
         Trains with strict temporal split (last 20% = validation, no shuffle).
@@ -428,7 +427,7 @@ class GRULSTMPredictor(BaseModel):
             if self._model is None:
                 return {"error": "PyTorch not available"}
 
-            feat_df = fe._build_sequence_df(df, df_htf, symbol=symbol, regime_series=regime_series)
+            feat_df = fe._build_sequence_df(df, df_htf, symbol=symbol)
             feat_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
             feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
             del feat_df
@@ -602,12 +601,10 @@ class GRULSTMPredictor(BaseModel):
         max_sequences_per_tf: int = 600_000,
     ) -> dict:
         """
-        Train on multiple (df, labels, df_htf, symbol) segments in one combined pass.
+        Train on multiple 15M execution segments in one combined pass.
 
-        All TFs and symbols train together in a single dataset — avoids the problem of
-        per-TF training where the last (smallest) TF overwrites weights learned from
-        larger TFs. Sequences are boundary-safe: __getitem__ never crosses symbol/TF
-        boundaries. shuffle=True on the DataLoader mixes all symbols/TFs each epoch.
+        Sequences are boundary-safe: __getitem__ never crosses symbol boundaries.
+        shuffle=True on the DataLoader mixes all symbols each epoch.
 
         segments: list of dicts with keys: df, labels, df_htf, symbol, timeframe
         Returns combined history dict.
@@ -652,24 +649,8 @@ class GRULSTMPredictor(BaseModel):
 
                 for seg in group:
                     try:
-                        def _series_or_none(*values):
-                            for value in values:
-                                if value is not None:
-                                    return value
-                            return None
-
                         feat_df = fe._build_sequence_df(
-                            seg["df"], seg.get("df_htf"),
-                            symbol=seg.get("symbol"),
-                            regime_4h_series=_series_or_none(
-                                seg.get("regime_htf_series"),
-                                seg.get("regime_4h_series"),
-                                seg.get("regime_series"),
-                            ),
-                            regime_1h_series=_series_or_none(
-                                seg.get("regime_ltf_series"),
-                                seg.get("regime_1h_series"),
-                            ),
+                            seg["df"], seg.get("df_htf"), symbol=seg.get("symbol")
                         )
                         feat_arr = feat_df[SEQUENCE_FEATURES].to_numpy(dtype=np.float32, copy=False)
                         feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)

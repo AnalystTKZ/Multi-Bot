@@ -113,8 +113,9 @@ MAJOR_SYMBOLS = [
 ]
 # All training timeframes — derived from step0 pipeline outputs
 ALL_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D", "1W", "1MN"]
-# GRU uses short-bar timeframes for sequence patterns
-GRU_TIMEFRAMES = ["5M", "15M", "1H", "4H"]
+# GRU is a 15M execution model. Regime and higher-timeframe context are combined
+# later by the decision engine, not learned as GRU labels/features.
+GRU_TIMEFRAMES = ["15M"]
 # Hierarchical regime cascade:
 # HTF (4H): 3-class bias (BIAS_UP/DOWN/NEUTRAL) — trained with mode="htf_bias"
 # LTF (1H): five behaviour scores (trend/range/chop/volatility/consolidation) — trained with mode="ltf_behaviour"
@@ -480,9 +481,9 @@ def _backup_weights(path: str) -> None:
 
 def _retrain_gru_multi(model, symbols: list) -> dict:
     """
-    Kaggle-optimised GRU training: build segments for ALL symbols across each TF,
-    concatenate per TF, and train in one pass per TF via model.train_multi().
-    Avoids 44 sequential save/reload cycles. Caps each TF group at 2M sequences
+    Kaggle-optimised GRU training: build 15M execution segments for all symbols
+    and train in one pass via model.train_multi().
+    Avoids sequential save/reload cycles. Caps the combined group at 2M sequences
     (~10GB) to stay within 30GB RAM safely.
     """
     import gc
@@ -538,23 +539,6 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
     for sym in symbols:
         all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("5M", "1H", "4H", "1D")}
 
-        # Rule-based regime labels (consistent with what the regime classifier trains on)
-        # HTF: 3-class bias labels; LTF: 4-class behaviour labels
-        _sym_regime_htf: "pd.Series | None" = None
-        _sym_regime_ltf: "pd.Series | None" = None
-        try:
-            from models.regime_classifier import RegimeClassifier as _RC_sym
-            _df4h_sym = _load_ohlcv(sym, "4H", split=RETRAIN_DATA_SPLIT)
-            if _df4h_sym is not None and len(_df4h_sym) > 50:
-                _sym_regime_htf = _RC_sym.create_rule_labels(
-                    _df4h_sym, timeframe="4H", mode="htf_bias")
-            _df1h_sym = _load_ohlcv(sym, "1H", split=RETRAIN_DATA_SPLIT)
-            if _df1h_sym is not None and len(_df1h_sym) > 50:
-                _sym_regime_ltf = _RC_sym.create_rule_labels(
-                    _df1h_sym, timeframe="1H", mode="ltf_behaviour")
-        except Exception as _e:
-            logger.debug("GRU multi: rule regime labels for %s failed (%s)", sym, _e)
-
         for tf in GRU_TIMEFRAMES:
             df = _load_ohlcv(sym, tf, split=RETRAIN_DATA_SPLIT)
             if df is None or len(df) <= 200:
@@ -581,25 +565,12 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
             elif tf not in htf_train:
                 htf_train[tf] = df_train
 
-            # Forward-fill both 4H and 1H regime labels to training TF index
-            def _ffill_regime(s, end_ts, target_idx, default_label: int):
-                if s is None:
-                    return None
-                return s[s.index <= end_ts].reindex(target_idx, method="ffill").fillna(default_label).astype(int)
-
             segments.append({
                 "df": df_train,
                 "labels": labels_train,
                 "df_htf": htf_train,
                 "symbol": sym,
                 "timeframe": tf,
-                # Canonical new names
-                "regime_htf_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index, 2),
-                "regime_ltf_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index, 1),
-                # Legacy compat aliases (some callers may check these keys)
-                "regime_series":    _ffill_regime(_sym_regime_htf, end_ts, df_train.index, 2),
-                "regime_4h_series": _ffill_regime(_sym_regime_htf, end_ts, df_train.index, 2),
-                "regime_1h_series": _ffill_regime(_sym_regime_ltf, end_ts, df_train.index, 1),
             })
             samples_total += len(df_train)
 
@@ -631,10 +602,10 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
 
 
 def retrain_gru(dry_run: bool = False) -> dict:
-    """GRU-LSTM: train on all GRU_TIMEFRAMES (5M, 15M, 1H, 4H) across all symbols.
+    """GRU-LSTM: train the 15M execution model across all symbols.
 
-    On Kaggle (large RAM): uses train_multi() to concatenate all symbols per TF into
-    one combined dataset — keeps GPU fed continuously, avoids 44 save/reload cycles.
+    On Kaggle (large RAM): uses train_multi() to concatenate all symbols into one
+    combined 15M dataset and keep the GPU fed continuously.
     Locally: falls back to per-symbol loop to keep RAM usage low.
     """
     import time as _time
@@ -646,11 +617,6 @@ def retrain_gru(dry_run: bool = False) -> dict:
     symbols = _get_symbols("RETRAIN_SYMBOLS_GRU", MAJOR_SYMBOLS)
     trained = 0
     samples_total = 0
-
-    if not dry_run:
-        _t_macro = _time.perf_counter()
-        _update_macro_correlations(symbols)
-        logger.info("GRU phase macro_correlations: %.1fs", _time.perf_counter() - _t_macro)
 
     # On Kaggle use combined multi-symbol training (30GB RAM available)
     if _ENV["on_kaggle"] and not dry_run:
@@ -701,7 +667,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
 
             if not backup_done:
                 _backup_weights(os.path.join(WEIGHTS_DIR, "gru_lstm"))
-                # Delete stale weights — SEQUENCE_FEATURES count changed (53→83).
+                # Delete stale weights when SEQUENCE_FEATURES changes.
                 # Old model.pt would cause a shape mismatch on first train() call.
                 _stale_pt = os.path.join(WEIGHTS_DIR, "gru_lstm", "model.pt")
                 if os.path.exists(_stale_pt):
@@ -1362,7 +1328,7 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
     Build VectorStore indices from trained weights after GRU + Regime training.
 
     Three indices populated:
-      trade_patterns    (74-dim) — per-bar SEQUENCE_FEATURES snapshot, all training bars
+      trade_patterns    (len(SEQUENCE_FEATURES)) — per-bar technical GRU snapshot, all training bars
       market_structures (34-dim) — REGIME_4H_FEATURES subset, all training bars
       regime_embeddings (64-dim) — GRU shared-layer encoding, sampled every 4 bars
 
@@ -1400,10 +1366,12 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
                 return None
 
             result = {"sym": sym, "df_index": df.index}
+            all_htf = {tf: _load_ohlcv(sym, tf, split="all")
+                       for tf in ("5M", "15M", "1H", "4H", "1D")}
 
             # trade_patterns
             try:
-                feat_df = fe._build_sequence_df(df, None, symbol=sym)
+                feat_df = fe._build_sequence_df(df, all_htf, symbol=sym)
                 sq = feat_df[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
                 sq = sq[~np.isnan(sq).any(axis=1)]
                 n = min(len(sq), MAX_BARS_PER_SYMBOL)
@@ -1419,8 +1387,6 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
 
             # market_structures
             try:
-                all_htf = {tf: _load_ohlcv(sym, tf, split="all")
-                           for tf in ("5M", "15M", "1H", "4H", "1D")}
                 X_htf = _RC._build_feature_matrix(
                     df,
                     all_htf,
@@ -1433,14 +1399,14 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
                 rvecs = X_htf[idx].astype("float32")
                 rmetas = [{"symbol": sym, "timeframe": "15M", "ts": str(df.index[i])} for i in idx]
                 result["ms"] = (rvecs, rmetas)
-                del all_htf, X_htf
+                del X_htf
             except Exception as exc:
                 logger.warning("VectorStore market_structures failed for %s: %s", sym, exc)
 
             # regime_embeddings: build sequences (GPU call happens in main thread)
             if gru_model.is_trained:
                 try:
-                    feat_df2 = fe._build_sequence_df(df, None, symbol=sym)
+                    feat_df2 = fe._build_sequence_df(df, all_htf, symbol=sym)
                     sq2 = feat_df2[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
                     sq2 = sq2[~np.isnan(sq2).any(axis=1)]
                     n_seq = len(sq2) - 30

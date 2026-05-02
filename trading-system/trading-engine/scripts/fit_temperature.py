@@ -173,8 +173,7 @@ def main(args: argparse.Namespace) -> None:
                 for tf in ("5M", "1H", "4H", "1D")
             }
         except Exception as exc:
-            logger.warning("HTF load failed for %s: %s", sym, exc)
-            htf_all = {}
+            raise RuntimeError(f"HTF load failed for {sym}: {exc}") from exc
 
         val_df = _load_val_df(sym, timeframe, bounds)
         if val_df is None or len(val_df) < SEQ + 1:
@@ -188,8 +187,7 @@ def main(args: argparse.Namespace) -> None:
             feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)
             del feat_df
         except Exception as exc:
-            logger.warning("Feature build failed for %s/%s: %s", sym, timeframe, exc)
-            continue
+            raise RuntimeError(f"Feature build failed for {sym}/{timeframe}: {exc}") from exc
 
         # Build direction labels for the val window
         try:
