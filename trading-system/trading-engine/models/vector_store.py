@@ -2,18 +2,16 @@
 vector_store.py — FAISS-GPU vector similarity search for trading patterns.
 
 Three separate indices:
-  - trade_patterns    : 74-dim  (GRU SEQUENCE_FEATURES per-bar snapshot)
-  - market_structures : 34-dim  (REGIME_4H_FEATURES — HTF bias features, clean for similarity search)
+  - trade_patterns    : len(SEQUENCE_FEATURES)  (GRU per-bar snapshot)
+  - market_structures : len(REGIME_4H_FEATURES) (HTF bias features, clean for similarity search)
   - regime_embeddings : 64-dim  (GRU shared-layer encoding, richer than raw features)
 
-market_structures uses REGIME_4H_FEATURES (34-dim) rather than the full REGIME_FEATURES (67-dim)
+market_structures uses REGIME_4H_FEATURES rather than the full REGIME_FEATURES
 because:
   1. REGIME_FEATURES includes 5M/15M noise features and prev_regime one-hots that add
      irrelevant dimensions to cross-symbol structural similarity search.
-  2. REGIME_4H_FEATURES (15 HTF structural + 17 macro index returns + 2 macro scalars = 34)
-     is the clean "structural fingerprint" for finding similar market regimes in history.
-  3. The old value of 53 was stale — it predated the addition of INDEX_FEATURES (+17) and
-     two macro scalars, which pushed REGIME_FEATURES to 67. Using 34 is intentional.
+  2. REGIME_4H_FEATURES is the clean "structural fingerprint" for finding similar
+     market regimes in history.
 
 Each index stores:
   - The raw float32 vector
@@ -33,8 +31,8 @@ Usage:
     # Index a trade-pattern vector
     store.add("trade_patterns", vec_74d, {"symbol": "EURUSD", "ts": "2024-01-01", "outcome": "tp"})
 
-    # Query nearest 5 similar market structures (pass a REGIME_4H_FEATURES vector, dim=34)
-    results = store.query("market_structures", query_vec_34d, k=5)
+    # Query nearest 5 similar market structures (pass a REGIME_4H_FEATURES vector)
+    results = store.query("market_structures", query_vec, k=5)
     # returns list of {"score": float, "meta": dict}
 
     # Save/load
@@ -51,23 +49,25 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from services.feature_engine import REGIME_4H_FEATURES, SEQUENCE_FEATURES
+
 logger = logging.getLogger(__name__)
 
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # trading-engine/
 _STORE_DIR = os.path.join(_MODEL_ROOT, "weights", "vector_store")
 
 # Index dimensionalities — must match the feature engines exactly.
-# trade_patterns:    SEQUENCE_FEATURES list in feature_engine.py (74 features as of current contract).
-# market_structures: REGIME_4H_FEATURES in feature_engine.py (34 features).
-#                    Intentionally uses the 4H-only feature set, NOT the full REGIME_FEATURES (67-dim).
+# trade_patterns:    SEQUENCE_FEATURES list in feature_engine.py.
+# market_structures: REGIME_4H_FEATURES in feature_engine.py.
+#                    Intentionally uses the 4H-only feature set, NOT the full REGIME_FEATURES.
 #                    REGIME_FEATURES is bloated for similarity search: it includes 5M/15M per-bar noise,
 #                    prev_regime one-hots, and S/R zeroed-out stubs. REGIME_4H_FEATURES gives a clean
-#                    34-dim structural fingerprint (15 HTF structural + 17 macro index returns + 2 macro).
+#                    structural fingerprint.
 # regime_embeddings: GRU hidden_size (64-dim shared-layer encoding).
 INDEX_DIMS = {
-    "trade_patterns":    74,   # SEQUENCE_FEATURES (per-bar snapshot, 74 features)
-    "market_structures": 34,   # REGIME_4H_FEATURES (HTF structural fingerprint, 34 features)
-    "regime_embeddings": 64,   # GRU shared layer output
+    "trade_patterns":    len(SEQUENCE_FEATURES),
+    "market_structures": len(REGIME_4H_FEATURES),
+    "regime_embeddings": 64,
 }
 
 

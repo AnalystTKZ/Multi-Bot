@@ -111,7 +111,7 @@ MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
 ML_CACHE_DIR       = os.path.join(OUTPUT_DIR, "ml_cache")
-ML_CACHE_SCHEMA    = "context_availability_v3_conf_gates"
+ML_CACHE_SCHEMA    = "context_availability_v4_regime_scores"
 _BACKTEST_WARMUP = {
     "5M": pd.Timedelta(days=7),
     "15M": pd.Timedelta(days=14),
@@ -171,6 +171,16 @@ TRADER_NAMES = {
 
 _HTF_REGIME_NAMES = np.array(["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"], dtype=object)
 _LTF_REGIME_NAMES = np.array(["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"], dtype=object)
+_TRADE_REGIME_NAMES = np.array([
+    "TRADEABLE_TREND",
+    "TRADEABLE_TREND_HIGH_VOL",
+    "RANGE",
+    "CONSOLIDATION",
+    "NO_TRADE_CHOP",
+    "NO_TRADE_EXTREME_VOL",
+    "UNCERTAIN",
+], dtype=object)
+_TRADE_REGIME_TO_ID = {name: i for i, name in enumerate(_TRADE_REGIME_NAMES.tolist())}
 _PM_DISABLED = str(os.getenv("BACKTEST_DISABLE_PM", "0")).lower() in ("1", "true", "yes", "on")
 
 
@@ -352,6 +362,29 @@ def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
         out["regime_ltf_conf"] = rlc if not np.isnan(rlc) else 0.25
     else:
         out["regime_ltf_conf"] = 0.25
+    score_keys = [
+        "trend_score",
+        "range_score",
+        "chop_score",
+        "volatility_percentile",
+        "volatility_score",
+        "consolidation_score",
+        "atr_percentile_500",
+        "efficiency_ratio_20",
+    ]
+    regime_scores = {}
+    for key in score_keys:
+        if key in cache:
+            val = float(cache[key][idx])
+            if not np.isnan(val):
+                regime_scores[key] = val
+                out[key] = val
+    if regime_scores:
+        out["regime_scores"] = regime_scores
+    if "trade_regime" in cache:
+        trade_regime_id = int(cache["trade_regime"][idx])
+        if 0 <= trade_regime_id < len(_TRADE_REGIME_NAMES):
+            out["trade_regime"] = str(_TRADE_REGIME_NAMES[trade_regime_id])
     return out
 
 
@@ -1297,6 +1330,8 @@ def _precompute_ml_cache(
         _regime_htf_conf   = None
         _regime_ltf_series = None
         _regime_ltf_conf   = None
+        _regime_ltf_score_frame = None
+        _trade_regime_series = None
 
         _do_4h = bool(regime_4h and regime_4h.is_trained and regime_4h._model is not None)
         _do_1h = bool(regime_1h and regime_1h.is_trained and regime_1h._model is not None)
@@ -1346,8 +1381,12 @@ def _precompute_ml_cache(
                 row_idx = list(range(50, _n, _step))
                 X = X_feat[row_idx]
                 if len(X) == 0:
-                    return None, None, {}
-                ids, conf = rc_model.predict_batch(X)
+                    return None, None, None
+                if hasattr(rc_model, "predict_batch_scores"):
+                    ids, conf, score_mat = rc_model.predict_batch_scores(X)
+                else:
+                    ids, conf = rc_model.predict_batch(X)
+                    score_mat = None
                 del X
                 arr = np.full(_n, -1, dtype=np.int8)
                 arr[row_idx] = ids.astype(np.int8)
@@ -1356,14 +1395,27 @@ def _precompute_ml_cache(
                 c_arr = np.full(_n, np.nan, dtype=np.float32)
                 c_arr[row_idx] = conf
                 filled_conf = pd.Series(c_arr, index=df_src.index).ffill()
-                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf
+                score_frame = None
+                if score_mat is not None:
+                    from services.regime_scores import LTF_SCORE_COLUMNS
+
+                    score_data = {
+                        name: np.full(_n, np.nan, dtype=np.float32)
+                        for name in LTF_SCORE_COLUMNS
+                    }
+                    for col_i, name in enumerate(LTF_SCORE_COLUMNS):
+                        score_data[name][row_idx] = score_mat[:, col_i]
+                    score_frame = pd.DataFrame(score_data, index=df_src.index).ffill().fillna(0.0)
+                    if "volatility_percentile" in score_frame.columns:
+                        score_frame["volatility_score"] = score_frame["volatility_percentile"]
+                return pd.Series(filled, index=df_src.index, dtype=int), filled_conf, score_frame
             except Exception as _e:
                 logger.error("ML cache: regime infer failed %s: %s", symbol, _e)
-                return None, None
+                return None, None, None
 
         if _do_4h and _X_4h is not None:
             _t_ri = _time.perf_counter()
-            _r4h, _c4h = _infer_regime(regime_4h, _X_4h, _df_src_4h)
+            _r4h, _c4h, _ = _infer_regime(regime_4h, _X_4h, _df_src_4h)
             del _X_4h
             if _r4h is not None:
                 if _df_src_4h is not df:
@@ -1375,15 +1427,49 @@ def _precompute_ml_cache(
 
         if _do_1h and _X_1h is not None:
             _t_ri = _time.perf_counter()
-            _r1h, _c1h = _infer_regime(regime_1h, _X_1h, _df_src_1h)
+            _r1h, _c1h, _score_model_frame = _infer_regime(regime_1h, _X_1h, _df_src_1h)
             del _X_1h
             if _r1h is not None:
                 if _df_src_1h is not df:
                     _regime_ltf_series = _r1h.reindex(df.index, method="ffill").fillna(1).astype(int)
                     _regime_ltf_conf   = _c1h.reindex(df.index, method="ffill").fillna(0.25)
+                    if _score_model_frame is not None:
+                        _regime_ltf_score_frame = _score_model_frame.reindex(df.index, method="ffill")
                 else:
                     _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
+                    _regime_ltf_score_frame = _score_model_frame
             gc.collect()
+
+        if _do_1h and _df_src_1h is not None:
+            try:
+                from services.regime_scores import (
+                    LTF_SCORE_COLUMNS,
+                    build_regime_score_frame,
+                    classify_trade_regime,
+                )
+
+                _score_src = build_regime_score_frame(_df_src_1h, symbol=symbol)
+                if _regime_ltf_score_frame is not None:
+                    _model_score_src = (
+                        _regime_ltf_score_frame
+                        if _df_src_1h is df
+                        else _regime_ltf_score_frame.reindex(_df_src_1h.index, method="ffill")
+                    )
+                    for _score_name in LTF_SCORE_COLUMNS:
+                        if _score_name in _model_score_src.columns:
+                            _score_src[_score_name] = _model_score_src[_score_name]
+                    if "volatility_percentile" in _score_src.columns:
+                        _score_src["volatility_score"] = _score_src["volatility_percentile"]
+                if _df_src_1h is not df:
+                    _regime_ltf_score_frame = _score_src.reindex(df.index, method="ffill")
+                else:
+                    _regime_ltf_score_frame = _score_src
+                _trade_regime_series = _regime_ltf_score_frame.apply(
+                    lambda row: _TRADE_REGIME_TO_ID.get(classify_trade_regime(row), -1),
+                    axis=1,
+                ).astype(np.int8)
+            except Exception as _exc:
+                logger.warning("ML cache: regime score overlay failed %s: %s", symbol, _exc)
 
 
         # ── Build sequence features (with dual-regime context) ────────────────
@@ -1413,6 +1499,15 @@ def _precompute_ml_cache(
             "regime_ltf": np.full(n, -1, dtype=np.int8),
             "regime_conf": np.full(n, np.nan, dtype=np.float32),
             "regime_ltf_conf": np.full(n, np.nan, dtype=np.float32),
+            "trend_score": np.full(n, np.nan, dtype=np.float32),
+            "range_score": np.full(n, np.nan, dtype=np.float32),
+            "chop_score": np.full(n, np.nan, dtype=np.float32),
+            "volatility_percentile": np.full(n, np.nan, dtype=np.float32),
+            "volatility_score": np.full(n, np.nan, dtype=np.float32),
+            "consolidation_score": np.full(n, np.nan, dtype=np.float32),
+            "atr_percentile_500": np.full(n, np.nan, dtype=np.float32),
+            "efficiency_ratio_20": np.full(n, np.nan, dtype=np.float32),
+            "trade_regime": np.full(n, -1, dtype=np.int8),
         }
         if gru_model and seq_arr is not None and gru_model.is_trained and gru_model._model is not None:
             try:
@@ -1486,6 +1581,27 @@ def _precompute_ml_cache(
             cache["regime"] = np.clip(_regime_htf_series.values, 0, 2).astype(np.int8, copy=False)
         if _regime_htf_conf is not None:
             cache["regime_conf"] = _regime_htf_conf.values.astype(np.float32, copy=False)
+        if _regime_ltf_score_frame is not None:
+            for _score_key in [
+                "trend_score",
+                "range_score",
+                "chop_score",
+                "volatility_percentile",
+                "volatility_score",
+                "consolidation_score",
+                "atr_percentile_500",
+                "efficiency_ratio_20",
+            ]:
+                if _score_key in _regime_ltf_score_frame.columns:
+                    cache[_score_key] = (
+                        _regime_ltf_score_frame[_score_key]
+                        .reindex(df.index, method="ffill")
+                        .to_numpy(dtype=np.float32, copy=False)
+                    )
+        if _trade_regime_series is not None:
+            cache["trade_regime"] = _trade_regime_series.reindex(df.index, method="ffill").fillna(-1).to_numpy(
+                dtype=np.int8, copy=False
+            )
 
         n_gru = int(np.count_nonzero(~np.isnan(cache["p_bull"])))
         n_htf = int(np.count_nonzero(cache["regime"] >= 0))
@@ -1588,6 +1704,15 @@ def _compute_backtest_signal(
 
     # ── Gate 5: combined HTF/LTF market-decision matrix ───────────────────────
     _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
+    _trade_regime = str(ml_preds.get("trade_regime", "") or "").upper()
+    if _trade_regime in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
+        _ltf_behaviour = "TRENDING"
+    elif _trade_regime == "RANGE":
+        _ltf_behaviour = "RANGING"
+    elif _trade_regime == "CONSOLIDATION":
+        _ltf_behaviour = "CONSOLIDATING"
+    elif _trade_regime == "NO_TRADE_EXTREME_VOL":
+        _ltf_behaviour = "VOLATILE"
     _range_valid    = bool(bar.get("range_valid", False))
     _pullback_valid = bool(bar.get("pullback_valid", False))
     _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.60"))
@@ -1605,6 +1730,8 @@ def _compute_backtest_signal(
         block_consolidating=_block_consol,
         require_range=_require_range,
         htf_confidence=_htf_regime_conf,
+        regime_scores=ml_preds.get("regime_scores"),
+        trade_regime=ml_preds.get("trade_regime"),
     )
     if not _allowed:
         _reject(_reason)
@@ -1656,6 +1783,8 @@ def _compute_backtest_signal(
         "signal_metadata": {
             "regime":            _htf_bias,
             "regime_ltf":        _ltf_behaviour,
+            "trade_regime":      _trade_regime or "",
+            "regime_scores":     ml_preds.get("regime_scores", {}),
             "expected_variance": _uncertainty,
             "p_bull":            p_bull,
             "p_bear":            p_bear,
@@ -2905,7 +3034,16 @@ def _split_summary_metadata() -> dict:
             }
             try:
                 summary = json.loads(payload.decode("utf-8"))
-                for key in ("date_ranges", "rows", "leakage_check", "created_at"):
+                for key in (
+                    "date_ranges",
+                    "rows",
+                    "leakage_check",
+                    "created_at",
+                    "split_method",
+                    "selected_fold",
+                    "fold_count",
+                    "blind_test_policy",
+                ):
                     if key in summary:
                         meta[key] = summary[key]
             except Exception:

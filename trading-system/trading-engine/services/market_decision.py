@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.regime_scores import classify_trade_regime
+
 
 def _bar_value(bar: Any, key: str, default: Any = None) -> Any:
     try:
@@ -43,6 +45,8 @@ def combined_market_decision(
     block_consolidating: bool = True,
     require_range: bool = True,
     htf_confidence: float = 1.0,
+    regime_scores: dict[str, float] | None = None,
+    trade_regime: str | None = None,
 ) -> tuple[bool, str]:
     """
     Return (allowed, reason) for a proposed trade side.
@@ -63,6 +67,24 @@ def combined_market_decision(
     ltf = str(ltf_behaviour or "RANGING").upper()
     side = str(side or "").lower()
     conf = float(confidence)
+
+    score_state = str(trade_regime or "").upper()
+    if not score_state and regime_scores:
+        try:
+            score_state = classify_trade_regime(regime_scores).upper()
+        except Exception:
+            score_state = ""
+
+    if score_state in {"NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "UNCERTAIN"}:
+        return False, score_state.lower()
+    if score_state == "CONSOLIDATION" and block_consolidating:
+        return False, "blocked_consolidation"
+    if score_state in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
+        ltf = "TRENDING"
+    elif score_state == "RANGE":
+        ltf = "RANGING"
+    if score_state == "TRADEABLE_TREND_HIGH_VOL" and conf < volatile_threshold:
+        return False, "trend_high_vol_weak_conf"
 
     range_valid = _as_bool(_bar_value(bar, "range_valid", False))
     range_side = str(_bar_value(bar, "range_side", "") or "").lower()

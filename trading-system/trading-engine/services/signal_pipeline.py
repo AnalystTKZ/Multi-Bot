@@ -339,6 +339,11 @@ class SignalPipeline:
                 preds["regime_ltf"]      = r.get("regime")
                 preds["regime_ltf_id"]   = r.get("regime_id")
                 preds["regime_ltf_conf"] = r.get("proba")
+                if r.get("regime_scores"):
+                    preds["regime_scores"] = r.get("regime_scores")
+                    preds.update(r.get("regime_scores") or {})
+                if r.get("trade_regime"):
+                    preds["trade_regime"] = r.get("trade_regime")
             except RuntimeError as exc:
                 logger.error("LTF RegimeClassifier not trained — ML signals disabled. %s", exc)
                 raise
@@ -458,6 +463,15 @@ class SignalPipeline:
 
         # Gate 5: combined HTF/LTF market-decision matrix
         _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
+        _trade_regime = str(ml_preds.get("trade_regime", "") or "").upper()
+        if _trade_regime in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
+            _ltf_behaviour = "TRENDING"
+        elif _trade_regime == "RANGE":
+            _ltf_behaviour = "RANGING"
+        elif _trade_regime == "CONSOLIDATION":
+            _ltf_behaviour = "CONSOLIDATING"
+        elif _trade_regime == "NO_TRADE_EXTREME_VOL":
+            _ltf_behaviour = "VOLATILE"
         _range_valid    = bool(bar.get("range_valid", False))
         _pullback_valid = bool(bar.get("pullback_valid", False))
         _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.60"))
@@ -475,6 +489,8 @@ class SignalPipeline:
             block_consolidating=_block_consol,
             require_range=_require_range,
             htf_confidence=_htf_regime_conf,
+            regime_scores=ml_preds.get("regime_scores"),
+            trade_regime=ml_preds.get("trade_regime"),
         )
         if not _allowed:
             logger.debug(
@@ -548,6 +564,8 @@ class SignalPipeline:
             "signal_metadata": {
                 "regime":            _htf_bias,
                 "regime_ltf":        _ltf_behaviour,
+                "trade_regime":      _trade_regime or "",
+                "regime_scores":     ml_preds.get("regime_scores", {}),
                 "expected_variance": _uncertainty,
                 "p_bull":            p_bull,
                 "p_bear":            p_bear,

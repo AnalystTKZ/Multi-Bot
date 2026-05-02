@@ -4,8 +4,8 @@ regime_classifier.py — GPU-native PyTorch MLP hierarchical regime classifier.
 Hierarchical market structure framework:
   HTF classifier (4H) — "What is overall direction?" (mode="htf_bias")
     3 classes: 0=BIAS_UP, 1=BIAS_DOWN, 2=BIAS_NEUTRAL
-  LTF classifier (1H) — "How is price behaving NOW?" (mode="ltf_behaviour")
-    4 classes: 0=TRENDING, 1=RANGING, 2=CONSOLIDATING, 3=VOLATILE
+  LTF score model (1H) — "How is price behaving NOW?" (mode="ltf_behaviour")
+    5 independent scores: trend/range/chop/volatility/consolidation
 
 Architecture: N_FEATURES → 128 → 64 → N_CLASSES  (BN + Dropout + residual skip)
 DataParallel across both T4 GPUs during training and batch inference.
@@ -26,17 +26,19 @@ import pandas as pd
 
 from models.base_model import BaseModel
 from services.feature_engine import REGIME_FEATURES, REGIME_4H_FEATURES, REGIME_1H_FEATURES
+from services.regime_scores import LTF_SCORE_COLUMNS
 
 logger = logging.getLogger(__name__)
 
 # ── New hierarchical class definitions ───────────────────────────────────────
 HTF_CLASSES = ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]          # 3-class HTF bias
-LTF_CLASSES = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]  # 4-class LTF behaviour
+LTF_CLASSES = ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]  # legacy derived labels
+LTF_SCORE_OUTPUTS = list(LTF_SCORE_COLUMNS)
 
 # CLASSES kept as LTF_CLASSES for backward compat (most code paths use LTF or check by name)
 CLASSES = LTF_CLASSES
 N_FEATURES  = len(REGIME_FEATURES)   # full matrix width for _build_feature_matrix
-N_CLASSES   = len(CLASSES)           # default (LTF, 4-class)
+N_CLASSES   = len(CLASSES)           # legacy default label count
 
 # Per-TF feature subsets: indices into the full REGIME_FEATURES column order.
 # _build_feature_matrix always builds the full matrix; classifiers index these columns.
@@ -55,7 +57,7 @@ WEIGHT_PATH = os.path.join(_MODEL_ROOT, "weights", "regime_classifier.pkl")
 
 # Per-mode weight paths for the hierarchical cascade.
 # regime_htf.pkl: 3-class HTF bias (BIAS_UP/DOWN/NEUTRAL) — trained on 4H data.
-# regime_ltf.pkl: 4-class LTF behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE) — trained on 1H data.
+# regime_ltf.pkl: 5-output LTF behaviour scores — trained on 1H data.
 # Legacy paths kept for backward compat during transition.
 WEIGHT_PATH_HTF = os.path.join(_MODEL_ROOT, "weights", "regime_htf.pkl")
 WEIGHT_PATH_LTF = os.path.join(_MODEL_ROOT, "weights", "regime_ltf.pkl")
@@ -149,7 +151,7 @@ class RegimeClassifier(BaseModel):
 
     timeframe: "4H" (HTF bias) | "1H" (LTF behaviour) | None (legacy default).
     mode: "htf_bias" → 3-class (BIAS_UP/DOWN/NEUTRAL) trained on 4H data.
-          "ltf_behaviour" → 4-class (TRENDING/RANGING/CONSOLIDATING/VOLATILE) trained on 1H data.
+          "ltf_behaviour" → 5 independent behaviour scores trained on 1H data.
     Each mode trains and saves to its own weight file so both can coexist.
     DataParallel is used across all available GPUs for both training and batch predict.
     """
@@ -182,10 +184,12 @@ class RegimeClassifier(BaseModel):
         if self._mode == "htf_bias":
             self._class_list = HTF_CLASSES
             self._n_output_classes = len(HTF_CLASSES)  # 3
+            self._output_type = "classification"
             self._current_regime_id: int = 2   # default BIAS_NEUTRAL
         else:
             self._class_list = LTF_CLASSES
-            self._n_output_classes = len(LTF_CLASSES)  # 4
+            self._n_output_classes = len(LTF_SCORE_OUTPUTS)  # 5 independent scores
+            self._output_type = "behaviour_scores"
             self._current_regime_id: int = 1   # default RANGING
 
         # Route weight file: per-TF/mode if specified, else legacy path
@@ -216,6 +220,10 @@ class RegimeClassifier(BaseModel):
             raise ValueError("RegimeClassifier.predict: df cannot be None")
 
         self.reload_if_updated()
+        if self._model is None:
+            raise ModelNotTrainedError(
+                "RegimeClassifier weights are missing or incompatible with the current regime architecture."
+            )
 
         htf = dict(df_htf) if df_htf else {}
         if df_h4 is not None and "4H" not in htf:
@@ -237,9 +245,42 @@ class RegimeClassifier(BaseModel):
             with torch.no_grad():
                 with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
                     logits = _infer_m(x)
-                proba_t = torch.softmax(logits.float(), dim=1)[0]
-            proba = proba_t.cpu().numpy().tolist()
-            raw_id = int(np.argmax(proba))
+                logits_f = logits.float()
+                if self._output_type == "behaviour_scores":
+                    score_t = torch.sigmoid(logits_f)[0]
+                    raw_scores = score_t.cpu().numpy().astype(np.float32)
+                    score_payload = {
+                        name: float(raw_scores[i])
+                        for i, name in enumerate(LTF_SCORE_OUTPUTS)
+                    }
+                    # Backward-compatible aliases used by older gates/reports.
+                    score_payload["volatility_score"] = score_payload["volatility_percentile"]
+                    try:
+                        from services.regime_scores import build_regime_score_frame
+
+                        primitive_df = build_regime_score_frame(df, symbol=symbol)
+                        if not primitive_df.empty:
+                            primitive_last = primitive_df.iloc[-1]
+                            score_payload["efficiency_ratio_20"] = float(primitive_last.get("efficiency_ratio_20", 0.0))
+                            score_payload["atr_percentile_500"] = float(primitive_last.get("atr_percentile_500", 0.5))
+                    except Exception as score_exc:
+                        logger.debug("RegimeClassifier.predict primitive overlay unavailable: %s", score_exc)
+                    from services.regime_scores import classify_trade_regime, legacy_ltf_label_from_scores
+
+                    legacy_label = legacy_ltf_label_from_scores(score_payload)
+                    raw_id = LTF_CLASSES.index(legacy_label) if legacy_label in LTF_CLASSES else 1
+                    proba = [float(score_payload[name]) for name in LTF_SCORE_OUTPUTS]
+                    confidence = float(max(proba))
+                    extra = {
+                        "regime_scores": score_payload,
+                        "trade_regime": classify_trade_regime(score_payload),
+                    }
+                else:
+                    proba_t = torch.softmax(logits_f, dim=1)[0]
+                    proba = proba_t.cpu().numpy().tolist()
+                    raw_id = int(np.argmax(proba))
+                    confidence = float(max(proba))
+                    extra = {}
 
             # 3-bar hysteresis
             self._hysteresis_buffer.append(raw_id)
@@ -252,7 +293,8 @@ class RegimeClassifier(BaseModel):
                 "regime":             self._class_list[self._current_regime_id],
                 "regime_id":          self._current_regime_id,
                 "proba":              proba,
-                "regime_confidence":  float(max(proba)),
+                "regime_confidence":  confidence,
+                **extra,
             }
         except Exception as exc:
             logger.error("RegimeClassifier.predict failed: %s", exc)
@@ -269,13 +311,31 @@ class RegimeClassifier(BaseModel):
         GPU is reserved for the GRU which has large recurrent state and benefits
         from CUDA parallelism.
         """
+        labels, conf, _scores = self.predict_batch_scores(X, batch_size=batch_size)
+        return labels, conf
+
+    def predict_batch_scores(self, X: np.ndarray, batch_size: int = 4096) -> tuple:
+        """
+        Batch inference with optional LTF behaviour score matrix.
+
+        Returns (labels, confidences, scores). For HTF classification scores is
+        None. For LTF behaviour scores is an (N, 5) matrix ordered by
+        LTF_SCORE_OUTPUTS and labels are only the backward-compatible derived
+        4-class behaviour ids.
+        """
         if not self.is_trained or self._model is None:
             raise ModelNotTrainedError(
                 "RegimeClassifier has no trained weights. "
                 "Run: python scripts/retrain_incremental.py --model regime"
             )
         import torch
+        from services.regime_scores import legacy_ltf_label_from_scores
+
         self.reload_if_updated()
+        if self._model is None:
+            raise ModelNotTrainedError(
+                "RegimeClassifier weights are missing or incompatible with the current regime architecture."
+            )
         with self._inference_lock:
             # Slice to TF-specific columns if full matrix provided
             if X.shape[1] == N_FEATURES and len(self._col_idx) < N_FEATURES:
@@ -285,14 +345,31 @@ class RegimeClassifier(BaseModel):
             _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
             all_labels = []
             all_conf   = []
+            all_scores = []
             with torch.no_grad():
                 for s in range(0, len(X), batch_size):
                     xb = torch.from_numpy(X[s: s + batch_size])  # stays on CPU
                     logits = _cpu_m(xb).float()
-                    proba = torch.softmax(logits, dim=1).numpy()
-                    all_labels.append(proba.argmax(axis=1).astype(np.int32))
-                    all_conf.append(proba.max(axis=1).astype(np.float32))
-            return np.concatenate(all_labels), np.concatenate(all_conf)
+                    if self._output_type == "behaviour_scores":
+                        scores = torch.sigmoid(logits).numpy().astype(np.float32)
+                        labels = []
+                        for row in scores:
+                            payload = {
+                                name: float(row[i])
+                                for i, name in enumerate(LTF_SCORE_OUTPUTS)
+                            }
+                            payload["volatility_score"] = payload.get("volatility_percentile", 0.0)
+                            label = legacy_ltf_label_from_scores(payload)
+                            labels.append(LTF_CLASSES.index(label) if label in LTF_CLASSES else 1)
+                        all_labels.append(np.asarray(labels, dtype=np.int32))
+                        all_conf.append(scores.max(axis=1).astype(np.float32))
+                        all_scores.append(scores)
+                    else:
+                        proba = torch.softmax(logits, dim=1).numpy()
+                        all_labels.append(proba.argmax(axis=1).astype(np.int32))
+                        all_conf.append(proba.max(axis=1).astype(np.float32))
+            score_mat = np.concatenate(all_scores) if all_scores else None
+            return np.concatenate(all_labels), np.concatenate(all_conf), score_mat
 
     # ── Labels ────────────────────────────────────────────────────────────────
 
@@ -565,6 +642,7 @@ class RegimeClassifier(BaseModel):
         timeframe: str = "4H",
         mode: str = "ltf_behaviour",
         return_confidence: bool = False,
+        symbol: Optional[str] = None,
     ):
         """
         Outcome-aware regime labels for supervised regime-classifier training.
@@ -574,6 +652,7 @@ class RegimeClassifier(BaseModel):
         Do not feed these labels directly into GRU/sequence features.
         """
         from indicators.market_structure import compute_atr
+        from services.regime_scores import build_regime_score_frame
 
         _tf = (timeframe or "4H").upper()
         horizon = int(RegimeClassifier._TF_LABEL_HORIZON.get(_tf, 12))
@@ -616,28 +695,86 @@ class RegimeClassifier(BaseModel):
         else:
             trend_thr, range_hi, vol_thr, consol_thr = 1.0, 1.5, 2.0, 0.6
 
+        score_df = build_regime_score_frame(df, symbol=symbol, window=n_bar)
+        plus_di = score_df["plus_di"]
+        minus_di = score_df["minus_di"]
+        adx_score = score_df.get("adx_14", pd.Series(0.0, index=df.index))
+        ema50_slope = score_df["ema_50_slope"]
+        ema50_dist = score_df["ema_50_dist_atr"]
+        ema200_dist = score_df["ema_200_dist_atr"]
+        er_now = score_df["efficiency_ratio_20"]
+        trend_score = score_df["trend_score"]
+        range_score = score_df["range_score"]
+        chop_score = score_df["chop_score"]
+        vol_score = score_df.get("volatility_percentile", score_df["volatility_score"])
+        consol_score = score_df["consolidation_score"]
+        atr_pctile = score_df["atr_percentile_500"]
+        bbw_pctile = score_df["bb_width_percentile"]
+        rolling_range_pctile = score_df["rolling_range_percentile"]
+        range_exp_z = score_df["range_expansion_zscore"]
+
         if mode == "htf_bias":
             labels = pd.Series(2, index=df.index, dtype=int)
             conf = pd.Series(0.0, index=df.index, dtype=np.float32)
 
             spread = (up_exc - down_exc)
             dominance = (spread.abs() / (f_range + 1e-9)).clip(0.0, 1.0)
-            up_mask = valid & (up_exc >= trend_thr) & (up_exc >= down_exc * 1.20) & (terminal > 0.25)
-            down_mask = valid & (down_exc >= trend_thr) & (down_exc >= up_exc * 1.20) & (terminal < -0.25)
+            up_structure = (
+                (plus_di > minus_di * 1.02)
+                & ((adx_score > 15.0) | (trend_score > 0.45))
+                & (ema50_slope > -0.01)
+                & ((ema50_dist > 0.0) | (ema200_dist > 0.0) | (score_df["bias_up_score"] > 0.52))
+                & (er_now > 0.16)
+            )
+            down_structure = (
+                (minus_di > plus_di * 1.02)
+                & ((adx_score > 15.0) | (trend_score > 0.45))
+                & (ema50_slope < 0.01)
+                & ((ema50_dist < 0.0) | (ema200_dist < 0.0) | (score_df["bias_down_score"] > 0.52))
+                & (er_now > 0.16)
+            )
+            up_mask = (
+                valid
+                & up_structure
+                & (up_exc >= max(0.35, trend_thr * 0.45))
+                & (up_exc >= down_exc * 1.03)
+                & (terminal > 0.03)
+            )
+            down_mask = (
+                valid
+                & down_structure
+                & (down_exc >= max(0.35, trend_thr * 0.45))
+                & (down_exc >= up_exc * 1.03)
+                & (terminal < -0.03)
+            )
             labels[up_mask] = 0
             labels[down_mask] = 1
 
             directional_conf = (
-                0.45 * (dominance / 0.65).clip(0.0, 1.0)
-                + 0.35 * (pd.concat([up_exc, down_exc], axis=1).max(axis=1) / (trend_thr + 1e-9)).clip(0.0, 1.0)
+                0.35 * (dominance / 0.60).clip(0.0, 1.0)
+                + 0.25 * (pd.concat([up_exc, down_exc], axis=1).max(axis=1) / (trend_thr + 1e-9)).clip(0.0, 1.0)
                 + 0.20 * efficiency
+                + 0.20 * er_now
             ).clip(0.0, 1.0)
             conf[up_mask | down_mask] = (0.45 + 0.55 * directional_conf[up_mask | down_mask]).astype(np.float32)
 
-            neutral_mask = valid & ~(up_mask | down_mask)
+            neutral_structure = (
+                (dominance < 0.55)
+                & (terminal.abs() < 0.65)
+                & (
+                    (adx_score < 20.0)
+                    | (er_now < 0.35)
+                    | (trend_score < 0.45)
+                    | (ema50_slope.abs() < 0.05)
+                )
+            )
+            neutral_mask = valid & neutral_structure & ~(up_mask | down_mask)
             neutral_conf = (
-                0.55 * (1.0 - dominance).clip(0.0, 1.0)
-                + 0.45 * (1.0 - (f_range / (range_hi + 1e-9)).clip(0.0, 1.0))
+                0.30 * (1.0 - dominance).clip(0.0, 1.0)
+                + 0.25 * (1.0 - (terminal.abs() / 0.65).clip(0.0, 1.0))
+                + 0.20 * (1.0 - (er_now / 0.35).clip(0.0, 1.0))
+                + 0.15 * (1.0 - (adx_score / 20.0).clip(0.0, 1.0))
+                + 0.10 * (1.0 - (trend_score / 0.45).clip(0.0, 1.0))
             ).clip(0.0, 1.0)
             conf[neutral_mask] = (0.40 + 0.60 * neutral_conf[neutral_mask]).astype(np.float32)
 
@@ -660,51 +797,86 @@ class RegimeClassifier(BaseModel):
 
         trend_mask = (
             valid
-            & (dominant >= trend_thr)
-            & (dominance >= 0.35)
-            & (terminal.abs() >= 0.35)
-            & (efficiency >= 0.35)
+            & (trend_score >= 0.60)
+            & (dominant >= max(0.60, trend_thr * 0.70))
+            & (dominance >= 0.25)
+            & (terminal.abs() >= 0.20)
+            & (efficiency >= 0.28)
+            & (chop_score < 0.70)
         )
         volatile_mask = (
             valid
             & ~trend_mask
-            & (f_range >= vol_thr)
-            & ((two_sided >= 0.45) | (efficiency <= 0.35))
+            & (
+                (vol_score >= 0.75)
+                | (atr_pctile >= 0.85)
+                | (range_exp_z >= 2.0)
+                | (f_range >= vol_thr)
+            )
         )
         consol_mask = (
             valid
             & ~trend_mask
             & ~volatile_mask
-            & (f_range <= consol_thr)
-            & (dominant <= max(trend_thr, 1.25))
+            & (
+                (consol_score >= 0.60)
+                | (
+                    (atr_pctile <= 0.35)
+                    & (bbw_pctile <= 0.35)
+                    & (rolling_range_pctile <= 0.35)
+                )
+                | ((f_range <= consol_thr) & (dominant <= max(trend_thr, 1.25)))
+            )
         )
-        ranging_mask = valid & ~(trend_mask | volatile_mask | consol_mask)
+        ranging_mask = (
+            valid
+            & ~trend_mask
+            & ~volatile_mask
+            & ~consol_mask
+            & (range_score >= 0.40)
+            & (trend_score < 0.58)
+            & (chop_score < 0.90)
+        )
+        chop_mask = (
+            valid
+            & ~(trend_mask | volatile_mask | consol_mask | ranging_mask)
+            & (chop_score >= 0.80)
+            & (range_score < 0.40)
+        )
 
         labels[trend_mask] = 0
         labels[ranging_mask] = 1
         labels[consol_mask] = 2
         labels[volatile_mask] = 3
+        labels[chop_mask] = 1
 
         trend_conf = (
-            0.40 * (dominance / 0.70).clip(0.0, 1.0)
-            + 0.35 * (dominant / (trend_thr + 1e-9)).clip(0.0, 1.0)
-            + 0.25 * efficiency
+            0.35 * trend_score
+            + 0.25 * (dominance / 0.70).clip(0.0, 1.0)
+            + 0.20 * (dominant / (trend_thr + 1e-9)).clip(0.0, 1.0)
+            + 0.20 * efficiency
         ).clip(0.0, 1.0)
         vol_conf = (
-            0.55 * (f_range / (vol_thr + 1e-9)).clip(0.0, 1.0)
-            + 0.45 * (1.0 - efficiency).clip(0.0, 1.0)
+            0.45 * vol_score
+            + 0.30 * (f_range / (vol_thr + 1e-9)).clip(0.0, 1.0)
+            + 0.25 * (1.0 - efficiency).clip(0.0, 1.0)
         ).clip(0.0, 1.0)
-        consol_conf = (1.0 - (f_range / (consol_thr + 1e-9)).clip(0.0, 1.0))
+        consol_conf = (
+            0.60 * consol_score
+            + 0.40 * (1.0 - (f_range / (consol_thr + 1e-9)).clip(0.0, 1.0))
+        ).clip(0.0, 1.0)
         range_conf = (
-            0.45 * (1.0 - dominance).clip(0.0, 1.0)
-            + 0.35 * (two_sided / (0.75 + 1e-9)).clip(0.0, 1.0)
-            + 0.20 * (1.0 - efficiency).clip(0.0, 1.0)
+            0.45 * range_score
+            + 0.25 * (1.0 - dominance).clip(0.0, 1.0)
+            + 0.15 * (two_sided / (0.75 + 1e-9)).clip(0.0, 1.0)
+            + 0.15 * (1.0 - efficiency).clip(0.0, 1.0)
         ).clip(0.0, 1.0)
 
         conf[trend_mask] = (0.45 + 0.55 * trend_conf[trend_mask]).astype(np.float32)
         conf[volatile_mask] = (0.45 + 0.55 * vol_conf[volatile_mask]).astype(np.float32)
         conf[consol_mask] = (0.45 + 0.55 * consol_conf[consol_mask]).astype(np.float32)
-        conf[ranging_mask] = (0.40 + 0.60 * range_conf[ranging_mask]).astype(np.float32)
+        conf[ranging_mask] = (0.45 + 0.55 * range_conf[ranging_mask]).astype(np.float32)
+        conf[chop_mask] = 0.0
 
         dist = {LTF_CLASSES[c]: int((labels == c).sum()) for c in range(len(LTF_CLASSES))}
         ambiguous = int((conf < 0.4).sum())
@@ -715,6 +887,37 @@ class RegimeClassifier(BaseModel):
         if return_confidence:
             return labels.astype(int), conf.astype(np.float32)
         return labels.astype(int)
+
+    @staticmethod
+    def create_behaviour_score_targets(
+        df: pd.DataFrame,
+        timeframe: str = "1H",
+        symbol: Optional[str] = None,
+        return_confidence: bool = False,
+    ):
+        """
+        Causal multi-output LTF behaviour targets.
+
+        This replaces the old forced 4-class LTF target. Each bar receives five
+        independent scores, so a market can be trending and volatile, or ranging
+        and compressing, without losing information to a single softmax class.
+        """
+        from services.regime_scores import build_regime_score_frame
+
+        _tf = (timeframe or "1H").upper()
+        n_bar = int(RegimeClassifier._TF_NBAR.get(_tf, RegimeClassifier._DEFAULT_NBAR))
+        score_df = build_regime_score_frame(df, symbol=symbol, window=n_bar)
+        targets = (
+            score_df[LTF_SCORE_OUTPUTS]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+            .clip(0.0, 1.0)
+            .astype(np.float32)
+        )
+        conf = pd.Series(1.0, index=df.index, dtype=np.float32)
+        if return_confidence:
+            return targets, conf
+        return targets
 
     @staticmethod
     def create_rule_labels(
@@ -1140,11 +1343,26 @@ class RegimeClassifier(BaseModel):
         except Exception as exc:
             raise RuntimeError(f"_build_feature_matrix: ts_discriminators failed: {exc}") from exc
 
-        # ── Macro features (indices 48–66) ────────────────────────────────────
+        # ── Causal regime primitives (direction, volatility percentiles, candle
+        # structure, symbol group). These are per-symbol normalised and match the
+        # score-based labeller used by create_structural_labels().
+        try:
+            from services.regime_scores import REGIME_PRIMITIVE_COLUMNS, build_regime_score_frame
+
+            score_df = build_regime_score_frame(df, symbol=symbol, window=regime_n_bar)
+            for name in REGIME_PRIMITIVE_COLUMNS:
+                if name in REGIME_FEATURES and name in score_df.columns:
+                    X[:, REGIME_FEATURES.index(name)] = np.nan_to_num(
+                        score_df[name].to_numpy(dtype=np.float32), nan=0.0
+                    )
+        except Exception as exc:
+            raise RuntimeError(f"_build_feature_matrix: regime score primitives failed: {exc}") from exc
+
+        # ── Macro features ───────────────────────────────────────────────────
         try:
             fe = FeatureEngine()
             macro_df = fe._build_macro_frame(df.index, symbol)
-            base_macro = 48  # after 8 base + 5×4 MTF + 6 S/R + 2 regime dynamics + 3 TS discriminators
+            base_macro = REGIME_FEATURES.index(f"idx_{INDEX_NAMES[0]}_ret")
             for i, name in enumerate(INDEX_NAMES):
                 col = f"idx_{name}_ret"
                 if col in macro_df.columns:
@@ -1156,10 +1374,20 @@ class RegimeClassifier(BaseModel):
 
         return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def train_on_arrays(self, X: np.ndarray, y: np.ndarray,
-                        sample_weight: Optional[np.ndarray] = None) -> dict:
+    def train_on_arrays(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+        X_val: Optional[np.ndarray] = None,
+        y_val: Optional[np.ndarray] = None,
+        sample_weight_val: Optional[np.ndarray] = None,
+    ) -> dict:
         """
-        Train directly on pre-built feature matrix X (N, F_full) and label array y (N,).
+        Train directly on pre-built feature matrix X.
+
+        HTF bias uses a 3-class label array y (N,). LTF behaviour uses a
+        5-column score target y (N, 5), ordered by LTF_SCORE_OUTPUTS.
         sample_weight: float32 array (N,) in [0, 1] — confidence per bar from rule labeling.
           High-confidence bars (strong ADX + full stack + clear drift) get weight 1.0.
           Ambiguous bars (borderline ADX, partial stack, weak drift) are dropped by
@@ -1167,7 +1395,19 @@ class RegimeClassifier(BaseModel):
           would remove a class.
         """
         X = np.asarray(X)
+        if self._output_type == "behaviour_scores":
+            return self._fit_behaviour_scores(
+                X,
+                np.asarray(y, dtype=np.float32),
+                sample_weight=sample_weight,
+                X_val=X_val,
+                y_val=y_val,
+                sample_weight_val=sample_weight_val,
+            )
+
         y = np.asarray(y, dtype=np.int64)
+        X_val_arr = None if X_val is None else np.asarray(X_val)
+        y_val_arr = None if y_val is None else np.asarray(y_val, dtype=np.int64)
         if sample_weight is not None and len(sample_weight) == len(y):
             drop_ambiguous = os.getenv("REGIME_DROP_AMBIGUOUS", "1").lower() in (
                 "1", "true", "yes",
@@ -1216,12 +1456,295 @@ class RegimeClassifier(BaseModel):
                     )
         if len(self._col_idx) < N_FEATURES:
             X = X[:, self._col_idx]
+            if X_val_arr is not None and X_val_arr.shape[1] == N_FEATURES:
+                X_val_arr = X_val_arr[:, self._col_idx]
             if sample_weight is not None and len(sample_weight) == len(y):
                 pass  # weight aligns to rows, not features — no slicing needed
-        return self._fit(X, y, sample_weight=sample_weight)
+        return self._fit(
+            X,
+            y,
+            sample_weight=sample_weight,
+            X_val=X_val_arr,
+            y_val=y_val_arr,
+            sample_weight_val=sample_weight_val,
+        )
+
+    def _fit_behaviour_scores(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+        X_val: Optional[np.ndarray] = None,
+        y_val: Optional[np.ndarray] = None,
+        sample_weight_val: Optional[np.ndarray] = None,
+        _cold_start: bool = False,
+    ) -> dict:
+        """Train the LTF behaviour head as five independent score outputs."""
+        try:
+            import torch
+
+            X = np.asarray(X, dtype=np.float32)
+            y = np.asarray(y, dtype=np.float32)
+            if y.ndim != 2 or y.shape[1] != len(LTF_SCORE_OUTPUTS):
+                return {
+                    "error": (
+                        f"LTF score targets must have shape (N, {len(LTF_SCORE_OUTPUTS)}); "
+                        f"got {tuple(y.shape)}"
+                    )
+                }
+            if len(X) < 100:
+                return {"error": f"Insufficient data ({len(X)} rows)"}
+
+            if len(self._col_idx) < N_FEATURES and X.shape[1] == N_FEATURES:
+                X = X[:, self._col_idx]
+            if X_val is not None:
+                X_val = np.asarray(X_val, dtype=np.float32)
+                if len(self._col_idx) < N_FEATURES and X_val.shape[1] == N_FEATURES:
+                    X_val = X_val[:, self._col_idx]
+            y = np.clip(np.nan_to_num(y, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
+            finite_mask = np.isfinite(X).all(axis=1) & np.isfinite(y).all(axis=1)
+            if sample_weight is not None and len(sample_weight) == len(y):
+                finite_mask &= np.isfinite(sample_weight)
+            if not finite_mask.all():
+                X = X[finite_mask]
+                y = y[finite_mask]
+                if sample_weight is not None and len(sample_weight) == len(finite_mask):
+                    sample_weight = np.asarray(sample_weight, dtype=np.float32)[finite_mask]
+
+            if X_val is not None and y_val is not None:
+                y_val = np.asarray(y_val, dtype=np.float32)
+                if y_val.ndim != 2 or y_val.shape[1] != len(LTF_SCORE_OUTPUTS):
+                    return {
+                        "error": (
+                            f"LTF validation targets must have shape (N, {len(LTF_SCORE_OUTPUTS)}); "
+                            f"got {tuple(y_val.shape)}"
+                        )
+                    }
+                y_val = np.clip(np.nan_to_num(y_val, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
+                val_mask = np.isfinite(X_val).all(axis=1) & np.isfinite(y_val).all(axis=1)
+                X_va = X_val[val_mask]
+                y_va = y_val[val_mask]
+                X_tr, y_tr = X, y
+                sw_tr = (
+                    np.asarray(sample_weight, dtype=np.float32)
+                    if sample_weight is not None and len(sample_weight) == len(y)
+                    else np.ones(len(X_tr), dtype=np.float32)
+                )
+            else:
+                split = int(len(X) * 0.8)
+                X_tr, X_va = X[:split], X[split:]
+                y_tr, y_va = y[:split], y[split:]
+                sw_tr = (
+                    np.asarray(sample_weight[:split], dtype=np.float32)
+                    if sample_weight is not None and len(sample_weight) == len(X)
+                    else np.ones(len(X_tr), dtype=np.float32)
+                )
+
+            if len(X_tr) < 50 or len(X_va) < 10:
+                return {"error": "Not enough LTF score data after split"}
+
+            n_feat = X_tr.shape[1]
+            _loaded_n_cls = getattr(self, "_n_classes", len(LTF_SCORE_OUTPUTS))
+            _feature_mismatch = self._model is not None and self._n_features != n_feat
+            _output_mismatch = self._model is not None and _loaded_n_cls != len(LTF_SCORE_OUTPUTS)
+            _warm_start = (
+                self._model is not None
+                and not _feature_mismatch
+                and not _output_mismatch
+                and not _cold_start
+            )
+            if not _warm_start:
+                self._model = _build_mlp(n_feat, len(LTF_SCORE_OUTPUTS)).to(DEVICE)
+                self._n_features = n_feat
+                self._n_classes = len(LTF_SCORE_OUTPUTS)
+                logger.info("RegimeClassifier[mode=%s]: cold start score head", self._mode)
+            else:
+                logger.info("RegimeClassifier[mode=%s]: warm start score head", self._mode)
+            if DEVICE.type == "cuda" and torch.cuda.device_count() > 1:
+                if not isinstance(self._model, torch.nn.DataParallel):
+                    self._model = torch.nn.DataParallel(self._model)
+                logger.info("RegimeClassifier score head: DataParallel across %d GPUs",
+                            torch.cuda.device_count())
+
+            batch_size = 4096
+            X_tr_gpu = torch.from_numpy(X_tr).to(DEVICE)
+            y_tr_gpu = torch.from_numpy(y_tr).to(DEVICE)
+            sw_tr_gpu = torch.from_numpy(np.clip(sw_tr, 0.05, 1.0)).to(DEVICE)
+            X_va_gpu = torch.from_numpy(X_va.astype(np.float32, copy=False)).to(DEVICE)
+            y_va_gpu = torch.from_numpy(y_va.astype(np.float32, copy=False)).to(DEVICE)
+            n_tr = len(X_tr_gpu)
+            n_va = len(X_va_gpu)
+            steps_per_epoch = max(1, (n_tr + batch_size - 1) // batch_size)
+            tr_idx = np.arange(n_tr, dtype=np.int64)
+
+            optimiser = torch.optim.AdamW(
+                self._model.parameters(),
+                lr=8e-4 if not _warm_start else 2e-4,
+                weight_decay=1e-2,
+            )
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimiser,
+                max_lr=8e-4 if not _warm_start else 2e-4,
+                epochs=50,
+                steps_per_epoch=steps_per_epoch,
+                pct_start=0.2,
+            )
+            use_amp = DEVICE.type == "cuda"
+            amp_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+            best_loss = float("inf")
+            best_state = None
+            patience, no_improve = 8, 0
+
+            def _score_loss(logits: "torch.Tensor", target: "torch.Tensor",
+                            weight: "torch.Tensor") -> "torch.Tensor":
+                pred = torch.sigmoid(logits.float())
+                per_row = torch.mean((pred - target.float()) ** 2, dim=1)
+                weight = torch.clamp(weight.float(), min=0.05)
+                return (per_row * weight).sum() / (weight.sum() + 1e-9)
+
+            def _val_stats() -> tuple[float, np.ndarray]:
+                all_pred = []
+                loss_acc = 0.0
+                with torch.no_grad():
+                    for v_s in range(0, n_va, batch_size * 2):
+                        xb = X_va_gpu[v_s: v_s + batch_size * 2]
+                        yb = y_va_gpu[v_s: v_s + batch_size * 2]
+                        with torch.amp.autocast("cuda", enabled=use_amp):
+                            logits_v = self._model(xb)
+                        pred = torch.sigmoid(logits_v.float())
+                        loss_acc += torch.mean((pred - yb) ** 2).item() * len(xb)
+                        all_pred.append(pred.cpu().numpy())
+                return loss_acc / max(1, n_va), np.concatenate(all_pred, axis=0)
+
+            for epoch in range(50):
+                self._model.train()
+                np.random.shuffle(tr_idx)
+                tr_idx_t = torch.from_numpy(tr_idx).to(DEVICE)
+                optimiser.zero_grad()
+                tr_loss = 0.0
+                for step in range(steps_per_epoch):
+                    b_s = step * batch_size
+                    b_e = min(b_s + batch_size, n_tr)
+                    idx_b = tr_idx_t[b_s:b_e]
+                    xb = X_tr_gpu[idx_b]
+                    yb = y_tr_gpu[idx_b]
+                    wb = sw_tr_gpu[idx_b]
+                    with torch.amp.autocast("cuda", enabled=use_amp):
+                        logits_tr = self._model(xb)
+                    loss = _score_loss(logits_tr, yb, wb)
+                    amp_scaler.scale(loss).backward()
+                    amp_scaler.unscale_(optimiser)
+                    torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
+                    amp_scaler.step(optimiser)
+                    amp_scaler.update()
+                    optimiser.zero_grad()
+                    scheduler.step()
+                    tr_loss += loss.item() * (b_e - b_s)
+                tr_loss /= max(1, n_tr)
+
+                self._model.eval()
+                va_loss, va_pred = _val_stats()
+                mae = np.mean(np.abs(va_pred - y_va), axis=0)
+                if epoch == 0 or (epoch + 1) % 5 == 0:
+                    logger.info(
+                        "Regime score epoch %2d/50 — tr=%.4f va=%.4f mae=%s",
+                        epoch + 1,
+                        tr_loss,
+                        va_loss,
+                        {name: round(float(mae[i]), 4) for i, name in enumerate(LTF_SCORE_OUTPUTS)},
+                    )
+                else:
+                    logger.info("Regime score epoch %2d/50 — tr=%.4f va=%.4f",
+                                epoch + 1, tr_loss, va_loss)
+
+                if va_loss < best_loss:
+                    best_loss = va_loss
+                    no_improve = 0
+                    m_bs = self._model.module if isinstance(
+                        self._model, torch.nn.DataParallel) else self._model
+                    best_state = {k: v.cpu().clone() for k, v in m_bs.state_dict().items()}
+                else:
+                    no_improve += 1
+                    if no_improve >= patience and epoch + 1 >= 10:
+                        logger.info("Regime score early stop at epoch %d", epoch + 1)
+                        break
+
+            if best_state is not None:
+                m = self._model.module if isinstance(
+                    self._model, torch.nn.DataParallel) else self._model
+                m.load_state_dict(best_state)
+
+            self._model.eval()
+            _, val_pred = _val_stats()
+            mae = np.mean(np.abs(val_pred - y_va), axis=0)
+            mse = np.mean((val_pred - y_va) ** 2, axis=0)
+            target_std = np.std(y_va, axis=0)
+            pred_std = np.std(val_pred, axis=0)
+            corr = {}
+            for i, name in enumerate(LTF_SCORE_OUTPUTS):
+                if target_std[i] < 1e-6 or pred_std[i] < 1e-6:
+                    corr[name] = 0.0
+                else:
+                    corr[name] = float(np.corrcoef(y_va[:, i], val_pred[:, i])[0, 1])
+            score_mae = {name: round(float(mae[i]), 4) for i, name in enumerate(LTF_SCORE_OUTPUTS)}
+            score_mse = {name: round(float(mse[i]), 5) for i, name in enumerate(LTF_SCORE_OUTPUTS)}
+            score_corr = {name: round(float(corr[name]), 4) for name in LTF_SCORE_OUTPUTS}
+            pred_std_map = {name: round(float(pred_std[i]), 4) for i, name in enumerate(LTF_SCORE_OUTPUTS)}
+            target_std_map = {name: round(float(target_std[i]), 4) for i, name in enumerate(LTF_SCORE_OUTPUTS)}
+            logger.info(
+                "RegimeClassifier[mode=%s] score validation mae=%s mse=%s corr=%s pred_std=%s target_std=%s",
+                self._mode,
+                score_mae,
+                score_mse,
+                score_corr,
+                pred_std_map,
+                target_std_map,
+            )
+
+            del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu
+            if DEVICE.type == "cuda":
+                torch.cuda.empty_cache()
+
+            max_mae = float(os.getenv("REGIME_SCORE_MAX_MAE", "0.30"))
+            weak_scores = [name for name, value in score_mae.items() if float(value) > max_mae]
+            min_pred_std = float(os.getenv("REGIME_SCORE_MIN_PRED_STD", "0.015"))
+            collapsed_scores = [
+                name
+                for i, name in enumerate(LTF_SCORE_OUTPUTS)
+                if target_std[i] > 0.03 and pred_std[i] < min_pred_std
+            ]
+            if weak_scores or collapsed_scores:
+                return {
+                    "error": (
+                        f"Regime score validation below acceptance floor: "
+                        f"mae={score_mae} max_mae={max_mae:.3f} "
+                        f"weak_scores={weak_scores} collapsed_scores={collapsed_scores}. "
+                        "Refusing to save misleading LTF score weights."
+                    )
+                }
+
+            self.save(self.weight_path)
+            mean_mae = float(np.mean(mae))
+            return {
+                "accuracy": round(max(0.0, 1.0 - mean_mae), 4),
+                "n_train": len(X_tr),
+                "n_val": len(X_va),
+                "val_loss": round(float(best_loss), 6),
+                "score_mae": score_mae,
+                "score_mse": score_mse,
+                "score_corr": score_corr,
+                "score_outputs": list(LTF_SCORE_OUTPUTS),
+                "timeframe": self._timeframe or "default",
+            }
+        except Exception as exc:
+            logger.error("RegimeClassifier._fit_behaviour_scores failed: %s", exc)
+            raise
 
     def _fit(self, X: np.ndarray, y: np.ndarray,
              sample_weight: Optional[np.ndarray] = None,
+             X_val: Optional[np.ndarray] = None,
+             y_val: Optional[np.ndarray] = None,
+             sample_weight_val: Optional[np.ndarray] = None,
              _cold_start: bool = False) -> dict:
         """Core GPU training loop. X: (N, F) float32, y: (N,) int64.
 
@@ -1316,19 +1839,31 @@ class RegimeClassifier(BaseModel):
                 )
 
             # ── Temporal split ────────────────────────────────────────────────
-            split      = int(len(X) * 0.8)
-            X_tr, X_va = X[:split],  X[split:]
-            y_tr, y_va = y[:split],  y[split:]
-
-            # Sample weights: confidence per bar (rule strength).
-            # Uniform 1.0 if not provided (e.g. legacy callers).
-            if sample_weight is not None and len(sample_weight) == len(X):
-                sw_tr = sample_weight[:split].astype(np.float32)
-                _ambig_pct = float((sw_tr < 0.4).mean()) * 100
-                logger.info("RegimeClassifier: sample weights — mean=%.3f  ambiguous(<0.4)=%.1f%%",
-                            float(sw_tr.mean()), _ambig_pct)
+            # Prefer explicit rolling-window validation arrays from the retrainer.
+            # Legacy callers still fall back to the final 20% of X.
+            if X_val is not None and y_val is not None:
+                X_tr, y_tr = X, y
+                X_va = np.asarray(X_val, dtype=np.float32)
+                y_va = np.asarray(y_val, dtype=np.int64)
+                if sample_weight is not None and len(sample_weight) == len(X_tr):
+                    sw_tr = sample_weight.astype(np.float32)
+                else:
+                    sw_tr = np.ones(len(X_tr), dtype=np.float32)
             else:
-                sw_tr = np.ones(len(X_tr), dtype=np.float32)
+                split      = int(len(X) * 0.8)
+                X_tr, X_va = X[:split],  X[split:]
+                y_tr, y_va = y[:split],  y[split:]
+
+                # Sample weights: confidence per bar (rule strength).
+                # Uniform 1.0 if not provided (e.g. legacy callers).
+                if sample_weight is not None and len(sample_weight) == len(X):
+                    sw_tr = sample_weight[:split].astype(np.float32)
+                else:
+                    sw_tr = np.ones(len(X_tr), dtype=np.float32)
+
+            _ambig_pct = float((sw_tr < 0.4).mean()) * 100 if len(sw_tr) else 0.0
+            logger.info("RegimeClassifier: sample weights — mean=%.3f  ambiguous(<0.4)=%.1f%%",
+                        float(sw_tr.mean()) if len(sw_tr) else 0.0, _ambig_pct)
 
             if len(X_tr) < 50 or len(X_va) < 10:
                 return {"error": "Not enough data after split"}
@@ -1598,6 +2133,29 @@ class RegimeClassifier(BaseModel):
                 )
                 for c in range(_n_cls)
             }
+            confusion = np.zeros((_n_cls, _n_cls), dtype=np.int64)
+            for true_id, pred_id in zip(y_va.astype(np.int64), all_preds_arr.astype(np.int64)):
+                if 0 <= true_id < _n_cls and 0 <= pred_id < _n_cls:
+                    confusion[true_id, pred_id] += 1
+            per_class_precision = {}
+            per_class_f1 = {}
+            for c in range(_n_cls):
+                tp = float(confusion[c, c])
+                fp = float(confusion[:, c].sum() - confusion[c, c])
+                fn = float(confusion[c, :].sum() - confusion[c, c])
+                precision = tp / (tp + fp + 1e-9)
+                recall = tp / (tp + fn + 1e-9)
+                f1 = 2.0 * precision * recall / (precision + recall + 1e-9)
+                per_class_precision[_classes[c]] = round(float(precision), 3)
+                per_class_f1[_classes[c]] = round(float(f1), 3)
+            logger.info(
+                "RegimeClassifier[mode=%s] validation precision=%s recall=%s f1=%s confusion=%s",
+                self._mode,
+                per_class_precision,
+                per_class_accuracy,
+                per_class_f1,
+                confusion.tolist(),
+            )
             del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu, tr_idx_t
             if DEVICE.type == "cuda":
                 torch.cuda.empty_cache()
@@ -1653,6 +2211,9 @@ class RegimeClassifier(BaseModel):
                 "n_val":     len(X_va),
                 "val_loss":  round(va_loss, 6),
                 "per_class_accuracy": per_class_accuracy,
+                "per_class_precision": per_class_precision,
+                "per_class_f1": per_class_f1,
+                "confusion_matrix": confusion.tolist(),
                 "timeframe": self._timeframe or "default",
             }
 
@@ -1670,7 +2231,6 @@ class RegimeClassifier(BaseModel):
             if df_h4 is not None and "4H" not in htf_full:
                 htf_full["4H"] = df_h4
 
-            labels_series = self.create_labels(df)
             n = len(df)
             X_all = self._build_feature_matrix(df, htf_full, symbol)
 
@@ -1678,9 +2238,16 @@ class RegimeClassifier(BaseModel):
             step = max(1, (n - 50) // MAX_ROWS)
             idx  = np.arange(50, n, step)
             X    = X_all[idx]
-            y    = labels_series.iloc[idx].values.astype(np.int64)
+            if self._output_type == "behaviour_scores":
+                labels_frame = self.create_behaviour_score_targets(
+                    df, timeframe=self._timeframe or "1H", symbol=symbol
+                )
+                y = labels_frame.iloc[idx].to_numpy(dtype=np.float32)
+            else:
+                labels_series = self.create_labels(df)
+                y = labels_series.iloc[idx].values.astype(np.int64)
             logger.info("RegimeClassifier: vectorised extraction — %d rows (step=%d)", len(X), step)
-            return self._fit(X, y)
+            return self.train_on_arrays(X, y)
         except Exception as exc:
             logger.error("RegimeClassifier.train failed: %s", exc)
             raise
@@ -1700,6 +2267,8 @@ class RegimeClassifier(BaseModel):
                 "n_features": self._n_features,
                 "n_classes":  self._n_output_classes,
                 "mode":       self._mode,
+                "output_type": self._output_type,
+                "score_outputs": list(LTF_SCORE_OUTPUTS) if self._output_type == "behaviour_scores" else [],
             }
             with open(path, "wb") as f:
                 pickle.dump(payload, f)
@@ -1716,24 +2285,35 @@ class RegimeClassifier(BaseModel):
             n_feat     = payload["n_features"]
             n_cls      = payload.get("n_classes", self._n_output_classes)
             saved_mode = payload.get("mode", self._mode)
+            saved_output_type = payload.get("output_type", "classification")
             state_dict = payload["state_dict"]
 
-            # Detect n_classes mismatch (e.g. old 5-class pkl vs new 3/4-class mode)
-            if n_cls != self._n_output_classes:
+            # Detect stale/incompatible artifacts. Old regime_ltf.pkl files were
+            # 4-class softmax classifiers; the current LTF model is a 5-output
+            # score head and must cold-start instead of silently loading them.
+            if n_cls != self._n_output_classes or saved_output_type != self._output_type:
                 logger.warning(
-                    "RegimeClassifier.load: n_classes mismatch saved=%d expected=%d (mode=%s) "
-                    "— will cold-start on first training call",
-                    n_cls, self._n_output_classes, self._mode,
+                    "RegimeClassifier.load: incompatible artifact saved_mode=%s saved_output=%s "
+                    "saved_n=%d expected_mode=%s expected_output=%s expected_n=%d — ignoring %s",
+                    saved_mode,
+                    saved_output_type,
+                    n_cls,
+                    self._mode,
+                    self._output_type,
+                    self._n_output_classes,
+                    path,
                 )
-                # Load the model with saved dims so it doesn't crash, but mark stale
-                # The _fit() mismatch detection will cold-start it on next train call
-            else:
-                if saved_mode != self._mode:
-                    logger.warning(
-                        "RegimeClassifier.load: mode mismatch saved=%s current=%s "
-                        "— predictions may be incorrect until retrained",
-                        saved_mode, self._mode,
-                    )
+                self._model = None
+                self._loaded = False
+                self._n_features = n_feat
+                self._n_classes = n_cls
+                return
+            if saved_mode != self._mode:
+                logger.warning(
+                    "RegimeClassifier.load: mode mismatch saved=%s current=%s "
+                    "— predictions may be incorrect until retrained",
+                    saved_mode, self._mode,
+                )
 
             m = _build_mlp(n_feat, n_cls)
             m.load_state_dict(state_dict)

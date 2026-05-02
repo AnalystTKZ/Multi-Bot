@@ -101,6 +101,8 @@ if RETRAIN_DATA_SPLIT != "train" and not _ALLOW_NONTRAIN_RETRAIN:
     )
     RETRAIN_DATA_SPLIT = "train"
 logger.info("Retrain data split: %s", RETRAIN_DATA_SPLIT)
+RETRAIN_ROLLING_FOLD = os.getenv("RETRAIN_ROLLING_FOLD", "latest").strip().lower()
+logger.info("Retrain rolling fold selector: %s", RETRAIN_ROLLING_FOLD)
 GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "50"))
 # 1024 per GPU × 2 GPUs (DataParallel) = 2048 effective batch; grad_accum×4 = 8192 logical.
 # Overrideable via env var for memory-constrained runs.
@@ -115,7 +117,7 @@ ALL_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D", "1W", "1MN"]
 GRU_TIMEFRAMES = ["5M", "15M", "1H", "4H"]
 # Hierarchical regime cascade:
 # HTF (4H): 3-class bias (BIAS_UP/DOWN/NEUTRAL) — trained with mode="htf_bias"
-# LTF (1H): 4-class behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE) — trained with mode="ltf_behaviour"
+# LTF (1H): five behaviour scores (trend/range/chop/volatility/consolidation) — trained with mode="ltf_behaviour"
 REGIME_HTF_TF = ["4H"]         # HTF bias classifier source timeframe (was REGIME_TF_4H)
 REGIME_LTF_TF = ["1H"]         # LTF behaviour classifier source timeframe (was REGIME_TF_1H)
 REGIME_TF_4H = REGIME_HTF_TF   # backward compat alias
@@ -272,61 +274,129 @@ def _update_macro_correlations(symbols: list[str]) -> None:
             f.write(json.dumps(result, indent=2))
 
 
-_SPLIT_BOUNDARIES: dict | None = None
+_SPLIT_BOUNDARIES: dict[str, dict] = {}
 _PARQUET_CACHE: dict = {}  # (symbol, tf) -> raw DataFrame, populated once on first read
 
 
-def _load_split_boundaries() -> dict:
+def _load_split_boundaries(fold_id: str | int | None = None) -> dict:
     """
     Load train/val/test date boundaries from ml_training/datasets/split_summary.json.
-    Returns dict with keys 'train_end', 'val_end' as UTC Timestamps, or empty dict
-    if the file doesn't exist.
+    Rolling summaries contain multiple train/validation folds over the non-test
+    history. fold_id selects one fold; "latest" is the production default.
     """
     global _SPLIT_BOUNDARIES
-    if _SPLIT_BOUNDARIES is not None:
-        return _SPLIT_BOUNDARIES
+    requested = str(fold_id if fold_id is not None else RETRAIN_ROLLING_FOLD).strip().lower()
+    if requested == "all":
+        requested = "latest"
+    if requested in _SPLIT_BOUNDARIES:
+        return _SPLIT_BOUNDARIES[requested]
 
     import pandas as pd
+
+    def _ts(value):
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            return ts.tz_localize("UTC")
+        return ts.tz_convert("UTC")
 
     split_path = os.path.join(
         str(_ENV["ml_training"]), "datasets", "split_summary.json"
     )
     if not os.path.exists(split_path):
         logger.warning("split_summary.json not found — training on full history")
-        _SPLIT_BOUNDARIES = {}
-        return _SPLIT_BOUNDARIES
+        _SPLIT_BOUNDARIES[requested] = {}
+        return _SPLIT_BOUNDARIES[requested]
 
     try:
         with open(split_path) as f:
             summary = json.load(f)
-        ranges = summary.get("date_ranges", {})
-        _SPLIT_BOUNDARIES = {
-            "train_end": pd.Timestamp(ranges["train"]["end"], tz="UTC"),
-            "val_end":   pd.Timestamp(ranges["validation"]["end"], tz="UTC"),
-            "test_start": pd.Timestamp(ranges["test"]["start"], tz="UTC"),
-            "test_end":   pd.Timestamp(ranges["test"]["end"], tz="UTC"),
+        folds = summary.get("folds") or summary.get("rolling_folds") or []
+        selected_fold = None
+        if folds:
+            if requested in {"", "latest", "last"}:
+                selected_fold = folds[-1]
+            else:
+                for fold in folds:
+                    candidates = {
+                        str(fold.get("fold_id", "")).lower(),
+                        str(fold.get("id", "")).lower(),
+                        str(fold.get("index", "")).lower(),
+                    }
+                    if requested in candidates:
+                        selected_fold = fold
+                        break
+                if selected_fold is None:
+                    try:
+                        selected_fold = folds[int(requested)]
+                    except Exception:
+                        logger.warning(
+                            "Unknown RETRAIN_ROLLING_FOLD=%r; using latest fold", requested
+                        )
+                        selected_fold = folds[-1]
+            ranges = selected_fold.get("date_ranges", selected_fold)
+            fold_name = str(
+                selected_fold.get(
+                    "fold_id",
+                    selected_fold.get("id", selected_fold.get("index", "latest")),
+                )
+            )
+        else:
+            ranges = summary.get("date_ranges", {})
+            fold_name = "legacy"
+
+        _SPLIT_BOUNDARIES[requested] = {
+            "fold_id": fold_name,
+            "train_start": _ts(ranges["train"]["start"]),
+            "train_end":   _ts(ranges["train"]["end"]),
+            "val_start":   _ts(ranges["validation"]["start"]),
+            "val_end":     _ts(ranges["validation"]["end"]),
+            "test_start":  _ts(ranges["test"]["start"]),
+            "test_end":    _ts(ranges["test"]["end"]),
+            "fold_count":  len(folds),
         }
         logger.info(
-            "Split boundaries loaded — train≤%s  val≤%s  test≤%s",
-            _SPLIT_BOUNDARIES["train_end"].date(),
-            _SPLIT_BOUNDARIES["val_end"].date(),
-            _SPLIT_BOUNDARIES["test_end"].date(),
+            "Split boundaries loaded fold=%s/%s — train %s→%s  val %s→%s  test %s→%s",
+            _SPLIT_BOUNDARIES[requested]["fold_id"],
+            max(1, _SPLIT_BOUNDARIES[requested]["fold_count"]),
+            _SPLIT_BOUNDARIES[requested]["train_start"].date(),
+            _SPLIT_BOUNDARIES[requested]["train_end"].date(),
+            _SPLIT_BOUNDARIES[requested]["val_start"].date(),
+            _SPLIT_BOUNDARIES[requested]["val_end"].date(),
+            _SPLIT_BOUNDARIES[requested]["test_start"].date(),
+            _SPLIT_BOUNDARIES[requested]["test_end"].date(),
         )
     except Exception as exc:
         logger.warning("Failed to parse split_summary.json: %s", exc)
-        _SPLIT_BOUNDARIES = {}
-    return _SPLIT_BOUNDARIES
+        _SPLIT_BOUNDARIES[requested] = {}
+    return _SPLIT_BOUNDARIES[requested]
+
+
+def _available_rolling_folds() -> list[str]:
+    split_path = os.path.join(str(_ENV["ml_training"]), "datasets", "split_summary.json")
+    if not os.path.exists(split_path):
+        return []
+    try:
+        with open(split_path) as f:
+            summary = json.load(f)
+        folds = summary.get("folds") or summary.get("rolling_folds") or []
+        out = []
+        for i, fold in enumerate(folds):
+            out.append(str(fold.get("fold_id", fold.get("id", i))))
+        return out
+    except Exception:
+        return []
 
 
 def _load_ohlcv(symbol: str, timeframe: str = "15M",
-                split: str = "train") -> "pd.DataFrame | None":
+                split: str = "train",
+                fold_id: str | int | None = None) -> "pd.DataFrame | None":
     """Load OHLCV from processed_data/histdata/{SYM}_{TF}.parquet (step0 output).
     No CSV fallbacks — all data must be resampled from M1 by step0_resample.py.
 
     split: one of 'train', 'val', 'test', 'all'
-      - 'train'  → rows up to and including train_end
-      - 'val'    → rows after train_end up to val_end
-      - 'test'   → rows after val_end (held-out, never used for fitting)
+      - 'train'  → selected fold train_start through train_end
+      - 'val'    → selected fold val_start through val_end
+      - 'test'   → final blind test_start through test_end
       - 'all'    → full history (used for regime HTF context slices)
     """
     import pandas as pd
@@ -357,21 +427,22 @@ def _load_ohlcv(symbol: str, timeframe: str = "15M",
 
     # Apply temporal split boundaries
     if split != "all":
-        bounds = _load_split_boundaries()
+        bounds = _load_split_boundaries(fold_id=fold_id)
         if bounds:
             if split == "train":
-                df = df[df.index <= bounds["train_end"]]
+                df = df[(df.index >= bounds["train_start"]) & (df.index <= bounds["train_end"])]
             elif split == "val":
-                df = df[(df.index > bounds["train_end"]) & (df.index <= bounds["val_end"])]
+                df = df[(df.index >= bounds["val_start"]) & (df.index <= bounds["val_end"])]
             elif split == "test":
-                df = df[df.index > bounds["val_end"]]
+                df = df[(df.index >= bounds["test_start"]) & (df.index <= bounds["test_end"])]
 
     if len(df) == 0:
         logger.warning("_load_ohlcv: %s/%s split=%s yielded 0 rows", symbol, tf_upper, split)
         return None
 
-    logger.info("Loaded %s/%s split=%s: %d bars (%s → %s)",
-                symbol, tf_upper, split, len(df),
+    _fold_label = fold_id if fold_id is not None else RETRAIN_ROLLING_FOLD
+    logger.info("Loaded %s/%s split=%s fold=%s: %d bars (%s → %s)",
+                symbol, tf_upper, split, _fold_label, len(df),
                 df.index.min().date(), df.index.max().date())
     return df
 
@@ -689,14 +760,16 @@ def retrain_gru(dry_run: bool = False) -> dict:
 
 def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
                            group_gmms: dict, dry_run: bool = False,
-                           mode: str = "ltf_behaviour") -> tuple:
+                           mode: str = "ltf_behaviour",
+                           data_split: str = RETRAIN_DATA_SPLIT,
+                           fold_id: str | int | None = None) -> tuple:
     """
     Build (X_all, y_all, sw_all) for one regime classifier.
 
     source_tf: the TF we build feature matrices on (e.g. "4H" or "1H").
     label_tf:  source TF for rule labels.
     mode: "htf_bias" → 3-class labels for HTF classifier.
-          "ltf_behaviour" → 4-class labels for LTF classifier.
+          "ltf_behaviour" → 5-column score targets for LTF behaviour head.
     Returns (X, y, sample_weight, n_samples).
     sample_weight: float32 array (N,) — per-bar confidence from create_rule_labels.
     """
@@ -709,12 +782,30 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
     y_parts:  list = []
     sw_parts: list = []
     samples = 0
+    _score_mode = mode == "ltf_behaviour"
     _default_label = 2 if mode == "htf_bias" else 1  # BIAS_NEUTRAL or RANGING
+    _classes = (
+        ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]
+        if mode == "htf_bias"
+        else ["TRENDING", "RANGING", "CONSOLIDATING", "VOLATILE"]
+    )
+    _n_classes = len(_classes)
+    _group_counts: dict[str, _np.ndarray] = {}
+    _year_counts: dict[int, _np.ndarray] = {}
+    _score_outputs = []
+    _group_score_sums: dict[str, _np.ndarray] = {}
+    _group_score_counts: dict[str, int] = {}
+    _year_score_sums: dict[int, _np.ndarray] = {}
+    _year_score_counts: dict[int, int] = {}
+    if _score_mode:
+        from models.regime_classifier import LTF_SCORE_OUTPUTS as _LTF_SCORE_OUTPUTS
+
+        _score_outputs = list(_LTF_SCORE_OUTPUTS)
 
     # Cache label_tf dfs per symbol
     _label_cache: dict = {}
     for sym in symbols:
-        df_l = _load_ohlcv(sym, label_tf, split=RETRAIN_DATA_SPLIT)
+        df_l = _load_ohlcv(sym, label_tf, split=data_split, fold_id=fold_id)
         if df_l is not None and len(df_l) > 50:
             _label_cache[sym] = df_l
 
@@ -725,7 +816,7 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         gmm_grp, scaler_grp, cl_grp = group_gmms.get(grp, (None, None, None))
         df_label_sym = _label_cache.get(sym)
 
-        df = _load_ohlcv(sym, source_tf, split=RETRAIN_DATA_SPLIT)
+        df = _load_ohlcv(sym, source_tf, split=data_split, fold_id=fold_id)
         if df is None or len(df) <= 200:
             logger.warning("Regime[%s mode=%s]: skipping %s (insufficient data)", source_tf, mode, sym)
             continue
@@ -749,16 +840,15 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
         try:
             X_sym = _RC._build_feature_matrix(df, htf_train, sym)
 
-            # Outcome-aware structural labels with confidence. These are the
-            # supervised targets for the regime classifier only; GRU context
-            # still uses past-only rule labels to avoid future-label leakage.
+            # HTF uses outcome-aware structural labels. LTF behaviour uses
+            # causal multi-output score targets instead of a forced class.
             if mode == "htf_bias":
                 labels, conf = _RC.create_structural_labels(
-                    df, timeframe=source_tf, mode="htf_bias", return_confidence=True,
+                    df, timeframe=source_tf, mode="htf_bias", return_confidence=True, symbol=sym,
                 )
             elif mode == "ltf_behaviour":
-                labels, conf = _RC.create_structural_labels(
-                    df, timeframe=source_tf, mode="ltf_behaviour", return_confidence=True,
+                labels, conf = _RC.create_behaviour_score_targets(
+                    df, timeframe=source_tf, symbol=sym, return_confidence=True,
                 )
             else:
                 # Fallback GMM for any other mode — uniform confidence
@@ -775,10 +865,60 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
             step = max(1, (n - 50) // 100_000)
             idx  = _np.arange(50, n, step)
             X_parts.append(X_sym[idx])
-            y_parts.append(labels.iloc[idx].values.astype(_np.int64))
+            if _score_mode:
+                y_sample = labels.iloc[idx].to_numpy(dtype=_np.float32)
+            else:
+                y_sample = labels.iloc[idx].values.astype(_np.int64)
+            y_parts.append(y_sample)
             sw_parts.append(conf.iloc[idx].values.astype(_np.float32))
             samples += len(idx)
-            logger.info("Regime[%s mode=%s]: collected %s — %d samples (group=%s)", source_tf, mode, sym, len(idx), grp)
+            if _score_mode:
+                means = _np.nanmean(y_sample, axis=0)
+                _group_score_sums.setdefault(grp, _np.zeros(len(_score_outputs), dtype=_np.float64))
+                _group_score_counts[grp] = _group_score_counts.get(grp, 0) + len(y_sample)
+                _group_score_sums[grp] += _np.nansum(y_sample, axis=0)
+                if hasattr(labels.index, "year"):
+                    years = labels.index[idx].year
+                    for _yr in _np.unique(years):
+                        _mask = years == _yr
+                        _year_score_sums.setdefault(int(_yr), _np.zeros(len(_score_outputs), dtype=_np.float64))
+                        _year_score_counts[int(_yr)] = _year_score_counts.get(int(_yr), 0) + int(_mask.sum())
+                        _year_score_sums[int(_yr)] += _np.nansum(y_sample[_mask], axis=0)
+                logger.info(
+                    "Regime[%s mode=%s split=%s fold=%s]: collected %s — %d samples (group=%s) score_means=%s",
+                    source_tf,
+                    mode,
+                    data_split,
+                    fold_id if fold_id is not None else RETRAIN_ROLLING_FOLD,
+                    sym,
+                    len(idx),
+                    grp,
+                    {_score_outputs[i]: round(float(means[i]), 4) for i in range(len(_score_outputs))},
+                )
+            else:
+                clean_mask = conf.iloc[idx].values.astype(_np.float32) >= float(os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"))
+                dist = _np.bincount(y_sample, minlength=_n_classes)[:_n_classes]
+                clean_dist = _np.bincount(y_sample[clean_mask], minlength=_n_classes)[:_n_classes]
+                _group_counts.setdefault(grp, _np.zeros(_n_classes, dtype=_np.int64))
+                _group_counts[grp] += dist
+                if hasattr(labels.index, "year"):
+                    years = labels.index[idx].year
+                    for _yr in _np.unique(years):
+                        _mask = years == _yr
+                        _year_counts.setdefault(int(_yr), _np.zeros(_n_classes, dtype=_np.int64))
+                        _year_counts[int(_yr)] += _np.bincount(y_sample[_mask], minlength=_n_classes)[:_n_classes]
+                logger.info(
+                    "Regime[%s mode=%s split=%s fold=%s]: collected %s — %d samples (group=%s) labels=%s clean=%s",
+                    source_tf,
+                    mode,
+                    data_split,
+                    fold_id if fold_id is not None else RETRAIN_ROLLING_FOLD,
+                    sym,
+                    len(idx),
+                    grp,
+                    {_classes[i]: int(dist[i]) for i in range(_n_classes)},
+                    {_classes[i]: int(clean_dist[i]) for i in range(_n_classes)},
+                )
         except Exception as exc:
             logger.error("Regime[%s mode=%s]: feature build failed %s: %s", source_tf, mode, sym, exc)
         finally:
@@ -795,20 +935,91 @@ def _build_regime_dataset(symbols: list, source_tf: str, label_tf: str,
     X_all  = _np2.concatenate(X_parts,  axis=0)
     y_all  = _np2.concatenate(y_parts,  axis=0)
     sw_all = _np2.concatenate(sw_parts, axis=0)
+    if _group_counts:
+        logger.info(
+            "Regime[%s mode=%s] label distribution by symbol group: %s",
+            source_tf,
+            mode,
+            {
+                grp: {_classes[i]: int(vals[i]) for i in range(_n_classes)}
+                for grp, vals in sorted(_group_counts.items())
+            },
+        )
+    if _group_score_sums:
+        logger.info(
+            "Regime[%s mode=%s] score means by symbol group: %s",
+            source_tf,
+            mode,
+            {
+                grp: {
+                    _score_outputs[i]: round(float(vals[i] / max(_group_score_counts.get(grp, 1), 1)), 4)
+                    for i in range(len(_score_outputs))
+                }
+                for grp, vals in sorted(_group_score_sums.items())
+            },
+        )
+    if _year_counts:
+        logger.info(
+            "Regime[%s mode=%s] label distribution by year: %s",
+            source_tf,
+            mode,
+            {
+                yr: {_classes[i]: int(vals[i]) for i in range(_n_classes)}
+                for yr, vals in sorted(_year_counts.items())
+            },
+        )
+    if _year_score_sums:
+        logger.info(
+            "Regime[%s mode=%s] score means by year: %s",
+            source_tf,
+            mode,
+            {
+                yr: {
+                    _score_outputs[i]: round(float(vals[i] / max(_year_score_counts.get(yr, 1), 1)), 4)
+                    for i in range(len(_score_outputs))
+                }
+                for yr, vals in sorted(_year_score_sums.items())
+            },
+        )
     del X_parts, y_parts, sw_parts
     _gc.collect()
     return X_all, y_all, sw_all, samples
 
 
-def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str) -> None:
+def _regime_diagnostics(model, group_gmms: dict, symbols: list, source_tf: str,
+                        fold_id: str | int | None = None) -> None:
     """Log persistence and return-separation using the same labels as training."""
     try:
         from models.regime_classifier import RegimeClassifier as _RC_diag
         _diag_sym = symbols[-1] if symbols else None
-        _diag_df  = _load_ohlcv(_diag_sym, source_tf, split=RETRAIN_DATA_SPLIT) if _diag_sym else None
+        _diag_df  = _load_ohlcv(_diag_sym, source_tf, split=RETRAIN_DATA_SPLIT, fold_id=fold_id) if _diag_sym else None
         if _diag_df is None or len(_diag_df) < 200:
             return
         _mode = "htf_bias" if str(source_tf).upper() == "4H" else "ltf_behaviour"
+        if _mode == "ltf_behaviour":
+            from models.regime_classifier import LTF_SCORE_OUTPUTS as _LTF_SCORE_OUTPUTS
+
+            _scores, _conf = _RC_diag.create_behaviour_score_targets(
+                _diag_df, timeframe=source_tf, symbol=_diag_sym, return_confidence=True,
+            )
+            _summary = {}
+            for _name in _LTF_SCORE_OUTPUTS:
+                _series = _scores[_name]
+                _summary[_name] = {
+                    "mean": round(float(_series.mean()), 4),
+                    "q10": round(float(_series.quantile(0.10)), 4),
+                    "q50": round(float(_series.quantile(0.50)), 4),
+                    "q90": round(float(_series.quantile(0.90)), 4),
+                }
+            logger.info(
+                "Regime[%s mode=%s fold=%s] LTF score diagnostics on %s:\n%s",
+                source_tf,
+                _mode,
+                fold_id if fold_id is not None else RETRAIN_ROLLING_FOLD,
+                _diag_sym,
+                _summary,
+            )
+            return
         _classes = (
             ["BIAS_UP", "BIAS_DOWN", "BIAS_NEUTRAL"]
             if _mode == "htf_bias"
@@ -861,8 +1072,8 @@ def retrain_regime(dry_run: bool = False) -> dict:
       1. HTF classifier (regime_htf.pkl) — 3-class bias (BIAS_UP/DOWN/NEUTRAL).
          mode="htf_bias", trained on 4H bars with realised forward-path bias labels.
          GPU-parallel across both T4s via DataParallel.
-      2. LTF classifier (regime_ltf.pkl) — 4-class behaviour (TRENDING/RANGING/CONSOLIDATING/VOLATILE).
-         mode="ltf_behaviour", trained on 1H bars with realised forward-path behaviour labels.
+      2. LTF score head (regime_ltf.pkl) — five independent behaviour scores.
+         mode="ltf_behaviour", trained on 1H bars with causal score targets.
          Same DataParallel setup — both GPUs stay hot across both trains.
 
     Both classifiers share the same REGIME_FEATURES contract (same feature matrix),
@@ -870,7 +1081,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
     """
     import time as _time
     _t0_regime = _time.perf_counter()
-    logger.info("=== RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 4-class behaviour) ===")
+    logger.info("=== RegimeClassifier retrain (hierarchical: HTF 3-class bias + LTF 5-score behaviour) ===")
     from models.regime_classifier import RegimeClassifier as _RC
     import gc as _gc
 
@@ -920,83 +1131,141 @@ def retrain_regime(dry_run: bool = False) -> dict:
 
     _gc.collect()
 
+    fold_selector = os.getenv("REGIME_ROLLING_FOLDS", "all").strip().lower()
+    available_folds = _available_rolling_folds()
+    if available_folds:
+        if fold_selector in {"all", "rolling", "cv"}:
+            active_folds = available_folds
+        elif fold_selector in {"", "latest", "last"}:
+            active_folds = [available_folds[-1]]
+        else:
+            active_folds = [fold_selector]
+    else:
+        active_folds = [None]
+    logger.info("Regime rolling folds selected: %s", active_folds)
+
     results: dict = {}
     total_samples = 0
+    backed_up: set[str] = set()
 
-    # ── HTF bias classifier (3-class) ────────────────────────────────────────
-    logger.info("Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...")
-    _t_htf_ds = _time.perf_counter()
-    X_4h, y_4h, sw_4h, n_4h = _build_regime_dataset(
-        symbols, source_tf="4H", label_tf="4H",
-        group_gmms=group_gmms_htf, dry_run=dry_run, mode="htf_bias",
-    )
-    logger.info("Regime phase HTF dataset build: %.1fs (%d samples)", _time.perf_counter() - _t_htf_ds, n_4h)
-    total_samples += n_4h
-    if not dry_run and X_4h is not None:
-        _backup_weights(os.path.join(WEIGHTS_DIR, "regime_htf.pkl"))
-        model_htf = _RC(timeframe="4H", mode="htf_bias")
-        _t_htf_train = _time.perf_counter()
-        res_4h = model_htf.train_on_arrays(X_4h, y_4h, sample_weight=sw_4h)
-        logger.info("Regime phase HTF train: %.1fs", _time.perf_counter() - _t_htf_train)
-        del X_4h, y_4h, sw_4h; _gc.collect()
-        if res_4h.get("error"):
-            logger.error("Regime HTF training failed: %s", res_4h["error"])
-            results["HTF"] = res_4h
-        else:
-            logger.info("Regime HTF complete: acc=%.3f, n=%d per_class=%s",
-                        res_4h.get("accuracy", 0), n_4h, res_4h.get("per_class_accuracy", {}))
-            _regime_diagnostics(model_htf, group_gmms_htf, symbols, "4H")
-            results["HTF"] = res_4h
-            log_retrain("regime_classifier_htf", {**res_4h, "status": "complete"})
-        if not _htf_regime_artifact_exists():
-            logger.error("Regime HTF weights were not created at regime_htf.pkl")
+    for fold_i, fold_id in enumerate(active_folds):
+        fold_key = str(fold_id if fold_id is not None else "legacy")
+        fold_results: dict = {}
+        logger.info("=== Regime rolling fold %s/%s: %s ===",
+                    fold_i + 1, len(active_folds), fold_key)
 
-    # ── LTF behaviour classifier (4-class) ───────────────────────────────────
-    logger.info("Regime: training LTF behaviour classifier (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)...")
-    _t_ltf_ds = _time.perf_counter()
-    X_1h, y_1h, sw_1h, n_1h = _build_regime_dataset(
-        symbols, source_tf="1H", label_tf="1H",  # labels sourced from 1H directly (ltf_behaviour mode)
-        group_gmms=group_gmms_ltf, dry_run=dry_run, mode="ltf_behaviour",
-    )
-    logger.info("Regime phase LTF dataset build: %.1fs (%d samples)", _time.perf_counter() - _t_ltf_ds, n_1h)
-    total_samples += n_1h
-    if not dry_run and X_1h is not None:
-        _backup_weights(os.path.join(WEIGHTS_DIR, "regime_ltf.pkl"))
-        model_ltf = _RC(timeframe="1H", mode="ltf_behaviour")
-        _t_ltf_train = _time.perf_counter()
-        res_1h = model_ltf.train_on_arrays(X_1h, y_1h, sample_weight=sw_1h)
-        logger.info("Regime phase LTF train: %.1fs", _time.perf_counter() - _t_ltf_train)
-        del X_1h, y_1h, sw_1h; _gc.collect()
-        if res_1h.get("error"):
-            logger.error("Regime LTF training failed: %s", res_1h["error"])
-            results["LTF"] = res_1h
-        else:
-            logger.info("Regime LTF complete: acc=%.3f, n=%d per_class=%s",
-                        res_1h.get("accuracy", 0), n_1h, res_1h.get("per_class_accuracy", {}))
-            _regime_diagnostics(model_ltf, group_gmms_ltf, symbols, "1H")
-            results["LTF"] = res_1h
-            log_retrain("regime_classifier_ltf", {**res_1h, "status": "complete"})
-        if not _ltf_regime_artifact_exists():
-            logger.error("Regime LTF weights were not created at regime_ltf.pkl")
+        # ── HTF bias classifier (3-class) ────────────────────────────────────
+        logger.info("Regime: training HTF bias classifier (3-class: BIAS_UP/DOWN/NEUTRAL)...")
+        _t_htf_ds = _time.perf_counter()
+        X_4h, y_4h, sw_4h, n_4h = _build_regime_dataset(
+            symbols, source_tf="4H", label_tf="4H",
+            group_gmms=group_gmms_htf, dry_run=dry_run, mode="htf_bias",
+            data_split="train", fold_id=fold_id,
+        )
+        X_4h_val, y_4h_val, sw_4h_val, n_4h_val = _build_regime_dataset(
+            symbols, source_tf="4H", label_tf="4H",
+            group_gmms=group_gmms_htf, dry_run=dry_run, mode="htf_bias",
+            data_split="val", fold_id=fold_id,
+        )
+        logger.info(
+            "Regime phase HTF dataset build fold=%s: %.1fs (train=%d val=%d)",
+            fold_key, _time.perf_counter() - _t_htf_ds, n_4h, n_4h_val,
+        )
+        total_samples += n_4h + n_4h_val
+        if not dry_run and X_4h is not None:
+            htf_path = os.path.join(WEIGHTS_DIR, "regime_htf.pkl")
+            if htf_path not in backed_up:
+                _backup_weights(htf_path)
+                backed_up.add(htf_path)
+            model_htf = _RC(timeframe="4H", mode="htf_bias")
+            model_htf._model = None
+            model_htf._loaded = False
+            _t_htf_train = _time.perf_counter()
+            res_4h = model_htf.train_on_arrays(
+                X_4h, y_4h, sample_weight=sw_4h,
+                X_val=X_4h_val, y_val=y_4h_val, sample_weight_val=sw_4h_val,
+            )
+            logger.info("Regime phase HTF train fold=%s: %.1fs", fold_key, _time.perf_counter() - _t_htf_train)
+            del X_4h, y_4h, sw_4h, X_4h_val, y_4h_val, sw_4h_val; _gc.collect()
+            if res_4h.get("error"):
+                logger.error("Regime HTF training failed fold=%s: %s", fold_key, res_4h["error"])
+                fold_results["HTF"] = res_4h
+            else:
+                logger.info("Regime HTF complete fold=%s: acc=%.3f, train=%d val=%d per_class=%s",
+                            fold_key, res_4h.get("accuracy", 0), n_4h, n_4h_val,
+                            res_4h.get("per_class_accuracy", {}))
+                _regime_diagnostics(model_htf, group_gmms_htf, symbols, "4H", fold_id=fold_id)
+                fold_results["HTF"] = res_4h
+                log_retrain("regime_classifier_htf", {**res_4h, "status": "complete", "fold_id": fold_key})
+            if not _htf_regime_artifact_exists():
+                logger.error("Regime HTF weights were not created at regime_htf.pkl")
 
-    logger.info("Regime retrain total: %.1fs (%d samples)", _time.perf_counter() - _t0_regime, total_samples)
+        # ── LTF behaviour score head (5 outputs) ─────────────────────────────
+        logger.info("Regime: training LTF behaviour score head (trend/range/chop/volatility/consolidation)...")
+        _t_ltf_ds = _time.perf_counter()
+        X_1h, y_1h, sw_1h, n_1h = _build_regime_dataset(
+            symbols, source_tf="1H", label_tf="1H",
+            group_gmms=group_gmms_ltf, dry_run=dry_run, mode="ltf_behaviour",
+            data_split="train", fold_id=fold_id,
+        )
+        X_1h_val, y_1h_val, sw_1h_val, n_1h_val = _build_regime_dataset(
+            symbols, source_tf="1H", label_tf="1H",
+            group_gmms=group_gmms_ltf, dry_run=dry_run, mode="ltf_behaviour",
+            data_split="val", fold_id=fold_id,
+        )
+        logger.info(
+            "Regime phase LTF dataset build fold=%s: %.1fs (train=%d val=%d)",
+            fold_key, _time.perf_counter() - _t_ltf_ds, n_1h, n_1h_val,
+        )
+        total_samples += n_1h + n_1h_val
+        if not dry_run and X_1h is not None:
+            ltf_path = os.path.join(WEIGHTS_DIR, "regime_ltf.pkl")
+            if ltf_path not in backed_up:
+                _backup_weights(ltf_path)
+                backed_up.add(ltf_path)
+            model_ltf = _RC(timeframe="1H", mode="ltf_behaviour")
+            model_ltf._model = None
+            model_ltf._loaded = False
+            _t_ltf_train = _time.perf_counter()
+            res_1h = model_ltf.train_on_arrays(
+                X_1h, y_1h, sample_weight=sw_1h,
+                X_val=X_1h_val, y_val=y_1h_val, sample_weight_val=sw_1h_val,
+            )
+            logger.info("Regime phase LTF train fold=%s: %.1fs", fold_key, _time.perf_counter() - _t_ltf_train)
+            del X_1h, y_1h, sw_1h, X_1h_val, y_1h_val, sw_1h_val; _gc.collect()
+            if res_1h.get("error"):
+                logger.error("Regime LTF training failed fold=%s: %s", fold_key, res_1h["error"])
+                fold_results["LTF"] = res_1h
+            else:
+                logger.info("Regime LTF complete fold=%s: score_accuracy=%.3f, train=%d val=%d mae=%s",
+                            fold_key, res_1h.get("accuracy", 0), n_1h, n_1h_val,
+                            res_1h.get("score_mae", {}))
+                _regime_diagnostics(model_ltf, group_gmms_ltf, symbols, "1H", fold_id=fold_id)
+                fold_results["LTF"] = res_1h
+                log_retrain("regime_classifier_ltf", {**res_1h, "status": "complete", "fold_id": fold_key})
+            if not _ltf_regime_artifact_exists():
+                logger.error("Regime LTF weights were not created at regime_ltf.pkl")
+
+        results[fold_key] = fold_results
+
+    logger.info("Regime retrain total: %.1fs (%d train+val samples)",
+                _time.perf_counter() - _t0_regime, total_samples)
     if dry_run:
-        return {"dry_run": True, "samples": total_samples}  # n_4h + n_1h already accumulated
+        return {"dry_run": True, "samples": total_samples, "folds": active_folds}
 
-    any_error = any(r.get("error") for r in results.values())
+    any_error = any(
+        isinstance(r, dict) and r.get("error")
+        for fold_result in results.values()
+        for r in fold_result.values()
+    )
     if any_error:
-        return {"error": "One or more regime TF trainings failed", "details": results}
+        return {"error": "One or more regime fold trainings failed", "details": results}
 
     return {
         "trained": True,
         "samples": total_samples,
-        "results": {
-            tf: {
-                "accuracy": r.get("accuracy", 0),
-                "per_class_accuracy": r.get("per_class_accuracy", {}),
-            }
-            for tf, r in results.items()
-        },
+        "folds": active_folds,
+        "results": results,
     }
 
 
@@ -1200,7 +1469,10 @@ def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> N
             if "ms" in r:
                 rvecs, rmetas = r["ms"]
                 store.add_batch("market_structures", rvecs, rmetas)
-                logger.info("VectorStore market_structures: +%d vectors (34-dim 4H) for %s", len(rvecs), sym)
+                logger.info(
+                    "VectorStore market_structures: +%d vectors (%d-dim 4H) for %s",
+                    len(rvecs), len(_col_idx), sym,
+                )
 
             if "emb_seqs" in r and gru_model.is_trained:
                 seqs = r["emb_seqs"]
@@ -1334,6 +1606,8 @@ def log_retrain(model_name: str, result: dict) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "model": model_name,
         "retrain_data_split": RETRAIN_DATA_SPLIT,
+        "retrain_rolling_fold": RETRAIN_ROLLING_FOLD,
+        "regime_rolling_folds": os.getenv("REGIME_ROLLING_FOLDS", "all"),
         "split_summary_hash": split_hash,
         "journal_sha256": _file_sha256(JOURNAL_PATH),
         "artifact_hashes": _artifact_hashes(model_name),

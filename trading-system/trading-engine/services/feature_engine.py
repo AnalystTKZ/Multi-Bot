@@ -241,10 +241,27 @@ REGIME_4H_FEATURES = [
     "efficiency_ratio",     # 12  |net n-bar move| / sum(|bar moves|) [0→1, 1=clean trend]
     "autocorr_lag1",        # 13  lag-1 autocorrelation of log-returns — trending>0, ranging≈0
     "hurst_proxy",          # 14  R/S Hurst proxy — H>1=trending, H<1=mean-reverting
+    # ── Directional structure and per-symbol normalised regime features ──────
+    "plus_di",
+    "minus_di",
+    "ema_20_slope",
+    "ema_50_slope",
+    "ema_200_slope",
+    "ema_50_dist_atr",
+    "ema_200_dist_atr",
+    "atr_percentile_500",
+    "rolling_vol_percentile",
+    "bb_width_percentile",
+    "rolling_range_percentile",
+    "candle_body_ratio",
+    "wick_ratio",
+    "range_expansion_zscore",
+    "hh_hl_structure",
+    "symbol_group_code",
 ] + INDEX_FEATURES + [
     "macro_vix_level",      # macro risk-off/on
     "macro_yield_spread",   # yield curve regime signal
-]  # 15 base + 1D context + regime + dynamics + 19 macro = 34 features
+]  # structural + symbol-normalised + 19 macro features
 
 # ─── 1H STRUCTURE classifier features ────────────────────────────────────────
 # Trained on 1H data. No macro indices — too coarse for 1H structure decisions.
@@ -276,7 +293,24 @@ REGIME_1H_FEATURES = [
     "efficiency_ratio",     # 15  |net n-bar move| / sum(|bar moves|) [0→1]
     "autocorr_lag1",        # 16  lag-1 autocorrelation of log-returns
     "hurst_proxy",          # 17  R/S Hurst proxy
-]  # 18 features total
+    # ── Directional structure and per-symbol normalised regime features ──────
+    "plus_di",
+    "minus_di",
+    "ema_20_slope",
+    "ema_50_slope",
+    "ema_200_slope",
+    "ema_50_dist_atr",
+    "ema_200_dist_atr",
+    "atr_percentile_500",
+    "rolling_vol_percentile",
+    "bb_width_percentile",
+    "rolling_range_percentile",
+    "candle_body_ratio",
+    "wick_ratio",
+    "range_expansion_zscore",
+    "hh_hl_structure",
+    "symbol_group_code",
+]  # 34 features total
 
 # ─── Legacy REGIME_FEATURES (shared contract kept for backwards compat) ───────
 # Used by _build_feature_matrix which builds ALL columns regardless of which
@@ -345,6 +379,23 @@ REGIME_FEATURES = [
     "efficiency_ratio",     # 45  |net n-bar move| / sum(|bar moves|) [0→1]
     "autocorr_lag1",        # 46  lag-1 autocorrelation of log-returns [-1→1]
     "hurst_proxy",          # 47  R/S Hurst proxy [0.2→3.0, normalised to 0→1]
+    # ── Regime structure primitives (causal; per-symbol normalised) ─────────
+    "plus_di",                  # 48  positive directional index
+    "minus_di",                 # 49  negative directional index
+    "ema_20_slope",             # 50  EMA20 slope normalised by ATR
+    "ema_50_slope",             # 51  EMA50 slope normalised by ATR
+    "ema_200_slope",            # 52  EMA200 slope normalised by ATR
+    "ema_50_dist_atr",          # 53  close - EMA50 in ATR units
+    "ema_200_dist_atr",         # 54  close - EMA200 in ATR units
+    "atr_percentile_500",       # 55  ATR/close percentile in own rolling history
+    "rolling_vol_percentile",   # 56  return-vol percentile in own rolling history
+    "bb_width_percentile",      # 57  Bollinger bandwidth percentile
+    "rolling_range_percentile", # 58  rolling high-low range percentile
+    "candle_body_ratio",        # 59  |close-open| / candle range
+    "wick_ratio",               # 60  total wick / candle range
+    "range_expansion_zscore",   # 61  true-range expansion z-score
+    "hh_hl_structure",          # 62  higher-high/lower-low structure score [-1,1]
+    "symbol_group_code",        # 63  dollar/cross/yen/gold group scalar
 ] + INDEX_FEATURES + [
     "macro_vix_level",
     "macro_yield_spread",
@@ -1224,13 +1275,70 @@ class FeatureEngine:
             _sorted = np.sort(_atr_window[:-1])
             feats[36] = float(np.searchsorted(_sorted, _cur_atr)) / max(len(_sorted), 1)
 
-        # ── Regime memory (indices 37–41) — prev_regime one-hot ─────────
+        # ── Regime memory (indices 37–44) — prev_regime one-hot/confidence ───
         # Populated externally by callers that track regime state over time.
-        # Defaults to RANGING (class 2) = [0, 0, 1, 0, 0] when not set.
+        # Defaults remain zero here for single-bar live inference.
 
-        # ── Macro features (indices 43–61) ────────────────────────────────
+        # ── Time-series discriminators + score primitives ─────────────────
+        try:
+            if len(df.index) >= 3 and hasattr(df.index, "to_series"):
+                deltas = df.index.to_series().diff().dropna()
+                minutes = float(deltas.median().total_seconds() / 60.0)
+                if minutes <= 7:
+                    regime_n_bar = 10
+                elif minutes <= 30:
+                    regime_n_bar = 14
+                elif minutes <= 90:
+                    regime_n_bar = 24
+                elif minutes <= 300:
+                    regime_n_bar = 50
+                else:
+                    regime_n_bar = 14
+            else:
+                regime_n_bar = 14
+
+            score_frame = None
+            if len(df) >= regime_n_bar:
+                close_s = df["close"]
+                abs_moves = close_s.diff().abs().rolling(regime_n_bar, min_periods=regime_n_bar).sum()
+                net_move = (close_s - close_s.shift(regime_n_bar)).abs()
+                eff_ratio = (net_move / (abs_moves + 1e-9)).clip(0.0, 1.0)
+                feats[REGIME_FEATURES.index("efficiency_ratio")] = float(
+                    np.nan_to_num(eff_ratio.iloc[-1], nan=0.5)
+                )
+
+                log_ret = np.log(close_s / close_s.shift(1)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                ac_arr = _vec_autocorr(log_ret.to_numpy(dtype=np.float64), regime_n_bar)
+                feats[REGIME_FEATURES.index("autocorr_lag1")] = float(ac_arr[-1])
+
+                hi_n = df["high"].rolling(regime_n_bar, min_periods=regime_n_bar).max()
+                lo_n = df["low"].rolling(regime_n_bar, min_periods=regime_n_bar).min()
+                hi_h = df["high"].rolling(max(2, regime_n_bar // 2), min_periods=2).max()
+                lo_h = df["low"].rolling(max(2, regime_n_bar // 2), min_periods=2).min()
+                range_n = (hi_n - lo_n).clip(1e-9)
+                range_h = (hi_h - lo_h).clip(1e-9)
+                hurst_raw = (range_n / range_h / (2 ** 0.5)).clip(0.2, 3.0)
+                hurst_norm = ((hurst_raw - 0.2) / 2.8).clip(0.0, 1.0)
+                feats[REGIME_FEATURES.index("hurst_proxy")] = float(
+                    np.nan_to_num(hurst_norm.iloc[-1], nan=0.5)
+                )
+
+            from services.regime_scores import REGIME_PRIMITIVE_COLUMNS, build_regime_score_frame
+
+            score_frame = build_regime_score_frame(df, symbol=symbol, window=max(regime_n_bar, 20))
+            if not score_frame.empty:
+                last_scores = score_frame.iloc[-1]
+                for name in REGIME_PRIMITIVE_COLUMNS:
+                    if name in REGIME_FEATURES and name in last_scores:
+                        feats[REGIME_FEATURES.index(name)] = float(
+                            np.nan_to_num(last_scores[name], nan=0.0)
+                        )
+        except Exception as exc:
+            logger.debug("get_regime_features: regime score primitives unavailable: %s", exc)
+
+        # ── Macro features ────────────────────────────────────────────────
         macro_df = self._build_macro_frame(df.index, symbol)
-        base_macro = 43  # after 8 base + 5×4 MTF + 6 S/R + 3 regime dynamics + 5 prev_regime + 1 confidence
+        base_macro = REGIME_FEATURES.index(f"idx_{INDEX_NAMES[0]}_ret")
         for i, name in enumerate(INDEX_NAMES):
             feats[base_macro + i] = float(np.clip(macro_df[f"idx_{name}_ret"].iloc[-1] * 100, -5, 5))
         feats[base_macro + len(INDEX_NAMES)]     = float(np.clip(macro_df["macro_vix_level"].iloc[-1], 0, 2))
