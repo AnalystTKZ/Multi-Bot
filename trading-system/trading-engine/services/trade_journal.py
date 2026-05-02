@@ -19,6 +19,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional
 
+from services.feature_engine import RL_STATE_DIM
+
 logger = logging.getLogger(__name__)
 
 _CSV_PATH = "logs/trade_journal.csv"
@@ -63,9 +65,9 @@ class TradeJournal:
         commission = float(trade.get("commission", 0.0))
 
         meta = trade.get("signal_metadata", {}) or {}
-        state_at_entry = trade.get("state_at_entry", [0.0] * 42)
-        if len(state_at_entry) != 42:
-            state_at_entry = ([0.0] * 42)[:42]
+        state_at_entry = trade.get("state_at_entry", [0.0] * RL_STATE_DIM)
+        if len(state_at_entry) != RL_STATE_DIM:
+            state_at_entry = (list(state_at_entry) + [0.0] * RL_STATE_DIM)[:RL_STATE_DIM]
 
         rl_action = int(meta.get("rl_action", 0))
 
@@ -129,12 +131,12 @@ class TradeJournal:
                 "p_bull": float(meta.get("p_bull", 0.5)),
                 "p_bear": float(meta.get("p_bear", 0.5)),
                 "quality_score": float(meta.get("quality_score", 0.5)),
+                "ev": float(meta.get("ev", 0.0)),
                 "ensemble_score": float(meta.get("ensemble_score", 0.0)),
                 "regime": str(meta.get("regime", "")),
-                "sentiment_score": float(meta.get("sentiment_score", 0.0)),
-                "sentiment_label": str(meta.get("sentiment_label", "neutral")),
-                "sentiment_backend": str(meta.get("sentiment_backend", "neutral")),
-                "sentiment_confidence": float(meta.get("sentiment_confidence", 0.0)),
+                "trade_regime": str(meta.get("trade_regime", "")),
+                "regime_scores": meta.get("regime_scores", {}),
+                "expected_variance": float(meta.get("expected_variance", 0.1)),
                 "rl_action": rl_action,
             },
             "entry_reason": str(trade.get("entry_reason", "")),

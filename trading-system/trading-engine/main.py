@@ -36,7 +36,7 @@ from services.trade_journal import TradeJournal
 from services.signal_pipeline import SignalPipeline
 from services.order_executor import ExecutionEngine, ExecutionRequest
 from services.paper_trading_service import PaperTradingService
-from services.feature_engine import FeatureEngine
+from services.feature_engine import FeatureEngine, RL_STATE_DIM
 from monitors.portfolio_manager import PortfolioManager
 
 # ML models — only imported when ML_ENABLED=true
@@ -44,7 +44,6 @@ if settings.ML_ENABLED:
     from models.gru_lstm_predictor import GRULSTMPredictor
     from models.regime_classifier import RegimeClassifier
     from models.quality_scorer import QualityScorer
-    from models.sentiment_model import SentimentModel
     from models.rl_agent import RLAgent
 
 logging.basicConfig(
@@ -135,10 +134,10 @@ class ProductionTradingEngine:
         logger.info("ML_ENABLED=true — loading models")
         _ensure_mpl_config_dir()
         model_factories = [
-            ("regime", RegimeClassifier),
+            ("regime_htf", lambda: RegimeClassifier(timeframe="4H", mode="htf_bias")),
+            ("regime_ltf", lambda: RegimeClassifier(timeframe="1H", mode="ltf_behaviour")),
             ("quality", QualityScorer),
             ("gru_lstm", GRULSTMPredictor),
-            ("sentiment", SentimentModel),
             ("rl", RLAgent),
         ]
         self._ml_models = {}
@@ -154,13 +153,23 @@ class ProductionTradingEngine:
             else:
                 logger.warning("Skipping %s: weights missing or load failed", model_id)
         # Publish model status to Redis
-        for model_id in ["regime", "quality", "gru_lstm", "sentiment", "rl"]:
+        for model_id in ["regime_htf", "regime_ltf", "quality", "gru_lstm", "rl"]:
             model = self._ml_models.get(model_id)
             self._state_mgr.set_ml_model_status(model_id, {
                 "name": model.__class__.__name__ if model is not None else "",
                 "status": "active" if model is not None else "untrained",
                 "accuracy": 0.0,
             })
+        missing_required = [
+            model_id
+            for model_id in ["regime_htf", "regime_ltf", "quality", "gru_lstm", "rl"]
+            if model_id not in self._ml_models
+        ]
+        if missing_required:
+            raise RuntimeError(
+                "ML_ENABLED=true but required models are unavailable: "
+                + ", ".join(missing_required)
+            )
         if "rl" in self._ml_models:
             self._state_mgr.set_rl_agent_state({"episodes": 0, "avg_reward": 0.0})
 
@@ -254,6 +263,51 @@ class ProductionTradingEngine:
 
     # ─── Market data handler ─────────────────────────────────────────────────
 
+    def _apply_quality_gate(self, signal: dict, bar) -> Optional[dict]:
+        """Run QualityScorer after PM enrichment, when side and RR are known."""
+        qs_model = self._ml_models.get("quality") if settings.ML_ENABLED else None
+        if qs_model is None:
+            return signal
+
+        from services.feature_engine import QUALITY_FEATURES
+
+        meta = signal.setdefault("signal_metadata", {})
+        ml_base = dict(meta)
+        ml_base.setdefault("p_bull_gru", meta.get("p_bull", 0.5))
+        ml_base.setdefault("p_bear_gru", meta.get("p_bear", 0.5))
+        ml_base.setdefault("regime", meta.get("regime", "BIAS_NEUTRAL"))
+        ml_base.setdefault("trade_regime", meta.get("trade_regime", ""))
+        ml_base.setdefault("regime_scores", meta.get("regime_scores", {}))
+        ml_base.setdefault("spread_pips", meta.get("spread_at_signal", 1.0))
+        ml_base.setdefault("news_in_30min", meta.get("news_in_30min", 0))
+        ml_base.setdefault("session", meta.get("session", "INACTIVE"))
+
+        ctx = {
+            "trader_id": signal.get("trader_id", "ml_trader"),
+            "side": signal.get("side", ""),
+            "rr_ratio": float(signal.get("rr_ratio", 1.5)),
+        }
+        features = self._feature_engine.get_quality_features(ctx, ml_base, bar)
+        result = qs_model.predict(dict(zip(QUALITY_FEATURES, features)))
+        ev = float(result["ev"])
+        quality_score = float(result["quality_score"])
+        meta["ev"] = ev
+        meta["quality_score"] = quality_score
+        signal["ev"] = ev
+        signal["quality_score"] = quality_score
+
+        min_ev = float(os.getenv("MIN_EV_THRESHOLD", "0.0"))
+        if ev < min_ev:
+            logger.debug(
+                "Signal rejected by QualityScorer: %s %s ev=%.3f < %.3f",
+                signal.get("symbol"),
+                signal.get("side"),
+                ev,
+                min_ev,
+            )
+            return None
+        return signal
+
     def on_market_data(self, event: dict) -> None:
         """Handler for MARKET_DATA Redis event (Contract 1)."""
         symbol = event.get("symbol", "")
@@ -313,6 +367,11 @@ class ProductionTradingEngine:
                     logger.debug("Signal rejected by PortfolioManager: %s %s", sig.get("trader_id"), sig.get("symbol"))
                     continue
 
+                enriched = self._apply_quality_gate(enriched, df.iloc[-1])
+                if enriched is None:
+                    continue
+                self._pipeline._publish_signal(enriched)
+
                 req = ExecutionRequest(
                     symbol=enriched["symbol"],
                     side=enriched["side"],
@@ -325,7 +384,7 @@ class ProductionTradingEngine:
                     rr_ratio=float(enriched.get("rr_ratio", 1.5)),
                     correlation_id=enriched.get("correlation_id", ""),
                     signal_metadata=enriched.get("signal_metadata", {}),
-                    state_at_entry=enriched.get("state_at_entry", [0.0] * 43),
+                    state_at_entry=enriched.get("state_at_entry", [0.0] * RL_STATE_DIM),
                 )
                 trade = self._executor.execute_trade(req, portfolio)
                 if trade:

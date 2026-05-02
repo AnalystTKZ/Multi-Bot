@@ -28,10 +28,12 @@ from typing import Deque, Dict, List, Optional, Tuple
 import numpy as np
 
 from models.base_model import BaseModel
+from services.feature_engine import RL_STATE_DIM
 
 logger = logging.getLogger(__name__)
 
-N_STATE = 43
+N_STATE = RL_STATE_DIM
+RL_STATE_SCHEMA_VERSION = "technical_unified_v2"
 
 # Action space layout
 # [0]     NoTrade
@@ -407,6 +409,15 @@ class RLAgent(BaseModel):
             try:
                 os.makedirs(path, exist_ok=True)
                 self._model.save(os.path.join(path, "model.zip"))
+                with open(os.path.join(path, "state_schema.json"), "w") as f:
+                    json.dump(
+                        {
+                            "version": RL_STATE_SCHEMA_VERSION,
+                            "n_state": N_STATE,
+                        },
+                        f,
+                        indent=2,
+                    )
             except Exception as exc:
                 logger.error("RLAgent.save failed: %s", exc)
 
@@ -415,6 +426,26 @@ class RLAgent(BaseModel):
             from stable_baselines3 import PPO
             model_file = os.path.join(path, "model.zip")
             if os.path.exists(model_file):
+                schema_file = os.path.join(path, "state_schema.json")
+                if not os.path.exists(schema_file):
+                    logger.warning(
+                        "RLAgent: refusing to load %s because state_schema.json is missing; retrain RL.",
+                        model_file,
+                    )
+                    return
+                with open(schema_file) as f:
+                    schema = json.load(f)
+                if (
+                    schema.get("version") != RL_STATE_SCHEMA_VERSION
+                    or int(schema.get("n_state", -1)) != N_STATE
+                ):
+                    logger.warning(
+                        "RLAgent: refusing stale PPO state schema %s; expected version=%s n_state=%d.",
+                        schema,
+                        RL_STATE_SCHEMA_VERSION,
+                        N_STATE,
+                    )
+                    return
                 self._model = PPO.load(model_file, device=_RL_DEVICE)
                 self._loaded = True
                 logger.info("RLAgent: PPO model loaded from %s", model_file)

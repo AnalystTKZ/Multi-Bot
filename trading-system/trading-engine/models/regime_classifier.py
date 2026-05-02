@@ -931,13 +931,10 @@ class RegimeClassifier(BaseModel):
           - BIAS_NEUTRAL (2): explicit low-ADX, weak-stack, low-drift, low-efficiency middle-volatility state
           Persistence: 20 bars (4H) for BIAS_UP/DOWN; 5 bars for BIAS_NEUTRAL.
 
-        mode="ltf_behaviour" (1H): 4-class behaviour labels (direction-agnostic)
-          Priority order:
-          1. VOLATILE (3):       ATR expansion/stress
-          2. TRENDING (0):       strong ADX, full EMA stack, meaningful drift, efficient movement
-          3. RANGING (1):        explicit sideways oscillation, not a fallback class
-          4. CONSOLIDATING (2):  low/falling ATR compression without trend/volatile conditions
-          Persistence: TRENDING=20 bars, VOLATILE=10 bars, RANGING/CONSOLIDATING=5 bars.
+        mode="ltf_behaviour" (1H): independent behaviour scores, not one forced
+          flat class. The target columns are trend_score, range_score, chop_score,
+          volatility_percentile, and consolidation_score. A derived trade_regime
+          is produced downstream from those scores.
 
         Bars with confidence < 0.4 are "ambiguous" — by default retraining drops
         them before fitting the MLP so the classifier learns clean regime boundaries.

@@ -68,6 +68,9 @@ JOURNAL_CSV_COLUMNS = [
 for d in [BT_RESULTS, BT_LOGS, ENGINE_DIR / "logs"]:
     d.mkdir(parents=True, exist_ok=True)
 
+sys.path.insert(0, str(ENGINE_DIR))
+from services.feature_engine import FeatureEngine
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -307,7 +310,6 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
         logger.warning("Round %d: trade_log is empty — nothing to journal", round_num)
         return 0
 
-    rng = np.random.default_rng(round_num)
     written = 0
     source_split = _source_split_for_round(round_num)
     split_hash = _split_summary_hash()
@@ -320,6 +322,7 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
         # Write CSV header only on first write
         if JOURNAL_CSV.stat().st_size == 0:
             csv_writer.writeheader()
+        _fe = FeatureEngine()
 
         for tr in trade_log:
             trader  = tr.get("trader", tr.get("trader_id", "ml_trader"))
@@ -351,61 +354,6 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
             commission = abs(pnl) * 0.001
             pnl_net    = round(pnl - commission, 4)
 
-            # Build real 43-dim RL state from backtest trade fields
-            # HTF bias encoding: BIAS_UP=0, BIAS_DOWN=1, BIAS_NEUTRAL=2 → /2.0
-            regime_map = {
-                "BIAS_UP": 0.0, "BIAS_DOWN": 1.0, "BIAS_NEUTRAL": 2.0,
-                # LTF classes also map (approximate)
-                "TRENDING": 0.0, "RANGING": 2.0, "VOLATILE": 2.0, "CONSOLIDATING": 2.0,
-            }
-            _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
-            trader_idx = int(trader.split("_")[1]) - 1 if trader.startswith("trader_") else 0  # 0-4
-
-            state_vec = [0.0] * 43
-            # [0-5] ML predictions
-            state_vec[0] = float(tr.get("p_bull", 0.5))
-            state_vec[1] = float(tr.get("p_bear", 0.5))
-            state_vec[2] = float(np.clip(conf, 0.0, 1.0))            # entry_depth proxy
-            state_vec[3] = float(regime_map.get(tr.get("regime", "BIAS_NEUTRAL"), 2.0) / 2.0)
-            state_vec[4] = 0.0                                        # sentiment — unavailable
-            state_vec[5] = float(tr.get("quality_score", 0.5))
-            # [6-13] Market structure
-            state_vec[6]  = float(np.clip(tr.get("adx", 20.0), 0, 100) / 100.0)
-            state_vec[7]  = float(np.clip(tr.get("ema_stack", 0), -2, 2) / 2.0)
-            _atr  = float(tr.get("atr", 0.001))
-            _close = float(tr.get("entry", 1.0))
-            state_vec[8]  = float(np.clip(_atr / (_close + 1e-9) * 1000, 0, 10))
-            state_vec[9]  = float(tr.get("bb_width", 0.0))
-            state_vec[10] = float(bool(tr.get("bos_bull", False)))
-            state_vec[11] = float(bool(tr.get("bos_bear", False)))
-            state_vec[12] = float(bool(tr.get("fvg_bull", False)))
-            state_vec[13] = float(bool(tr.get("fvg_bear", False)))
-            # [14-18] Session context from timestamp
-            state_vec[14] = float(2 <= pd.Timestamp(ts_str).hour < 7)
-            state_vec[15] = float(7 <= pd.Timestamp(ts_str).hour < 12)
-            state_vec[16] = float(13 <= pd.Timestamp(ts_str).hour < 18)
-            state_vec[17] = float(pd.Timestamp(ts_str).hour == 12)
-            state_vec[18] = 0.0                                       # news_proximity
-            # [19-23] Strategy signal one-hot
-            if 0 <= trader_idx <= 4:
-                state_vec[19 + trader_idx] = 1.0
-            # [24-29] Portfolio state
-            state_vec[24] = 0.0                                       # open_positions
-            state_vec[25] = float(np.clip(tr.get("drawdown", 0.0), 0, 0.2) / 0.2)
-            state_vec[26] = 0.0                                       # daily_pnl
-            state_vec[27] = 0.0                                       # trades_today
-            state_vec[28] = 0.0                                       # last_result
-            state_vec[29] = float(np.clip(tr.get("equity_pct", 1.0), 0, 2))
-            # [30-33] Instrument one-hot
-            inst_idx = _INSTRUMENT_IDX.get(symbol, -1)
-            if 0 <= inst_idx <= 3:
-                state_vec[30 + inst_idx] = 1.0
-            # [34-41] ATR lag ratios — not available in backtest, default neutral
-            for _i in range(8):
-                state_vec[34 + _i] = 1.0
-            state_vec = [float(np.clip(v, -10.0, 10.0)) for v in state_vec]
-
-            # JSONL entry (full format compatible with retrain_incremental)
             entry_session = "london"
             try:
                 h = pd.Timestamp(ts_str).hour
@@ -415,6 +363,45 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                     entry_session = "ny"
             except Exception:
                 pass
+
+            regime_scores = tr.get("regime_scores", {}) or {}
+            if not isinstance(regime_scores, dict):
+                regime_scores = {}
+            bar_state = pd.Series({
+                "close": entry,
+                "atr_14": float(tr.get("atr", 0.001)),
+                "adx_14": float(tr.get("adx", 20.0)),
+                "ema_stack": float(tr.get("ema_stack", 0)),
+                "bb_width": float(tr.get("bb_width", 0.0)),
+                "bos_bull": float(bool(tr.get("bos_bull", False))),
+                "bos_bear": float(bool(tr.get("bos_bear", False))),
+                "fvg_bull": float(bool(tr.get("fvg_bull", False))),
+                "fvg_bear": float(bool(tr.get("fvg_bear", False))),
+                "range_valid": float(bool(tr.get("range_valid", False))),
+                "pullback_valid": float(bool(tr.get("pullback_valid", False))),
+                "vol_slope_seq": float(tr.get("vol_slope", 0.0)),
+            }, name=pd.Timestamp(ts_str))
+            state_vec = _fe.get_rl_state(
+                bar=bar_state,
+                portfolio={
+                    "drawdown_pct": float(tr.get("drawdown", 0.0)),
+                    "equity_norm": float(tr.get("equity_pct", 1.0)),
+                },
+                signals={"ml_trader": True, "session": entry_session.upper()},
+                ml_preds={
+                    "p_bull": float(tr.get("p_bull", 0.5)),
+                    "p_bear": float(tr.get("p_bear", 0.5)),
+                    "entry_depth": float(tr.get("entry_depth", conf)),
+                    "expected_move": float(tr.get("expected_move", 0.0)),
+                    "expected_variance": float(tr.get("expected_variance", 0.1)),
+                    "regime": str(tr.get("regime", "BIAS_NEUTRAL")),
+                    "regime_scores": regime_scores,
+                    "trade_regime": str(tr.get("trade_regime", "")),
+                    "vol_slope": float(tr.get("vol_slope", 0.0)),
+                    "session": entry_session.upper(),
+                },
+                symbol=symbol,
+            ).astype(float).tolist()
 
             source = "backtest_train" if round_num == 0 else f"backtest_round_{round_num}"
             correlation_id = str(tr.get("correlation_id") or f"bt_r{round_num}_{written:06d}")
@@ -452,21 +439,28 @@ def trade_log_to_journal(result_path: Path, round_num: int) -> int:
                     "p_bull":              float(tr.get("p_bull", 0.5)),
                     "p_bear":              float(tr.get("p_bear", 0.5)),
                     "quality_score":       float(tr.get("quality_score", 0.5)),
+                    "ev":                  float(tr.get("ev", 0.0)),
                     "regime":              str(tr.get("regime", "RANGING")),
+                    "trade_regime":        str(tr.get("trade_regime", "")),
+                    "regime_scores":       regime_scores,
+                    "expected_move":       float(tr.get("expected_move", 0.0)),
                     "expected_variance":   float(tr.get("expected_variance", 0.1)),
-                    "regime_duration":     float(tr.get("regime_duration", 0.5)),
                     "vol_slope":           float(tr.get("vol_slope", 0.0)),
-                    "sentiment_score":     0.0,
                     "ensemble_score":      float(tr.get("confidence", 0.5)),
-                    "sentiment_label":     "neutral",
-                    "sentiment_backend":   "neutral",
-                    "sentiment_confidence": 0.0,
                 },
                 "signal_metadata": {
                     "run_id":    trade_run_id,
                     "atr":       float(tr.get("atr", 0.001)),
                     "adx":       float(tr.get("adx", 20.0)),
                     "ema_stack": float(tr.get("ema_stack", 0)),
+                    "session":   entry_session.upper(),
+                    "regime":    str(tr.get("regime", "BIAS_NEUTRAL")),
+                    "trade_regime": str(tr.get("trade_regime", "")),
+                    "regime_scores": regime_scores,
+                    "quality_score": float(tr.get("quality_score", 0.5)),
+                    "ev":        float(tr.get("ev", 0.0)),
+                    "expected_variance": float(tr.get("expected_variance", 0.1)),
+                    "vol_slope": float(tr.get("vol_slope", 0.0)),
                     "directional_group": str(tr.get("directional_group", "")),
                     "same_timestamp_entries": int(tr.get("same_timestamp_entries", 1)),
                     "same_timestamp_group_entries": int(tr.get("same_timestamp_group_entries", 1)),

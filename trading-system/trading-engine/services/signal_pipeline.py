@@ -34,10 +34,11 @@ def _first_present_frame(df_htf: dict, *keys: str, default=None):
 
 class SignalPipeline:
     """
-    Per-bar pipeline: ML inference → _compute_ml_signal → ensemble gate → publish.
+    Per-bar pipeline: ML inference → RL threshold → market-decision gate.
 
     Signal logic mirrors run_backtest._compute_backtest_signal (source of truth).
-    QualityScorer / EV gate runs after PM enrichment in main.py (needs rr_ratio).
+    PortfolioManager and QualityScorer run after this in main.py; only the final
+    enriched signal is published.
     """
 
     def __init__(
@@ -113,7 +114,7 @@ class SignalPipeline:
         bar = df.iloc[-1]
         session = self._detect_session(now)
         if rl_agent is not None:
-            rl_state = self._build_rl_state(ml_preds, bar, portfolio)
+            rl_state = self._build_rl_state(symbol, ml_preds, bar, portfolio)
             _trader_id, rl_threshold = rl_agent.decide(
                 rl_state, {"ml_trader": True}, session
             )
@@ -122,7 +123,8 @@ class SignalPipeline:
                 return []
         else:
             rl_threshold = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
-            rl_state = np.zeros(43, dtype=np.float32)
+            from services.feature_engine import RL_STATE_DIM
+            rl_state = np.zeros(RL_STATE_DIM, dtype=np.float32)
 
         from models.rl_agent import _encode_action
         rl_action = _encode_action(rl_threshold) if rl_threshold > 0 else 0
@@ -139,13 +141,7 @@ class SignalPipeline:
         meta["rl_action"] = rl_action
         meta["rl_threshold"] = rl_threshold
 
-        # Enrich metadata with sentiment and macro context
         meta["session"] = session
-        meta["sentiment_label"] = ml_preds.get("sentiment_label", "neutral")
-        meta["sentiment_backend"] = ml_preds.get("sentiment_backend", "neutral")
-        meta["sentiment_confidence"] = ml_preds.get("sentiment_confidence", 0.0)
-        from services.feature_engine import MACRO_FEATURES
-        meta["macro"] = {k: float(ml_preds.get(k, 0.0)) for k in MACRO_FEATURES}
 
         logger.info(
             "Signal APPROVED ml_trader %s %s — conf=%.3f rl_thresh=%.2f htf=%s ltf=%s "
@@ -159,7 +155,6 @@ class SignalPipeline:
             ml_preds.get("p_bear", 0.5),
         )
 
-        self._publish_signal(raw_signal)
         return [raw_signal]
 
     @staticmethod
@@ -174,115 +169,21 @@ class SignalPipeline:
         return "INACTIVE"
 
     def _build_rl_state(
-        self, ml_preds: dict, bar, portfolio: Optional[dict]
+        self, symbol: str, ml_preds: dict, bar, portfolio: Optional[dict]
     ) -> np.ndarray:
         """
-        Build the 43-dim RL state vector from inference outputs + portfolio context.
-
-        Dims 0–2:   GRU direction (p_bull, p_bear, uncertainty)
-        Dims 3–5:   HTF regime probabilities [BIAS_UP, BIAS_DOWN, BIAS_NEUTRAL]
-        Dims 6–9:   LTF regime probabilities [TRENDING, RANGING, CONSOLIDATING, VOLATILE]
-        Dims 10–11: Sentiment (score, confidence)
-        Dims 12–19: ATR history ratios (8 lags)
-        Dim  20:    Spread normalized
-        Dims 21–23: Time (sin_hour, cos_hour, session_enc)
-        Dims 24–28: Portfolio (win_rate, drawdown, trades_today, open_pos, daily_pnl)
-        Dims 29–32: Market structure (adx, vol_slope, vix, yield_spread)
-        Dims 33–36: Auction indicators (vwap_dist, vol_delta, wick_ratio, cum_delta)
-        Dims 37–39: Regime quality (ema_stack, htf_conf, ltf_conf)
-        Dims 40–42: Extra context (atr_ratio, volume_ratio, direction_strength)
+        Build the canonical 43-dim RL state vector from the shared FeatureEngine
+        contract. This keeps live RL, journal replay, and retraining aligned.
         """
-        from services.feature_engine import _ATR_LAGS
-
-        port = portfolio or {}
-
-        # HTF / LTF regime probability arrays
-        htf_p = ml_preds.get("regime_proba") or [1/3, 1/3, 1/3]
-        if len(htf_p) < 3:
-            htf_p = list(htf_p) + [0.0] * (3 - len(htf_p))
-
-        ltf_p = ml_preds.get("regime_ltf_conf")
-        if ltf_p is None or isinstance(ltf_p, float):
-            # Scalar confidence — rebuild as one-hot-ish
-            ltf_id = int(ml_preds.get("regime_ltf_id", 0))
-            c = float(ltf_p or 0.4)
-            ltf_p = [(c if i == ltf_id else (1 - c) / 3) for i in range(4)]
-        if len(ltf_p) < 4:
-            ltf_p = list(ltf_p) + [0.0] * (4 - len(ltf_p))
-
-        atr_lags = [
-            float(np.clip(ml_preds.get(f"atr_lag_{lag}", 1.0), 0.0, 5.0))
-            for lag in _ATR_LAGS
-        ]
-
-        now_h = datetime.now(timezone.utc).hour
-        _session_enc = {"INACTIVE": 0.0, "ASIAN": 1/3, "LONDON": 2/3, "NY": 1.0}
-        session_str = self._detect_session(datetime.now(timezone.utc))
-        session_enc = _session_enc.get(session_str, 0.0)
-
-        state = np.array([
-            # GRU direction
-            float(np.clip(ml_preds.get("p_bull", 0.5), 0.0, 1.0)),          # 0
-            float(np.clip(ml_preds.get("p_bear", 0.5), 0.0, 1.0)),          # 1
-            float(np.clip(ml_preds.get("expected_variance", 0.1), 0.0, 1.0)), # 2
-            # HTF regime
-            float(np.clip(htf_p[0], 0.0, 1.0)),                             # 3
-            float(np.clip(htf_p[1], 0.0, 1.0)),                             # 4
-            float(np.clip(htf_p[2], 0.0, 1.0)),                             # 5
-            # LTF regime
-            float(np.clip(ltf_p[0], 0.0, 1.0)),                             # 6
-            float(np.clip(ltf_p[1], 0.0, 1.0)),                             # 7
-            float(np.clip(ltf_p[2], 0.0, 1.0)),                             # 8
-            float(np.clip(ltf_p[3], 0.0, 1.0)),                             # 9
-            # Sentiment
-            float(np.clip(ml_preds.get("sentiment_score", 0.0), -1.0, 1.0)), # 10
-            float(np.clip(ml_preds.get("sentiment_confidence", 0.5), 0.0, 1.0)), # 11
-            # ATR history ratios (8 lags)
-            *atr_lags,                                                        # 12–19
-            # Spread
-            float(np.clip(ml_preds.get("spread_pips", 1.0) / 5.0, 0.0, 1.0)), # 20
-            # Time cyclical + session
-            float(np.sin(2 * np.pi * now_h / 24)),                          # 21
-            float(np.cos(2 * np.pi * now_h / 24)),                          # 22
-            float(session_enc),                                               # 23
-            # Portfolio context
-            float(np.clip(port.get("win_rate_10", 0.5), 0.0, 1.0)),         # 24
-            float(np.clip(port.get("drawdown_pct", 0.0) / 0.20, 0.0, 1.0)), # 25
-            float(np.clip(port.get("trades_today", 0) / 5.0, 0.0, 1.0)),    # 26
-            float(np.clip(port.get("open_positions", 0) / 5.0, 0.0, 1.0)),  # 27
-            float(np.clip(
-                port.get("daily_pnl", 0.0) / (port.get("equity", 1000.0) + 1e-9),
-                -0.10, 0.10,
-            )),                                                               # 28
-            # Market structure
-            float(np.clip(float(bar.get("adx_14", 20.0)) / 50.0, 0.0, 1.0)), # 29
-            float(np.clip(float(ml_preds.get("vol_slope", 0.0)), -1.0, 1.0)), # 30
-            float(np.clip(ml_preds.get("macro_vix_level", 0.2), 0.0, 1.0)), # 31
-            float(np.clip(
-                ml_preds.get("macro_yield_spread", 0.0) / 0.02, -1.0, 1.0
-            )),                                                               # 32
-            # Auction indicators (from bar computed in feature engine)
-            float(np.clip(float(bar.get("vwap_dist_atr", 0.0)) / 3.0, -1.0, 1.0)), # 33
-            float(np.clip(float(bar.get("volume_delta_pct", 0.0)), -1.0, 1.0)),     # 34
-            float(np.clip(float(bar.get("wick_auction_ratio", 0.5)), 0.0, 1.0)),    # 35
-            float(np.clip(float(ml_preds.get("cum_delta_norm", 0.0)), -1.0, 1.0)),  # 36
-            # Regime quality signals
-            float(np.clip(float(bar.get("ema_stack", 0)) / 2.0, -1.0, 1.0)), # 37
-            float(np.clip(float(max(htf_p)), 0.0, 1.0)),                    # 38
-            float(np.clip(float(max(ltf_p)), 0.0, 1.0)),                    # 39
-            # Extra context
-            float(np.clip(
-                float(ml_preds.get("atr_normalized", ml_preds.get("atr_ratio", 1.0)))
-                / 3.0, 0.0, 1.0
-            )),                                                               # 40
-            float(np.clip(float(ml_preds.get("volume_ratio", 1.0)) / 3.0, 0.0, 1.0)), # 41
-            float(np.clip(
-                max(ml_preds.get("p_bull", 0.5), ml_preds.get("p_bear", 0.5)) * 2.0 - 1.0,
-                -1.0, 1.0,
-            )),                                                               # 42
-        ], dtype=np.float32)
-
-        return np.nan_to_num(state, nan=0.0, posinf=1.0, neginf=-1.0)
+        ml_preds = dict(ml_preds or {})
+        ml_preds["session"] = self._detect_session(datetime.now(timezone.utc))
+        return self._fe.get_rl_state(
+            bar=bar,
+            portfolio=portfolio or {},
+            signals={"ml_trader": True, "session": ml_preds["session"]},
+            ml_preds=ml_preds,
+            symbol=symbol,
+        )
 
     def _run_ml_inference(
         self, symbol: str, df: pd.DataFrame, df_htf: dict
@@ -351,39 +252,8 @@ class SignalPipeline:
                 logger.error("LTF Regime inference error: %s", exc)
                 raise
 
-        # Sentiment
-        sent_model = self._ml.get("sentiment")
-        if sent_model:
-            try:
-                headline = f"{symbol} market update"
-                r = sent_model.analyze(headline, instrument=symbol)
-                preds["sentiment_score"] = r.get("score")
-                preds["sentiment_label"] = r.get("label")
-                preds["sentiment_backend"] = r.get("backend", "neutral")
-                preds["sentiment_confidence"] = r.get("confidence", 0.0)
-            except Exception as exc:
-                logger.error("Sentiment inference error: %s", exc)
-                raise
-
         # Spread
         preds["spread_pips"] = 1.0  # default; updated by DataFetcher in main.py
-
-        # Macro snapshot (indices + fundamentals) for model/strategy context
-        ts = df.index[-1] if len(df.index) else None
-        if ts is not None:
-            preds.update(self._fe.get_macro_snapshot(symbol, ts))
-
-        # ATR history ratios (for RL state)
-        from indicators.market_structure import compute_atr
-        atr = compute_atr(df, 14)
-        from services.feature_engine import _ATR_LAGS
-        atr_current = float(atr.iloc[-1]) if len(atr.dropna()) > 0 else 0.001
-        for lag in _ATR_LAGS:
-            if len(atr) > lag:
-                past = float(atr.iloc[-lag - 1]) if not pd.isna(atr.iloc[-lag - 1]) else atr_current
-                preds[f"atr_lag_{lag}"] = float(np.clip(atr_current / (past + 1e-9), 0, 5))
-            else:
-                preds[f"atr_lag_{lag}"] = 1.0
 
         # QualityScorer (EV) runs post-signal in main.py after PM enrichment.
         # It requires actual rr_ratio from the enriched signal, so it cannot run here.
@@ -394,7 +264,6 @@ class SignalPipeline:
         """Rule-only predictions when ML_ENABLED=false (no ML scoring applied)."""
         return {
             "spread_pips": 1.0,
-            **{f"atr_lag_{l}": 1.0 for l in [1, 4, 8, 24, 48, 96, 168, 336]},
         }
 
     def _compute_ml_signal(
@@ -576,7 +445,6 @@ class SignalPipeline:
                 "pullback_level":    float(bar.get("pullback_level", float("nan"))),
                 "adx_at_signal":     float(ml_preds.get("adx_14", ml_preds.get("adx", 20.0))),
                 "atr_ratio_at_signal": float(ml_preds.get("atr_normalized", ml_preds.get("atr_ratio", 1.0))),
-                "volume_ratio":      float(ml_preds.get("volume_ratio", 1.0)),
                 "spread_at_signal":  float(ml_preds.get("spread_pips", 1.0)),
                 "news_in_30min":     int(ml_preds.get("news_in_30min", 0)),
             },
@@ -598,10 +466,12 @@ class SignalPipeline:
                 "session": str(meta.get("session", "")),
                 "rl_action": int(meta.get("rl_action", 0)),
                 "quality_score": float(meta.get("quality_score", 0.5)),
+                "ev": float(meta.get("ev", 0.0)),
                 "p_bull": float(meta.get("p_bull", 0.5)),
                 "p_bear": float(meta.get("p_bear", 0.5)),
                 "regime": str(meta.get("regime", "")),
-                "sentiment_score": float(meta.get("sentiment_score", 0.0)),
+                "regime_ltf": str(meta.get("regime_ltf", "")),
+                "trade_regime": str(meta.get("trade_regime", "")),
                 "rr_ratio": float(sig.get("rr_ratio", 1.5)),
             },
         }

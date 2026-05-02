@@ -228,42 +228,41 @@ REGIME_1H_FEATURES = [
 ]
 
 QUALITY_FEATURES = [
-    "strategy_id",          # 0
-    "signal_direction",     # 1
-    "rr_ratio",             # 2
-    "p_bull_gru",           # 3
-    "p_bear_gru",           # 4
-    "regime_class",         # 5
-    "sentiment_score",      # 6
-    "adx_at_signal",        # 7
-    "atr_ratio_at_signal",  # 8
-    "volume_ratio",         # 9
-    "spread_at_signal",     # 10
-    "session_at_signal",    # 11
-    "news_in_30min",        # 12
-    "strategy_win_rate_20", # 13  rolling 20-trade win rate (medium-term)
-    "gru_uncertainty",      # 14  expected_variance from GRU variance head
-    "regime_duration",      # 15  normalised bars since last regime change [0,1]
-    "vol_slope_at_signal",  # 16  Δ(ATR/close)*1000 — expanding vs contracting vol
-    # ── New discriminative features (added to reduce quality_block=0 failure) ──
-    "strategy_win_rate_5",  # 17  rolling 5-trade win rate — short-term hot/cold streak
-    "strategy_win_rate_50", # 18  rolling 50-trade win rate — long-term baseline
-    "gru_signal_agreement", # 19  1.0 if GRU direction agrees with signal side, 0.0 if not
-                            #     Key discriminator: GRU disagrees → negative EV setup
+    "strategy_id",             # 0  numeric strategy code, stable across train/inference
+    "signal_direction",        # 1  buy=1, sell=0
+    "rr_ratio",                # 2  planned geometric reward/risk
+    "p_win_gru",               # 3  GRU probability aligned to the candidate side
+    "gru_edge",                # 4  side probability minus opposite-side probability
+    "expected_move",           # 5  short-horizon move magnitude score from GRU
+    "gru_uncertainty",         # 6  expected_variance from GRU variance head
+    "trade_regime_code",       # 7  compact LTF trade-regime suitability code
+    "htf_bias_alignment",      # 8  HTF directional-bias agreement with side
+    "volatility_percentile",   # 9  regime volatility percentile, not raw volatility
+    "chop_score",              # 10 noisy/two-way behaviour score
+    "adx_at_signal",           # 11 directional strength at candidate bar
+    "atr_ratio_at_signal",     # 12 symbol-normalised ATR ratio at candidate bar
+    "spread_at_signal",        # 13 execution friction
+    "session_at_signal",       # 14 compact session code
+    "news_in_30min",           # 15 near-news execution risk
+    "strategy_win_rate_5",     # 16 prior short-term strategy outcome context
+    "strategy_win_rate_20",    # 17 prior medium-term strategy outcome context
+    "strategy_win_rate_50",    # 18 prior longer-term strategy outcome context
+    "vol_slope_at_signal",     # 19 expanding vs contracting volatility
 ]  # 20 features
 
-# RL state dimension layout (total = 42):
-# [0-5]   ML predictions  (p_bull, p_bear, entry_depth, regime_id, sentiment, quality)
-# [6-13]  Market structure (adx, ema_stack, atr_ratio, bb_width, bos_bull, bos_bear, fvg_bull, fvg_bear)
-# [14-18] Session context  (asian, london, ny, dead, news_proximity)
-# [19-23] Strategy signals (S1–S5 booleans)
-# [24-29] Portfolio state  (open_pos, drawdown, daily_pnl, trades_today, last_result, equity_norm)
-# [30-33] Instrument one-hot (EURUSD, GBPUSD, USDJPY, XAUUSD)
-# [34-41] ATR history ratios (8 lags: 1,4,8,24,48,96,168,336 bars)
+# RL state dimension layout (total = 43):
+# [0-5]   GRU execution forecast (p_bull, p_bear, strength, entry_depth, expected_move, variance)
+# [6-8]   HTF directional-bias probabilities
+# [9-14]  LTF score-based regime context
+# [15-16] Regime confidence
+# [17-26] Bar structure, SMC / auction context, and execution friction
+# [27-30] Time/session/news context
+# [31-36] Portfolio context
+# [37-40] Instrument one-hot
+# [41-42] Setup validity flags (range, pullback)
 RL_STATE_DIM = 43
 
 _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
-_ATR_LAGS = [1, 4, 8, 24, 48, 96, 168, 336]
 
 _MACRO_CACHE: Dict[str, pd.Series] = {}
 _MACRO_MAP_CACHE: Dict[str, Any] | None = None
@@ -273,6 +272,123 @@ _MACRO_MAP_MTIME: float = 0.0
 # Reindexing 19 daily series onto a 300k-bar 15M index is O(N) pandas work —
 # caching avoids repeating it for every call from _build_feature_matrix.
 _MACRO_ALIGNED_CACHE: Dict[tuple, "pd.DataFrame"] = {}
+
+_QUALITY_STRATEGY_MAP = {
+    "ml_trader": 0.0,
+    "trader_1": 1.0,
+    "trader_2": 2.0,
+    "trader_3": 3.0,
+    "trader_4": 4.0,
+    "trader_5": 5.0,
+}
+
+_QUALITY_SESSION_MAP = {
+    "INACTIVE": 0.0,
+    "DEAD": 0.0,
+    "ASIAN": 0.25,
+    "LONDON": 0.75,
+    "NY": 1.0,
+}
+
+_TRADE_REGIME_CODE = {
+    "NO_TRADE_CHOP": 0.0,
+    "NO_TRADE_EXTREME_VOL": 0.0,
+    "UNCERTAIN": 0.10,
+    "CONSOLIDATION": 0.25,
+    "RANGE": 0.55,
+    "TRADEABLE_TREND_HIGH_VOL": 0.75,
+    "TRADEABLE_TREND": 1.0,
+}
+
+
+def _quality_float(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(out):
+        return default
+    return out
+
+
+def _quality_strategy_code(trader_id: Any) -> float:
+    return float(_QUALITY_STRATEGY_MAP.get(str(trader_id or ""), 0.0))
+
+
+def _quality_session_code(session: Any) -> float:
+    return float(_QUALITY_SESSION_MAP.get(str(session or "INACTIVE").upper(), 0.0))
+
+
+def _quality_regime_scores(source: dict) -> dict:
+    scores = source.get("regime_scores", {}) if isinstance(source, dict) else {}
+    out = dict(scores) if isinstance(scores, dict) else {}
+    if isinstance(source, dict):
+        for key in (
+            "trend_score",
+            "range_score",
+            "chop_score",
+            "volatility_percentile",
+            "consolidation_score",
+        ):
+            if key in source and key not in out:
+                out[key] = source[key]
+    return out
+
+
+def _quality_trade_regime_code(trade_regime: Any, regime_scores: Optional[dict] = None) -> float:
+    regime = str(trade_regime or "").upper()
+    if regime in _TRADE_REGIME_CODE:
+        return float(_TRADE_REGIME_CODE[regime])
+
+    scores = regime_scores if isinstance(regime_scores, dict) else {}
+    trend = _quality_float(scores.get("trend_score", scores.get("TREND_SCORE", 0.0)), 0.0)
+    range_score = _quality_float(scores.get("range_score", scores.get("RANGE_SCORE", 0.0)), 0.0)
+    chop = _quality_float(scores.get("chop_score", scores.get("CHOP_SCORE", 0.0)), 0.0)
+    vol = _quality_float(
+        scores.get("volatility_percentile", scores.get("VOLATILITY_PERCENTILE", 0.5)),
+        0.5,
+    )
+    consolidation = _quality_float(
+        scores.get("consolidation_score", scores.get("CONSOLIDATION_SCORE", 0.0)),
+        0.0,
+    )
+    if vol > 0.90 or chop > 0.65:
+        return 0.0
+    if trend > 0.65:
+        return 0.75 if vol > 0.75 else 1.0
+    if range_score > 0.65 and trend < 0.35:
+        return 0.55
+    if consolidation > 0.60 or (vol < 0.25 and trend < 0.35):
+        return 0.25
+    return 0.10
+
+
+def _quality_htf_bias_alignment(htf_bias: Any, side: Any) -> float:
+    bias = str(htf_bias or "BIAS_NEUTRAL").upper()
+    side_s = str(side or "").lower()
+    if bias == "BIAS_NEUTRAL":
+        return 0.5
+    if side_s == "buy":
+        return 1.0 if bias == "BIAS_UP" else 0.0
+    if side_s == "sell":
+        return 1.0 if bias == "BIAS_DOWN" else 0.0
+    return 0.5
+
+
+def _quality_side_probabilities(source: dict, side: Any) -> tuple[float, float]:
+    p_bull = np.clip(
+        _quality_float(source.get("p_bull_gru", source.get("p_bull", 0.5)), 0.5),
+        0.0,
+        1.0,
+    )
+    p_bear = np.clip(
+        _quality_float(source.get("p_bear_gru", source.get("p_bear", 1.0 - p_bull)), 1.0 - p_bull),
+        0.0,
+        1.0,
+    )
+    if str(side or "").lower() == "sell":
+        return float(p_bear), float(p_bull)
+    return float(p_bull), float(p_bear)
 
 
 def _first_present_frame(
@@ -937,40 +1053,52 @@ class FeatureEngine:
     def get_quality_features(self, signal: dict, ml_base: dict, bar: pd.Series) -> np.ndarray:
         """
         Returns shape (N,) float32 where N = len(QUALITY_FEATURES).
-        signal: dict with keys matching QUALITY_FEATURES where relevant.
-        ml_base: dict with p_bull_gru, p_bear_gru, regime_class, sentiment_score,
-                 expected_variance (GRU uncertainty), regime_duration, vol_slope.
+        QualityScorer scores a concrete candidate trade. It consumes the side,
+        planned RR, side-conditioned GRU edge, compact regime context, execution
+        friction, and prior strategy outcomes. It intentionally does not repeat
+        macro/sentiment placeholders or raw flat regime classes.
         """
         feats = np.zeros(len(QUALITY_FEATURES), dtype=np.float32)
 
-        strategy_map = {"trader_1": 0, "trader_2": 1, "trader_3": 2,
-                        "trader_4": 3, "trader_5": 4}
-        feats[0] = float(strategy_map.get(signal.get("trader_id", ""), 0))
-        feats[1] = 1.0 if signal.get("side") == "buy" else 0.0
-        feats[2] = float(np.clip(signal.get("rr_ratio", 1.5), 0, 10))
-        feats[3] = float(np.clip(ml_base.get("p_bull_gru", 0.5), 0, 1))
-        feats[4] = float(np.clip(ml_base.get("p_bear_gru", 0.5), 0, 1))
+        side = signal.get("side", "")
+        regime_scores = _quality_regime_scores(ml_base)
+        p_win, p_loss = _quality_side_probabilities(ml_base, side)
+        expected_move = _quality_float(
+            ml_base.get("expected_move", ml_base.get("entry_depth", 0.0)),
+            0.0,
+        )
+        if expected_move < 0.02:
+            expected_move *= 100.0
 
-        regime_map = {
-            # LTF behaviour classes
-            "TRENDING": 0, "RANGING": 1, "CONSOLIDATING": 2, "VOLATILE": 3,
-            # HTF bias classes (map to neutral/default)
-            "BIAS_UP": 0, "BIAS_DOWN": 0, "BIAS_NEUTRAL": 1,
-        }
-        feats[5] = float(regime_map.get(ml_base.get("regime", "RANGING"), 1))
-        feats[6] = float(np.clip(ml_base.get("sentiment_score", 0.0), -1, 1))
+        feats[0] = _quality_strategy_code(signal.get("trader_id", ""))
+        feats[1] = 1.0 if str(side).lower() == "buy" else 0.0
+        feats[2] = float(np.clip(_quality_float(signal.get("rr_ratio", 1.5), 1.5), 0.0, 10.0))
+        feats[3] = float(np.clip(p_win, 0.0, 1.0))
+        feats[4] = float(np.clip(p_win - p_loss, -1.0, 1.0))
+        feats[5] = float(np.clip(expected_move, 0.0, 1.0))
+        feats[6] = float(np.clip(_quality_float(ml_base.get("expected_variance", 0.1), 0.1), 0.0, 5.0))
+        feats[7] = _quality_trade_regime_code(ml_base.get("trade_regime", ""), regime_scores)
+        feats[8] = _quality_htf_bias_alignment(ml_base.get("regime", "BIAS_NEUTRAL"), side)
+        feats[9] = float(np.clip(_quality_float(
+            regime_scores.get("volatility_percentile", ml_base.get("volatility_percentile", 0.5)),
+            0.5,
+        ), 0.0, 1.0))
+        feats[10] = float(np.clip(_quality_float(
+            regime_scores.get("chop_score", ml_base.get("chop_score", 0.0)),
+            0.0,
+        ), 0.0, 1.0))
 
-        feats[7] = float(np.clip(bar.get("adx_14", 20.0) if hasattr(bar, "get") else 20.0, 0, 100))
-        feats[8] = float(np.clip(
+        feats[11] = float(np.clip(bar.get("adx_14", 20.0) if hasattr(bar, "get") else 20.0, 0.0, 100.0))
+        feats[12] = float(np.clip(
             bar.get("atr_14", 0.001) / (bar.get("close", 1.0) + 1e-9) * 1000
-            if hasattr(bar, "get") else 1.0, 0, 20
+            if hasattr(bar, "get") else 1.0, 0.0, 20.0
         ))
-        feats[9] = float(np.clip(ml_base.get("volume_ratio", 1.0), 0, 5))
-        feats[10] = float(np.clip(ml_base.get("spread_pips", 1.0), 0, 20))
-
-        session_map = {"ASIAN": 1, "LONDON": 2, "NY": 3, "DEAD": 4, "INACTIVE": 0}
-        feats[11] = float(session_map.get(ml_base.get("session", "INACTIVE"), 0))
-        feats[12] = 1.0 if ml_base.get("news_in_30min", False) else 0.0
+        feats[13] = float(np.clip(_quality_float(
+            ml_base.get("spread_pips", ml_base.get("spread_at_signal", 1.0)),
+            1.0,
+        ), 0.0, 20.0))
+        feats[14] = _quality_session_code(ml_base.get("session", "INACTIVE"))
+        feats[15] = 1.0 if ml_base.get("news_in_30min", False) else 0.0
 
         win_rate_20 = 0.5
         win_rate_5  = 0.5
@@ -983,30 +1111,13 @@ class FeatureEngine:
             win_rate_20 = stats_20.get("win_rate", 0.5)
             win_rate_5  = stats_5.get("win_rate",  0.5)
             win_rate_50 = stats_50.get("win_rate", 0.5)
-        feats[13] = float(np.clip(win_rate_20, 0, 1))
-
-        # Features 14–16 (existing)
-        feats[14] = float(np.clip(ml_base.get("expected_variance", 0.1), 0.0, 5.0))
-        feats[15] = float(np.clip(ml_base.get("regime_duration", 0.5), 0.0, 1.0))
-        feats[16] = float(np.clip(ml_base.get("vol_slope", 0.0), -5.0, 5.0))
-
-        # Features 17–19 (new discriminative features)
-        feats[17] = float(np.clip(win_rate_5,  0, 1))
-        feats[18] = float(np.clip(win_rate_50, 0, 1))
-
-        # GRU/signal agreement: 1.0 if GRU bull direction agrees with buy signal (or bear with sell)
-        # This is the single strongest discriminator for quality_block=0: when GRU disagrees with
-        # the signal direction, EV is almost always negative regardless of other features.
-        _side = signal.get("side", "")
-        _p_bull = float(np.clip(ml_base.get("p_bull_gru", 0.5), 0, 1))
-        _gru_bull = _p_bull > 0.5
-        if _side == "buy":
-            _agree = 1.0 if _gru_bull else 0.0
-        elif _side == "sell":
-            _agree = 1.0 if not _gru_bull else 0.0
-        else:
-            _agree = 0.5  # unknown side → neutral
-        feats[19] = float(_agree)
+        feats[16] = float(np.clip(win_rate_5, 0.0, 1.0))
+        feats[17] = float(np.clip(win_rate_20, 0.0, 1.0))
+        feats[18] = float(np.clip(win_rate_50, 0.0, 1.0))
+        feats[19] = float(np.clip(_quality_float(
+            ml_base.get("vol_slope", ml_base.get("vol_slope_at_signal", 0.0)),
+            0.0,
+        ), -5.0, 5.0))
 
         feats = np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
         return feats.astype(np.float32)
@@ -1022,9 +1133,15 @@ class FeatureEngine:
         symbol: str = "",
     ) -> np.ndarray:
         """
-        Returns shape (42,) float32, clamped to [-10, 10].
-        Never raises. All missing values default to 0.
+        Returns the canonical 43-dim RL state vector, clamped to [-10, 10].
+
+        RL should tune threshold/risk from aligned context. It should not be a
+        second quality model, a sentiment model, or a duplicate flat-regime
+        classifier.
         """
+        portfolio = portfolio or {}
+        signals = signals or {}
+        ml_preds = ml_preds or {}
         state = np.zeros(RL_STATE_DIM, dtype=np.float32)
 
         def _safe(d: dict, key: str, default: float = 0.0) -> float:
@@ -1033,6 +1150,37 @@ class FeatureEngine:
                 return float(v) if v is not None else default
             except Exception:
                 return default
+
+        def _flag(key: str) -> float:
+            return 1.0 if _bar(key, 0.0) > 0.0 else 0.0
+
+        def _probabilities() -> tuple[list[float], float]:
+            raw = ml_preds.get("regime_proba")
+            if raw is not None:
+                vals = list(raw)[:3]
+                vals += [0.0] * (3 - len(vals))
+                vals = [float(np.clip(_quality_float(v, 0.0), 0.0, 1.0)) for v in vals]
+                return vals, max(vals)
+            regime = str(ml_preds.get("regime", "BIAS_NEUTRAL")).upper()
+            if regime == "BIAS_UP":
+                return [1.0, 0.0, 0.0], _safe(ml_preds, "regime_conf", 1.0)
+            if regime == "BIAS_DOWN":
+                return [0.0, 1.0, 0.0], _safe(ml_preds, "regime_conf", 1.0)
+            return [0.0, 0.0, 1.0], _safe(ml_preds, "regime_conf", 1.0)
+
+        def _ltf_confidence(scores: dict) -> float:
+            raw = ml_preds.get("regime_ltf_conf")
+            if raw is None:
+                return float(np.clip(max([
+                    _quality_float(scores.get("trend_score", 0.0), 0.0),
+                    _quality_float(scores.get("range_score", 0.0), 0.0),
+                    _quality_float(scores.get("chop_score", 0.0), 0.0),
+                    _quality_float(scores.get("consolidation_score", 0.0), 0.0),
+                ]), 0.0, 1.0))
+            if isinstance(raw, (list, tuple, np.ndarray)):
+                vals = [_quality_float(v, 0.0) for v in list(raw)]
+                return float(np.clip(max(vals) if vals else 0.0, 0.0, 1.0))
+            return float(np.clip(_quality_float(raw, 0.0), 0.0, 1.0))
 
         def _bar(key: str, default: float = 0.0) -> float:
             try:
@@ -1046,68 +1194,113 @@ class FeatureEngine:
             except Exception:
                 return default
 
-        # [0-5] ML predictions
-        state[0] = _safe(ml_preds, "p_bull", 0.5)
-        state[1] = _safe(ml_preds, "p_bear", 0.5)
-        state[2] = _safe(ml_preds, "entry_depth", 0.3)
-        # HTF bias encoding at state[3]: BIAS_UP=0.0, BIAS_DOWN=1.0, BIAS_NEUTRAL=2.0 → /2.0
-        # LTF behaviour encoding at state[42]: TRENDING=0, RANGING=1, CONSOLIDATING=2, VOLATILE=3 → /3.0
-        htf_regime_map = {
-            "BIAS_UP": 0.0, "BIAS_DOWN": 1.0, "BIAS_NEUTRAL": 2.0,
-        }
-        state[3] = htf_regime_map.get(ml_preds.get("regime", "BIAS_NEUTRAL"), 2.0) / 2.0
-        state[4] = _safe(ml_preds, "sentiment_score", 0.0)
-        state[5] = _safe(ml_preds, "quality_score", 0.5)
+        htf_p, htf_conf = _probabilities()
+        regime_scores = _quality_regime_scores(ml_preds)
+        trend_score = _quality_float(
+            regime_scores.get("trend_score", ml_preds.get("trend_score", 0.0)),
+            0.0,
+        )
+        range_score = _quality_float(
+            regime_scores.get("range_score", ml_preds.get("range_score", 0.0)),
+            0.0,
+        )
+        chop_score = _quality_float(
+            regime_scores.get("chop_score", ml_preds.get("chop_score", 0.0)),
+            0.0,
+        )
+        vol_pct = _quality_float(
+            regime_scores.get("volatility_percentile", ml_preds.get("volatility_percentile", 0.5)),
+            0.5,
+        )
+        consolidation_score = _quality_float(
+            regime_scores.get("consolidation_score", ml_preds.get("consolidation_score", 0.0)),
+            0.0,
+        )
+        trade_code = _quality_trade_regime_code(ml_preds.get("trade_regime", ""), regime_scores)
 
-        # [6-13] Market structure
-        state[6] = _bar("adx_14", 20.0) / 100.0
-        state[7] = _bar("ema_stack", 0.0) / 2.0
+        p_bull = float(np.clip(_safe(ml_preds, "p_bull", 0.5), 0.0, 1.0))
+        p_bear = float(np.clip(_safe(ml_preds, "p_bear", 0.5), 0.0, 1.0))
+        expected_move = _safe(ml_preds, "expected_move", _safe(ml_preds, "entry_depth", 0.0))
+        if expected_move < 0.02:
+            expected_move *= 100.0
         close = _bar("close", 1.0)
         atr = _bar("atr_14", 0.001)
-        state[8] = float(np.clip(atr / (close + 1e-9) * 1000, 0, 10))
-        state[9] = _bar("bb_width", 0.0)
-        state[10] = float(_bar("bos_bull", 0.0) > 0)
-        state[11] = float(_bar("bos_bear", 0.0) > 0)
-        state[12] = float(_bar("fvg_bull", 0.0) > 0)
-        state[13] = float(_bar("fvg_bear", 0.0) > 0)
+        atr_ratio = float(np.clip(atr / (close + 1e-9) * 1000.0, 0.0, 10.0))
 
-        # [14-18] Session context
         if hasattr(bar, "name") and hasattr(bar.name, "hour"):
             h = bar.name.hour
         else:
-            h = -1
-        state[14] = float(2 <= h < 7)    # asian
-        state[15] = float(7 <= h < 12)   # london
-        state[16] = float(13 <= h < 18)  # ny
-        state[17] = float(h == 12)        # dead
-        state[18] = _safe(ml_preds, "news_proximity", 0.0)
+            h = _quality_float(ml_preds.get("hour", 0), 0.0)
+        session = str(ml_preds.get("session") or signals.get("session") or "").upper()
+        if not session:
+            if 2 <= h < 7:
+                session = "ASIAN"
+            elif 7 <= h < 12:
+                session = "LONDON"
+            elif 13 <= h < 18:
+                session = "NY"
+            else:
+                session = "INACTIVE"
 
-        # [19-23] Strategy signals (S1–S5 booleans)
-        for i, tid in enumerate(["trader_1", "trader_2", "trader_3", "trader_4", "trader_5"]):
-            state[19 + i] = 1.0 if signals.get(tid) else 0.0
+        # [0-5] GRU execution forecast
+        state[0] = p_bull
+        state[1] = p_bear
+        state[2] = float(np.clip(max(p_bull, p_bear) * 2.0 - 1.0, -1.0, 1.0))
+        state[3] = float(np.clip(_safe(ml_preds, "entry_depth", 0.0), 0.0, 1.0))
+        state[4] = float(np.clip(expected_move, 0.0, 1.0))
+        state[5] = float(np.clip(_safe(ml_preds, "expected_variance", 0.1), 0.0, 5.0))
 
-        # [24-29] Portfolio state
-        state[24] = float(np.clip(portfolio.get("open_positions", 0), 0, 10)) / 10.0
-        state[25] = float(np.clip(portfolio.get("drawdown_pct", 0.0), 0, 0.2)) / 0.2
-        state[26] = float(np.clip(portfolio.get("daily_pnl", 0.0), -500, 500)) / 500.0
-        state[27] = float(np.clip(portfolio.get("trades_today", 0), 0, 20)) / 20.0
-        state[28] = float(np.clip(portfolio.get("last_result", 0.0), -3, 3)) / 3.0
-        state[29] = float(np.clip(portfolio.get("equity_norm", 1.0), 0, 2))
+        # [6-8] HTF directional bias probabilities
+        state[6:9] = np.asarray(htf_p, dtype=np.float32)
 
-        # [30-33] Instrument one-hot
+        # [9-14] LTF score-based regime context
+        state[9] = float(np.clip(trend_score, 0.0, 1.0))
+        state[10] = float(np.clip(range_score, 0.0, 1.0))
+        state[11] = float(np.clip(chop_score, 0.0, 1.0))
+        state[12] = float(np.clip(vol_pct, 0.0, 1.0))
+        state[13] = float(np.clip(consolidation_score, 0.0, 1.0))
+        state[14] = float(np.clip(trade_code, 0.0, 1.0))
+
+        # [15-26] regime confidence, market structure, and execution friction
+        state[15] = float(np.clip(htf_conf, 0.0, 1.0))
+        state[16] = _ltf_confidence(regime_scores)
+        state[17] = float(np.clip(_bar("adx_14", 20.0) / 100.0, 0.0, 1.0))
+        state[18] = float(np.clip(_bar("ema_stack", 0.0) / 2.0, -1.0, 1.0))
+        state[19] = atr_ratio
+        state[20] = float(np.clip(_safe(ml_preds, "spread_pips", 1.0) / 5.0, 0.0, 1.0))
+        state[21] = _flag("bos_bull")
+        state[22] = _flag("bos_bear")
+        state[23] = _flag("fvg_bull")
+        state[24] = _flag("fvg_bear")
+        state[25] = float(np.clip(_safe(ml_preds, "vol_slope", _bar("vol_slope_seq", 0.0)), -1.0, 1.0))
+        state[26] = float(np.clip(_bar("vwap_dist_atr", 0.0) / 3.0, -1.0, 1.0))
+
+        # [27-30] time/session/news context
+        state[27] = 1.0 if ml_preds.get("news_in_30min", False) else 0.0
+        state[28] = float(np.sin(2.0 * np.pi * float(h) / 24.0))
+        state[29] = float(np.cos(2.0 * np.pi * float(h) / 24.0))
+        state[30] = _quality_session_code(session)
+
+        # [31-36] portfolio context
+        equity = _quality_float(portfolio.get("equity", portfolio.get("balance", 1000.0)), 1000.0)
+        state[31] = float(np.clip(portfolio.get("open_positions", 0), 0, 10)) / 10.0
+        state[32] = float(np.clip(portfolio.get("drawdown_pct", 0.0), 0.0, 0.2)) / 0.2
+        state[33] = float(np.clip(_quality_float(portfolio.get("daily_pnl", 0.0), 0.0) / (equity + 1e-9), -0.10, 0.10))
+        state[34] = float(np.clip(portfolio.get("trades_today", 0), 0, 20)) / 20.0
+        state[35] = float(np.clip(portfolio.get("win_rate_10", 0.5), 0.0, 1.0))
+        state[36] = float(np.clip(portfolio.get("equity_norm", 1.0), 0.0, 2.0))
+
+        # [37-40] instrument one-hot
         idx = _INSTRUMENT_IDX.get(symbol, -1)
         if 0 <= idx <= 3:
-            state[30 + idx] = 1.0
+            state[37 + idx] = 1.0
 
-        # [34-41] ATR history ratios (8 lags — filled as 0 when not available from bar)
-        # These are populated by SignalPipeline when it has historical df context
-        # Default to 1.0 (neutral ratio)
-        for i in range(8):
-            state[34 + i] = float(np.clip(
-                ml_preds.get(f"atr_lag_{_ATR_LAGS[i]}", 1.0), 0, 5
-            ))
+        # [41-42] setup validity flags consumed by the decision layer
+        state[41] = 1.0 if bool(_bar("range_valid", 0.0)) else 0.0
+        state[42] = 1.0 if bool(_bar("pullback_valid", 0.0)) else 0.0
 
-        # Clamp all values to [-10, 10]
+        if state.shape[0] != RL_STATE_DIM:
+            raise ValueError(f"RL state dimension mismatch: got {state.shape[0]}, expected {RL_STATE_DIM}")
         state = np.clip(state, -10.0, 10.0)
         state = np.nan_to_num(state, nan=0.0, posinf=10.0, neginf=-10.0)
         return state.astype(np.float32)

@@ -29,10 +29,11 @@ import numpy as np
 import pandas as pd
 
 from models.base_model import BaseModel
+from services.feature_engine import QUALITY_FEATURES
 
 logger = logging.getLogger(__name__)
 
-N_FEATURES = 20  # matches len(QUALITY_FEATURES) in feature_engine.py
+N_FEATURES = len(QUALITY_FEATURES)
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHT_PATH = os.path.join(_MODEL_ROOT, "weights", "quality_scorer.pkl")
 
@@ -319,6 +320,15 @@ class QualityScorer(BaseModel):
         # Populated as we iterate records in chronological order — each row gets
         # the win rates from *prior* trades only, then we append the current outcome.
         from collections import defaultdict
+        from services.feature_engine import (
+            _quality_float,
+            _quality_htf_bias_alignment,
+            _quality_regime_scores,
+            _quality_session_code,
+            _quality_side_probabilities,
+            _quality_strategy_code,
+            _quality_trade_regime_code,
+        )
         _outcomes: dict = defaultdict(list)  # trader_id → list of bool (win=True)
 
         rows = []
@@ -345,28 +355,54 @@ class QualityScorer(BaseModel):
             wr_20 = _roll_wr(20)
             wr_50 = _roll_wr(50)
 
-            # GRU/signal agreement: 1.0 if GRU bull direction agrees with signal side
-            p_bull = float(ml_scores.get("p_bull", 0.5))
             side   = str(r.get("side", "")).lower()
-            gru_bull = p_bull > 0.5
-            if side == "buy":
-                _agree = 1.0 if gru_bull else 0.0
-            elif side == "sell":
-                _agree = 1.0 if not gru_bull else 0.0
-            else:
-                _agree = 0.5
+            score_source = dict(ml_scores)
+            score_source.update({
+                k: v for k, v in sig_meta.items()
+                if k in {
+                    "p_bull", "p_bear", "p_bull_gru", "p_bear_gru",
+                    "expected_move", "entry_depth", "expected_variance",
+                    "regime", "trade_regime", "regime_scores",
+                    "volatility_percentile", "chop_score",
+                }
+            })
+            p_win, p_loss = _quality_side_probabilities(score_source, side)
+            expected_move = _quality_float(
+                score_source.get("expected_move", score_source.get("entry_depth", 0.0)),
+                0.0,
+            )
+            if expected_move < 0.02:
+                expected_move *= 100.0
+            regime_scores = _quality_regime_scores(score_source)
 
             rows.append({
-                "strategy_id":          trader_id,
-                "signal_direction":     1 if side == "buy" else 0,
+                "strategy_id":          _quality_strategy_code(trader_id),
+                "signal_direction":     1.0 if side == "buy" else 0.0,
                 "rr_ratio":             rr,
-                "p_bull_gru":           p_bull,
-                "p_bear_gru":           float(ml_scores.get("p_bear", 0.5)),
-                "regime_class":         ml_scores.get("regime", "RANGING"),
-                "sentiment_score":      float(ml_scores.get("sentiment_score", 0.0)),
-                # Read real bar-derived values from signal_metadata; fall back to
-                # ml_model_scores for fields that some recorders put there, and
-                # only use the neutral default when both are absent.
+                "p_win_gru":            p_win,
+                "gru_edge":             float(np.clip(p_win - p_loss, -1.0, 1.0)),
+                "expected_move":        float(np.clip(expected_move, 0.0, 1.0)),
+                "gru_uncertainty":      float(np.clip(
+                    _quality_float(score_source.get("expected_variance", 0.1), 0.1),
+                    0.0,
+                    5.0,
+                )),
+                "trade_regime_code":    _quality_trade_regime_code(
+                    score_source.get("trade_regime", ""),
+                    regime_scores,
+                ),
+                "htf_bias_alignment":   _quality_htf_bias_alignment(
+                    score_source.get("regime", "BIAS_NEUTRAL"),
+                    side,
+                ),
+                "volatility_percentile": float(np.clip(_quality_float(
+                    regime_scores.get("volatility_percentile", score_source.get("volatility_percentile", 0.5)),
+                    0.5,
+                ), 0.0, 1.0)),
+                "chop_score":           float(np.clip(_quality_float(
+                    regime_scores.get("chop_score", score_source.get("chop_score", 0.0)),
+                    0.0,
+                ), 0.0, 1.0)),
                 "adx_at_signal":        float(
                     sig_meta.get("adx_at_signal",
                     sig_meta.get("adx",
@@ -375,25 +411,23 @@ class QualityScorer(BaseModel):
                     sig_meta.get("atr_ratio_at_signal",
                     sig_meta.get("atr_ratio",
                     ml_scores.get("atr_ratio_at_signal", 1.0)))),
-                "volume_ratio":         float(
-                    sig_meta.get("volume_ratio",
-                    ml_scores.get("volume_ratio", 1.0))),
                 "spread_at_signal":     float(
                     sig_meta.get("spread_at_signal",
                     sig_meta.get("spread",
                     ml_scores.get("spread_at_signal", 1.0)))),
-                "session_at_signal":    r.get("session", "NY"),
+                "session_at_signal":    _quality_session_code(
+                    sig_meta.get("session", r.get("session", "NY"))
+                ),
                 "news_in_30min":        int(
                     sig_meta.get("news_in_30min",
                     ml_scores.get("news_in_30min", 0))),
-                "strategy_win_rate_20": wr_20,
-                "gru_uncertainty":      float(ml_scores.get("expected_variance", 0.1)),
-                "regime_duration":      float(ml_scores.get("regime_duration", 0.5)),
-                "vol_slope_at_signal":  float(ml_scores.get("vol_slope", 0.0)),
-                # New features (indices 17–19) — see feature_engine.QUALITY_FEATURES
                 "strategy_win_rate_5":  wr_5,
+                "strategy_win_rate_20": wr_20,
                 "strategy_win_rate_50": wr_50,
-                "gru_signal_agreement": _agree,
+                "vol_slope_at_signal":  float(
+                    sig_meta.get("vol_slope_at_signal",
+                    sig_meta.get("vol_slope",
+                    ml_scores.get("vol_slope", 0.0)))),
                 "label":                ev_label,
             })
 
@@ -632,6 +666,17 @@ class QualityScorer(BaseModel):
                     "QualityScorer: stale weights at %s have n_features=%d but "
                     "current model expects %d — deleting and starting cold.",
                     path, n_feat, N_FEATURES,
+                )
+                os.remove(path)
+                return
+            saved_order = list(payload.get("feature_order") or [])
+            if saved_order != list(QUALITY_FEATURES):
+                logger.warning(
+                    "QualityScorer: stale weights at %s have feature_order=%s but "
+                    "current contract is %s — deleting and requiring retrain.",
+                    path,
+                    saved_order,
+                    list(QUALITY_FEATURES),
                 )
                 os.remove(path)
                 return

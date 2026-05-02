@@ -1223,7 +1223,8 @@ def _run_bar_ml(ml_models: dict, df: pd.DataFrame, i: int, symbol: str = "",
                 htf: dict = None) -> dict:
     """
     Single-bar ML inference — used only when pre-computed cache is unavailable.
-    Returns preds dict with regime, quality_score, p_bull, p_bear.
+    Returns preds dict with regime and GRU direction outputs. QualityScorer runs
+    later after a concrete candidate signal exists, because it requires side and RR.
     Returns {} if ml_models is empty (ML disabled).
     htf: full {tf: DataFrame} dict — all TFs sliced to current bar for no-lookahead MTF features.
     """
@@ -1249,23 +1250,24 @@ def _run_bar_ml(ml_models: dict, df: pd.DataFrame, i: int, symbol: str = "",
         r = gru.predict(window, symbol=symbol, df_htf=htf_slice)
         preds.update(r)
 
-    regime_model = ml_models.get("regime")
+    regime_model = ml_models.get("regime_htf") or ml_models.get("regime_4h") or ml_models.get("regime")
     if regime_model:
         r = regime_model.predict(window, symbol=symbol, df_htf=htf_slice)
         preds["regime"]      = r.get("regime")
         preds["regime_conf"] = float(r.get("regime_confidence", 1.0 / 3.0))
+        preds["regime_proba"] = r.get("proba")
 
-    qs = ml_models.get("quality")
-    if qs:
-        bar = df.iloc[i]
-        neutral_signal = {"trader_id": "", "side": "buy", "rr_ratio": 1.5}
-        from services.feature_engine import FeatureEngine, QUALITY_FEATURES
-        _fe = FeatureEngine()
-        features = _fe.get_quality_features(neutral_signal, preds, bar)
-        feat_dict = dict(zip(QUALITY_FEATURES, features))
-        _qs_result = qs.predict(feat_dict)
-        preds["quality_score"] = float(_qs_result["quality_score"])
-        preds["ev"] = float(_qs_result["ev"])
+    regime_ltf = ml_models.get("regime_ltf") or ml_models.get("regime_1h")
+    if regime_ltf:
+        r = regime_ltf.predict(window, symbol=symbol, df_htf=htf_slice)
+        preds["regime_ltf"] = r.get("regime")
+        preds["regime_ltf_id"] = r.get("regime_id")
+        preds["regime_ltf_conf"] = r.get("proba")
+        if r.get("regime_scores"):
+            preds["regime_scores"] = r.get("regime_scores")
+            preds.update(r.get("regime_scores") or {})
+        if r.get("trade_regime"):
+            preds["trade_regime"] = r.get("trade_regime")
 
     return preds
 
@@ -2268,8 +2270,7 @@ def _backtest_trader(
                  "sr_in_demand_zone", "sr_resist_strength", "sr_support_strength",
                  "range_valid", "range_side", "range_support", "range_resist",
                  "range_width_atr", "pullback_valid", "pullback_side", "pullback_level",
-                 "last_swing_high", "last_swing_low", "regime_duration", "vol_slope_seq",
-                 "volume_ratio", "ema_21"]
+                 "last_swing_high", "last_swing_low", "vol_slope_seq", "ema_21"]
     _sym_arrays: dict[str, dict] = {}
     _sym_timestamps: dict[str, np.ndarray] = {}
     for _sym, _df in symbol_dfs.items():
@@ -2492,9 +2493,7 @@ def _backtest_trader(
             "sr_in_demand_zone": float(_sarr["sr_in_demand_zone"][i]) if _sarr["sr_in_demand_zone"] is not None else 0.0,
             "sr_resist_strength": float(_sarr["sr_resist_strength"][i]) if _sarr["sr_resist_strength"] is not None else 0.0,
             "sr_support_strength": float(_sarr["sr_support_strength"][i]) if _sarr["sr_support_strength"] is not None else 0.0,
-            "regime_duration": float(_sarr["regime_duration"][i]) if _sarr["regime_duration"] is not None else 0.5,
             "vol_slope_seq":   float(_sarr["vol_slope_seq"][i]) if _sarr["vol_slope_seq"] is not None else 0.0,
-            "volume_ratio":    float(_sarr["volume_ratio"][i]) if _sarr["volume_ratio"] is not None else 1.0,
         }
         raw_signal = _compute_backtest_signal(symbol, ml_preds, bar, reject_reasons=_signal_reasons)
         if raw_signal is None:
@@ -2626,14 +2625,17 @@ def _backtest_trader(
                 "side":      enriched["side"],
                 "rr_ratio":  rr_ratio,
             }
-            # Cache stores p_bull/p_bear; feature engine expects p_bull_gru/p_bear_gru.
-            # Augment ml_preds with aliased keys + bar-level features before scoring.
             _qs_preds = dict(ml_preds)
+            _sig_meta = enriched.get("signal_metadata", {}) or raw_signal.get("signal_metadata", {}) or {}
             _qs_preds.setdefault("p_bull_gru", _qs_preds.get("p_bull", 0.5))
             _qs_preds.setdefault("p_bear_gru", _qs_preds.get("p_bear", 0.5))
-            _qs_preds.setdefault("regime_duration", float(bar.get("regime_duration", 0.5)))
+            _qs_preds.setdefault("regime", _sig_meta.get("regime", _qs_preds.get("regime", "BIAS_NEUTRAL")))
+            _qs_preds.setdefault("trade_regime", _sig_meta.get("trade_regime", _qs_preds.get("trade_regime", "")))
+            _qs_preds.setdefault("regime_scores", _sig_meta.get("regime_scores", _qs_preds.get("regime_scores", {})))
+            _qs_preds.setdefault("session", _session_name(int(dt.hour)))
             _qs_preds.setdefault("vol_slope", float(bar.get("vol_slope_seq", 0.0)))
-            _qs_preds.setdefault("volume_ratio", float(bar.get("volume_ratio", 1.0)))
+            _qs_preds.setdefault("spread_pips", float(_sig_meta.get("spread_at_signal", _qs_preds.get("spread_pips", 1.0))))
+            _qs_preds.setdefault("news_in_30min", int(_sig_meta.get("news_in_30min", _qs_preds.get("news_in_30min", 0))))
             _qs_feats = _qs_fe.get_quality_features(_sig_ctx, _qs_preds, bar)
             if _qs_infer is not None:
                 # CPU path: ~3–5 µs vs ~500 µs GPU kernel launch for batch=1
@@ -2776,7 +2778,12 @@ def _backtest_trader(
             "quality_score": float((ml_preds or meta).get("quality_score", 0.0)),
             "ev":           float((ml_preds or meta).get("ev", 0.0)),
             "expected_variance": float((ml_preds or meta).get("expected_variance", 0.0)),
+            "expected_move": float((ml_preds or meta).get("expected_move", 0.0)),
+            "entry_depth": float((ml_preds or meta).get("entry_depth", 0.0)),
             "regime":       str(ml_preds.get("regime") or meta.get("regime", "RANGING")),
+            "regime_ltf":   str(meta.get("regime_ltf", ml_preds.get("regime_ltf", ""))),
+            "trade_regime": str(meta.get("trade_regime", ml_preds.get("trade_regime", ""))),
+            "regime_scores": meta.get("regime_scores", ml_preds.get("regime_scores", {})),
             "adx":          float(bar.get("adx_14", 20.0)),
             "atr":          float(bar.get("atr_14", atr)),
             "ema_stack":    int(bar.get("ema_stack", 0)),
@@ -2786,14 +2793,16 @@ def _backtest_trader(
             "bos_bear":     bool(bar.get("bos_bear", False)),
             "fvg_bull":     bool(bar.get("fvg_bull", False)),
             "fvg_bear":     bool(bar.get("fvg_bear", False)),
+            "range_valid":  bool(bar.get("range_valid", False)),
+            "pullback_valid": bool(bar.get("pullback_valid", False)),
             "drawdown":     float((peak_eq - equity) / peak_eq),
             "equity_pct":   float(equity / INITIAL_CAPITAL),
             # Diagnostics fields
             "session_hour":  dt.hour,
-            "regime_duration": float(bar.get("regime_duration", 0.5)),
             "session_weight":  float(meta.get("session_weight", 1.0)),
             "regime_weight":   float(meta.get("regime_weight", 1.0)),
             "age_weight":      float(meta.get("age_weight", 1.0)),
+            "vol_slope":     float(bar.get("vol_slope_seq", 0.0)),
             "realized_rr":   float(abs(pnl) / (abs(entry - sl) * size + 1e-9)) * (1 if pnl > 0 else -1),
             "density_count": _density_count,
             "pm_open_positions_seen": pm_open_positions_seen,
@@ -3398,9 +3407,10 @@ def main():
             if _model_ready(qs):
                 ml_models["quality"] = qs
             else:
-                logger.warning("QualityScorer unavailable (weights missing or load failed)")
+                raise RuntimeError("QualityScorer unavailable; train quality_scorer.pkl before backtesting with ML")
         except Exception as exc:
-            logger.warning("QualityScorer load failed: %s", exc)
+            logger.error("QualityScorer load failed: %s", exc)
+            raise
 
         try:
             from models.gru_lstm_predictor import GRULSTMPredictor
@@ -3408,9 +3418,10 @@ def main():
             if _model_ready(gru):
                 ml_models["gru_lstm"] = gru
             else:
-                logger.warning("GRU-LSTM unavailable (weights missing or load failed)")
+                raise RuntimeError("GRU-LSTM unavailable; train gru_lstm/model.pt before backtesting with ML")
         except Exception as exc:
-            logger.warning("GRU-LSTM load failed: %s", exc)
+            logger.error("GRU-LSTM load failed: %s", exc)
+            raise
 
         if not ml_models:
             raise RuntimeError(

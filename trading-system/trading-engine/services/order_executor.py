@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from services.event_bus import EventBus, EventType
+from services.feature_engine import RL_STATE_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class ExecutionRequest:
     rr_ratio: float = 1.5
     correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     signal_metadata: Dict[str, Any] = field(default_factory=dict)
-    state_at_entry: list = field(default_factory=lambda: [0.0] * 42)
+    state_at_entry: list = field(default_factory=lambda: [0.0] * RL_STATE_DIM)
 
 
 class ExecutionEngine:

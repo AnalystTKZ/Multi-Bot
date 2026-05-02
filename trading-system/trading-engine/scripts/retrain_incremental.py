@@ -1072,11 +1072,6 @@ def retrain_regime(dry_run: bool = False) -> dict:
 
     symbols = _get_symbols("RETRAIN_SYMBOLS_REGIME", MAJOR_SYMBOLS)
 
-    if not dry_run:
-        _t_macro = _time.perf_counter()
-        _update_macro_correlations(symbols)
-        logger.info("Regime phase macro_correlations: %.1fs", _time.perf_counter() - _t_macro)
-
     group_gmms_htf: dict = {}
     group_gmms_ltf: dict = {}
     if os.getenv("REGIME_FIT_GMM", "0").strip().lower() in {"1", "true", "yes", "on"}:
