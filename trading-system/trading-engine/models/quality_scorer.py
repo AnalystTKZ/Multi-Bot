@@ -371,8 +371,6 @@ class QualityScorer(BaseModel):
                 score_source.get("expected_move", score_source.get("entry_depth", 0.0)),
                 0.0,
             )
-            if expected_move < 0.02:
-                expected_move *= 100.0
             regime_scores = _quality_regime_scores(score_source)
 
             rows.append({

@@ -715,52 +715,119 @@ class RegimeClassifier(BaseModel):
 
             spread = (up_exc - down_exc)
             dominance = (spread.abs() / (f_range + 1e-9)).clip(0.0, 1.0)
+            dominant_exc = pd.concat([up_exc, down_exc], axis=1).max(axis=1)
+            barrier_atr = float(os.getenv("REGIME_HTF_BARRIER_ATR", "0.80"))
+            terminal_min = float(os.getenv("REGIME_HTF_TERMINAL_ATR", "0.25"))
+            close_arr = close.to_numpy(dtype=np.float64, copy=False)
+            high_arr = high.to_numpy(dtype=np.float64, copy=False)
+            low_arr = low.to_numpy(dtype=np.float64, copy=False)
+            atr_arr = atr.to_numpy(dtype=np.float64, copy=False)
+            up_level = close_arr + barrier_atr * atr_arr
+            down_level = close_arr - barrier_atr * atr_arr
+            no_hit = horizon + 1
+            up_hit = np.full(len(df), no_hit, dtype=np.int16)
+            down_hit = np.full(len(df), no_hit, dtype=np.int16)
+            for step_i in range(1, horizon + 1):
+                future_high = np.empty_like(high_arr)
+                future_low = np.empty_like(low_arr)
+                future_high[:-step_i] = high_arr[step_i:]
+                future_high[-step_i:] = np.nan
+                future_low[:-step_i] = low_arr[step_i:]
+                future_low[-step_i:] = np.nan
+                hit_up_now = np.isfinite(future_high) & (future_high >= up_level) & (up_hit == no_hit)
+                hit_down_now = np.isfinite(future_low) & (future_low <= down_level) & (down_hit == no_hit)
+                up_hit[hit_up_now] = step_i
+                down_hit[hit_down_now] = step_i
+            terminal_arr = terminal.to_numpy(dtype=np.float64, copy=False)
+            up_first = pd.Series(
+                (up_hit <= horizon)
+                & (
+                    (down_hit > up_hit)
+                    | ((down_hit == up_hit) & (terminal_arr > terminal_min))
+                ),
+                index=df.index,
+            )
+            down_first = pd.Series(
+                (down_hit <= horizon)
+                & (
+                    (up_hit > down_hit)
+                    | ((up_hit == down_hit) & (terminal_arr < -terminal_min))
+                ),
+                index=df.index,
+            )
+            up_path = up_first | (
+                (up_exc >= barrier_atr * 1.25)
+                & (terminal > terminal_min)
+                & (dominance >= 0.35)
+            )
+            down_path = down_first | (
+                (down_exc >= barrier_atr * 1.25)
+                & (terminal < -terminal_min)
+                & (dominance >= 0.35)
+            )
+            hh_hl_structure = score_df["hh_hl_structure"]
+            lh_ll_structure = score_df["lh_ll_structure"]
             up_structure = (
-                (plus_di > minus_di * 1.02)
-                & ((adx_score > 15.0) | (trend_score > 0.45))
-                & (ema50_slope > -0.01)
-                & ((ema50_dist > 0.0) | (ema200_dist > 0.0) | (score_df["bias_up_score"] > 0.52))
-                & (er_now > 0.16)
+                (plus_di > minus_di * 1.08)
+                & ((adx_score > 18.0) | (trend_score > 0.55))
+                & (ema50_slope > 0.015)
+                & (
+                    ((ema50_dist > 0.10) & (ema200_dist > 0.0))
+                    | (score_df["bias_up_score"] > 0.60)
+                )
+                & (er_now > 0.24)
+                & (hh_hl_structure >= lh_ll_structure * 0.80)
             )
             down_structure = (
-                (minus_di > plus_di * 1.02)
-                & ((adx_score > 15.0) | (trend_score > 0.45))
-                & (ema50_slope < 0.01)
-                & ((ema50_dist < 0.0) | (ema200_dist < 0.0) | (score_df["bias_down_score"] > 0.52))
-                & (er_now > 0.16)
+                (minus_di > plus_di * 1.08)
+                & ((adx_score > 18.0) | (trend_score > 0.55))
+                & (ema50_slope < -0.015)
+                & (
+                    ((ema50_dist < -0.10) & (ema200_dist < 0.0))
+                    | (score_df["bias_down_score"] > 0.60)
+                )
+                & (er_now > 0.24)
+                & (lh_ll_structure >= hh_hl_structure * 0.80)
             )
             up_mask = (
                 valid
                 & up_structure
-                & (up_exc >= max(0.35, trend_thr * 0.45))
-                & (up_exc >= down_exc * 1.03)
-                & (terminal > 0.03)
+                & up_path
+                & (up_exc >= max(barrier_atr, trend_thr * 0.60))
+                & (up_exc >= down_exc * 1.15)
+                & (terminal > terminal_min)
             )
             down_mask = (
                 valid
                 & down_structure
-                & (down_exc >= max(0.35, trend_thr * 0.45))
-                & (down_exc >= up_exc * 1.03)
-                & (terminal < -0.03)
+                & down_path
+                & (down_exc >= max(barrier_atr, trend_thr * 0.60))
+                & (down_exc >= up_exc * 1.15)
+                & (terminal < -terminal_min)
             )
             labels[up_mask] = 0
             labels[down_mask] = 1
 
             directional_conf = (
                 0.35 * (dominance / 0.60).clip(0.0, 1.0)
-                + 0.25 * (pd.concat([up_exc, down_exc], axis=1).max(axis=1) / (trend_thr + 1e-9)).clip(0.0, 1.0)
+                + 0.25 * (dominant_exc / (trend_thr + 1e-9)).clip(0.0, 1.0)
                 + 0.20 * efficiency
                 + 0.20 * er_now
             ).clip(0.0, 1.0)
             conf[up_mask | down_mask] = (0.45 + 0.55 * directional_conf[up_mask | down_mask]).astype(np.float32)
 
+            no_clear_path = ~(up_path | down_path)
             neutral_structure = (
-                (dominance < 0.55)
-                & (terminal.abs() < 0.65)
+                (
+                    no_clear_path
+                    | (dominance < 0.45)
+                    | (dominant_exc < barrier_atr)
+                    | (terminal.abs() < terminal_min)
+                )
                 & (
                     (adx_score < 20.0)
-                    | (er_now < 0.35)
-                    | (trend_score < 0.45)
+                    | (er_now < 0.32)
+                    | (trend_score < 0.55)
                     | (ema50_slope.abs() < 0.05)
                 )
             )
@@ -1998,7 +2065,11 @@ class RegimeClassifier(BaseModel):
             _us_counts = np.bincount(y.astype(np.int64), minlength=_n_cls)
             _present = _us_counts[_us_counts > 0]
             _minority_n = int(_present.min()) if len(_present) > 0 else 1
-            _majority_cap = max(_minority_n, int(_minority_n * 2.0))
+            _cap_ratio = float(os.getenv(
+                "REGIME_HTF_MAJORITY_CAP_RATIO" if self._mode == "htf_bias" else "REGIME_MAJORITY_CAP_RATIO",
+                "3.0" if self._mode == "htf_bias" else "2.0",
+            ))
+            _majority_cap = max(_minority_n, int(_minority_n * _cap_ratio))
             _keep_mask = np.ones(len(y), dtype=bool)
             for _cls_id in range(_n_cls):
                 _cls_idx = np.where(y == _cls_id)[0]
@@ -2098,7 +2169,11 @@ class RegimeClassifier(BaseModel):
             # prevent the LTF classifier from collapsing (TRENDING/RANGING recall
             # 0.20/0.24) and the HTF classifier from predicting mostly BIAS_DOWN.
             inv_freq = counts.sum() / (_n_cls * counts)
-            class_w  = inv_freq ** 1.5
+            _weight_power = float(os.getenv(
+                "REGIME_HTF_CLASS_WEIGHT_POWER" if self._mode == "htf_bias" else "REGIME_CLASS_WEIGHT_POWER",
+                "0.75" if self._mode == "htf_bias" else "1.0",
+            ))
+            class_w  = inv_freq ** _weight_power
             class_w  = class_w / class_w.mean()   # normalise so mean weight = 1.0
             class_w  = torch.tensor(class_w, dtype=torch.float32).to(DEVICE)
 
@@ -2367,6 +2442,29 @@ class RegimeClassifier(BaseModel):
                 for name, acc in per_class_accuracy.items()
                 if (y_va == _classes.index(name)).sum() > 0 and float(acc) < min_class_accuracy
             ]
+            if self._mode == "htf_bias":
+                min_directional_precision = float(os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"))
+                min_directional_f1 = float(os.getenv("REGIME_MIN_DIRECTIONAL_F1", "0.30"))
+                directional_names = ("BIAS_UP", "BIAS_DOWN")
+                weak_precision = [
+                    name for name in directional_names
+                    if float(per_class_precision.get(name, 0.0)) < min_directional_precision
+                ]
+                weak_f1 = [
+                    name for name in directional_names
+                    if float(per_class_f1.get(name, 0.0)) < min_directional_f1
+                ]
+                if weak_precision or weak_f1:
+                    return {
+                        "error": (
+                            f"Regime HTF directional validation below acceptance floor: "
+                            f"precision={per_class_precision} min_directional_precision="
+                            f"{min_directional_precision:.3f} f1={per_class_f1} "
+                            f"min_directional_f1={min_directional_f1:.3f} "
+                            f"weak_precision={weak_precision} weak_f1={weak_f1}. "
+                            "Refusing to save directional-bias weights that flood neutral bars."
+                        )
+                    }
             if accuracy < min_overall_accuracy or weak_classes:
                 return {
                     "error": (

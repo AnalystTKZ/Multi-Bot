@@ -214,10 +214,13 @@ def run_backtest(bt_start: str, bt_end: str, round_num: int) -> dict:
         # silent capture. run_backtest.py writes its logging to stderr AND to its
         # own timestamped log file (trading-engine/logs/backtest_*.log), so every
         # diagnostic line is visible in the notebook and persisted to disk.
+        env = _build_env()
+        env["BACKTEST_REQUIRE_QUALITY"] = "0" if round_num == 0 else "1"
+        env["BACKTEST_WINDOW_LABEL"] = _source_split_for_round(round_num)
         result = subprocess.run(
             cmd,
             cwd=str(ENGINE_DIR),
-            env=_build_env(),
+            env=env,
             stdout=None,   # inherit
             stderr=None,   # inherit — backtest logs are visible immediately
             timeout=14400,

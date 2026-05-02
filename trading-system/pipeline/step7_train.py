@@ -398,12 +398,6 @@ def main():
     metrics = {}
     failures = []
 
-    weights_dir = ENGINE_DIR / "weights"
-    _regime_weight_paths = {
-        "regime_htf": weights_dir / "regime_htf.pkl",
-        "regime_ltf": weights_dir / "regime_ltf.pkl",
-    }
-
     for model_name in ["regime", "gru"]:
         logger.info("--- Training %s ---", model_name)
         result = run_retrain(model_name)
@@ -414,25 +408,8 @@ def main():
             with open(ML_LOGS / f"retrain_{model_name}_error.log", "w") as f:
                 f.write(str(result))
 
-            if model_name == "regime":
-                # Regime training failure is non-fatal when old weights still exist.
-                # The existing pkl files are usable for backtest and live trading;
-                # the pipeline continues so GRU can still train. The HTF issue
-                # (BIAS_NEUTRAL recall collapse) must be fixed and retrained separately.
-                _old_weights_present = all(p.exists() for p in _regime_weight_paths.values())
-                if _old_weights_present:
-                    logger.warning(
-                        "Regime training failed but old regime_htf.pkl + regime_ltf.pkl "
-                        "are still present — continuing pipeline with existing weights. "
-                        "Fix the regime classifier and rerun: "
-                        "python scripts/retrain_incremental.py --model regime"
-                    )
-                else:
-                    failures.append(model_name)
-                    break
-            else:
-                failures.append(model_name)
-                break
+            failures.append(model_name)
+            break
         else:
             logger.info("Model %s: SUCCESS", model_name)
 

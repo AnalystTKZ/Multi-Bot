@@ -218,10 +218,10 @@ class GRULSTMPredictor(BaseModel):
             with torch.no_grad():
                 dir_logits, mag_pred, log_variance_pred = self._model(x)
                 p_bull_raw = float(torch.sigmoid(dir_logits[0] / self._temperature).item())
-                expected_move = float(torch.relu(mag_pred)[0].item())
+                expected_move = float(np.clip(torch.relu(mag_pred)[0].item(), 0.0, 1.0))
                 expected_variance = float((torch.nn.functional.softplus(log_variance_pred) + 1e-6)[0].item())
                 expected_volatility = float(np.sqrt(expected_variance))
-                entry_depth = float(np.clip(expected_move * 100.0, 0.0, 1.0))
+                entry_depth = expected_move
 
             # Apply isotonic calibration if available — reduces ECE from 0.56 to <0.10
             if self._isotonic is not None:
@@ -497,8 +497,9 @@ class GRULSTMPredictor(BaseModel):
             scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
             best_val = float("inf")
+            best_dir_acc = 0.0
             patience, no_improve = 5, 0
-            history = {"train_loss": [], "val_loss": []}
+            history = {"train_loss": [], "val_loss": [], "val_direction_accuracy": []}
 
             def _compute_loss(dir_logits, mag_pred, log_variance_pred, yb):
                 """
@@ -560,6 +561,8 @@ class GRULSTMPredictor(BaseModel):
 
                 self._model.eval()
                 val_loss = 0.0
+                val_dir_correct = 0
+                val_dir_total = 0
                 with torch.no_grad():
                     for xb, yb in val_dl:
                         xb, yb = xb.to(DEVICE), yb.to(DEVICE)
@@ -570,14 +573,27 @@ class GRULSTMPredictor(BaseModel):
                         log_variance_pred = log_variance_pred.float()
                         batch_loss = _compute_loss(dir_logits, mag_pred, log_variance_pred, yb)
                         val_loss += batch_loss.item() * len(xb)
+                        dir_mask = ~torch.isnan(yb[:, 0])
+                        if dir_mask.sum() > 0:
+                            probs = torch.sigmoid(dir_logits[dir_mask])
+                            pred_up = probs >= 0.5
+                            true_up = yb[:, 0][dir_mask] > 0.5
+                            val_dir_correct += int((pred_up == true_up).sum().item())
+                            val_dir_total += int(dir_mask.sum().item())
                 val_loss /= max(1, len(val_ds))
+                val_dir_acc = float(val_dir_correct / max(val_dir_total, 1))
 
                 history["train_loss"].append(train_loss)
                 history["val_loss"].append(val_loss)
-                logger.info("GRU epoch %d/%d — train=%.4f val=%.4f", epoch + 1, epochs, train_loss, val_loss)
+                history["val_direction_accuracy"].append(val_dir_acc)
+                logger.info(
+                    "GRU epoch %d/%d — train=%.4f val=%.4f dir_acc=%.3f dir_n=%d",
+                    epoch + 1, epochs, train_loss, val_loss, val_dir_acc, val_dir_total,
+                )
 
                 if val_loss < best_val:
                     best_val = val_loss
+                    best_dir_acc = val_dir_acc
                     no_improve = 0
                     self.save(WEIGHT_DIR)
                 else:
@@ -586,6 +602,17 @@ class GRULSTMPredictor(BaseModel):
                         logger.info("GRU early stop at epoch %d", epoch + 1)
                         break
 
+            min_dir_acc = float(os.getenv("GRU_MIN_VAL_DIRECTION_ACCURACY", "0.52"))
+            if best_dir_acc < min_dir_acc:
+                if os.path.exists(WEIGHT_FILE):
+                    os.remove(WEIGHT_FILE)
+                return {
+                    "error": (
+                        f"GRU validation direction accuracy below floor: "
+                        f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
+                    )
+                }
+            history["best_val_direction_accuracy"] = best_dir_acc
             return history
         except Exception as exc:
             logger.error("GRULSTMPredictor.train failed: %s", exc)
@@ -646,6 +673,7 @@ class GRULSTMPredictor(BaseModel):
                 # Build per-segment (feat_arr, tgt_arr) serially.
                 seg_feats: list = []
                 seg_tgts: list  = []
+                segment_errors: list[str] = []
 
                 for seg in group:
                     try:
@@ -658,6 +686,7 @@ class GRULSTMPredictor(BaseModel):
                         lbl   = seg["labels"]
                         n_seq = len(feat_arr) - SEQUENCE_LENGTH
                         if n_seq <= 0:
+                            segment_errors.append(f"{seg.get('symbol')}/{seg.get('timeframe')}: no complete sequences")
                             continue
                         y_dir = lbl.get("direction_up",      pd.Series(0.5, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
                         y_mag = lbl.get("move_magnitude",    pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
@@ -668,13 +697,16 @@ class GRULSTMPredictor(BaseModel):
                         seg_tgts.append(tgt[:n_seq].copy())
                         del feat_arr, tgt
                     except Exception as exc:
-                        logger.warning("train_multi: segment %s/%s failed: %s",
-                                       seg.get("symbol"), tf, exc)
-                        continue
+                        segment_errors.append(f"{seg.get('symbol')}/{seg.get('timeframe')}: {exc}")
+
+                if segment_errors:
+                    raise RuntimeError(
+                        "train_multi segment build failed; refusing partial GRU training: "
+                        + "; ".join(segment_errors[:8])
+                    )
 
                 if not seg_feats:
-                    logger.warning("train_multi: no valid segments for TF=%s", tf)
-                    continue
+                    raise RuntimeError(f"train_multi: no valid segments for TF={tf}")
 
                 total_seq = sum(len(t) for t in seg_tgts)
                 logger.info("train_multi TF=%s: %d sequences across %d segments",
@@ -878,6 +910,7 @@ class GRULSTMPredictor(BaseModel):
                     return loss_dir + 0.5 * loss_mag + 0.3 * loss_vol
 
                 best_val = float("inf")
+                best_dir_acc = 0.0
                 patience, no_improve = _patience, 0
 
                 # Move val set to GPU once — it's small enough (~600K × 30 × F ≈ 600MB)
@@ -920,6 +953,8 @@ class GRULSTMPredictor(BaseModel):
 
                     self._model.eval()
                     val_loss = 0.0
+                    val_dir_correct = 0
+                    val_dir_total = 0
                     with torch.no_grad():
                         val_bs = batch_size * 2   # larger batches during eval (no backward pass)
                         for v_start in range(0, n_val, val_bs):
@@ -929,14 +964,27 @@ class GRULSTMPredictor(BaseModel):
                                 dl, mp, lv = self._model(xb)
                             dl, mp, lv = dl.float(), mp.float(), lv.float()
                             val_loss += _loss_tm(dl, mp, lv, yb).item() * len(xb)
+                            dir_mask = ~torch.isnan(yb[:, 0])
+                            if dir_mask.sum() > 0:
+                                probs = torch.sigmoid(dl[dir_mask])
+                                pred_up = probs >= 0.5
+                                true_up = yb[:, 0][dir_mask] > 0.5
+                                val_dir_correct += int((pred_up == true_up).sum().item())
+                                val_dir_total += int(dir_mask.sum().item())
                     val_loss /= max(1, n_val)
+                    val_dir_acc = float(val_dir_correct / max(val_dir_total, 1))
 
                     combined_history["train_loss"].append(train_loss)
                     combined_history["val_loss"].append(val_loss)
-                    logger.info("train_multi TF=%s epoch %d/%d train=%.4f val=%.4f", tf, epoch + 1, epochs, train_loss, val_loss)
+                    combined_history.setdefault("val_direction_accuracy", []).append(val_dir_acc)
+                    logger.info(
+                        "train_multi TF=%s epoch %d/%d train=%.4f val=%.4f dir_acc=%.3f dir_n=%d",
+                        tf, epoch + 1, epochs, train_loss, val_loss, val_dir_acc, val_dir_total,
+                    )
 
                     if val_loss < best_val:
                         best_val = val_loss
+                        best_dir_acc = val_dir_acc
                         no_improve = 0
                         self.save(WEIGHT_DIR)
                         logger.info("train_multi TF=%s: new best val=%.4f — saved", tf, best_val)
@@ -952,6 +1000,17 @@ class GRULSTMPredictor(BaseModel):
                 import gc; gc.collect()
                 if DEVICE.type == "cuda":
                     torch.cuda.empty_cache()
+                min_dir_acc = float(os.getenv("GRU_MIN_VAL_DIRECTION_ACCURACY", "0.52"))
+                if best_dir_acc < min_dir_acc:
+                    if os.path.exists(WEIGHT_FILE):
+                        os.remove(WEIGHT_FILE)
+                    return {
+                        "error": (
+                            f"GRU validation direction accuracy below floor for TF={tf}: "
+                            f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
+                        )
+                    }
+                combined_history["best_val_direction_accuracy"] = best_dir_acc
 
             return combined_history
         except Exception as exc:
@@ -994,7 +1053,7 @@ class GRULSTMPredictor(BaseModel):
         atr   = compute_atr(df, 14)
         close = df["close"]
 
-        # k-step log return — more Gaussian than arithmetic return
+        # k-step log return — retained for diagnostics/provenance.
         future_close = close.shift(-horizon_bars)
         log_ret_k    = np.log((future_close + 1e-9) / (close + 1e-9))
 
@@ -1013,23 +1072,72 @@ class GRULSTMPredictor(BaseModel):
             .astype(np.float32)
         )
 
-        # ATR-normalised dead zone — suppress noise below 0.3× ATR
-        atr_norm_thresh = (atr * atr_threshold) / (close + 1e-9)
+        f_high = pd.Series(df["high"].astype(float)).shift(-1).iloc[::-1].rolling(
+            horizon_bars, min_periods=horizon_bars
+        ).max().iloc[::-1].reindex(df.index)
+        f_low = pd.Series(df["low"].astype(float)).shift(-1).iloc[::-1].rolling(
+            horizon_bars, min_periods=horizon_bars
+        ).min().iloc[::-1].reindex(df.index)
+        up_exc_atr = ((f_high - close) / (atr + 1e-9)).clip(lower=0.0)
+        down_exc_atr = ((close - f_low) / (atr + 1e-9)).clip(lower=0.0)
+        terminal_atr = (future_close - close) / (atr + 1e-9)
 
+        close_arr = close.to_numpy(dtype=np.float64, copy=False)
+        high_arr = df["high"].astype(float).to_numpy(dtype=np.float64, copy=False)
+        low_arr = df["low"].astype(float).to_numpy(dtype=np.float64, copy=False)
+        atr_arr = atr.to_numpy(dtype=np.float64, copy=False)
+        up_level = close_arr + atr_threshold * atr_arr
+        down_level = close_arr - atr_threshold * atr_arr
+        no_hit = horizon_bars + 1
+        up_hit = np.full(len(df), no_hit, dtype=np.int16)
+        down_hit = np.full(len(df), no_hit, dtype=np.int16)
+        for step_i in range(1, horizon_bars + 1):
+            future_high = np.empty_like(high_arr)
+            future_low = np.empty_like(low_arr)
+            future_high[:-step_i] = high_arr[step_i:]
+            future_high[-step_i:] = np.nan
+            future_low[:-step_i] = low_arr[step_i:]
+            future_low[-step_i:] = np.nan
+            hit_up_now = np.isfinite(future_high) & (future_high >= up_level) & (up_hit == no_hit)
+            hit_down_now = np.isfinite(future_low) & (future_low <= down_level) & (down_hit == no_hit)
+            up_hit[hit_up_now] = step_i
+            down_hit[hit_down_now] = step_i
+
+        terminal_arr = terminal_atr.to_numpy(dtype=np.float64, copy=False)
         smoothing    = 0.05
         direction_up = pd.Series(np.nan, index=df.index, dtype=np.float32)
-        direction_up[log_ret_k >  atr_norm_thresh] = 1.0 - smoothing
-        direction_up[log_ret_k < -atr_norm_thresh] = 0.0 + smoothing
-        # Dead zone (|log_ret_k| <= thresh): NaN → masked out in BCE loss
+        up_first = (
+            (up_hit <= horizon_bars)
+            & (
+                (down_hit > up_hit)
+                | ((down_hit == up_hit) & (terminal_arr > atr_threshold))
+            )
+        )
+        down_first = (
+            (down_hit <= horizon_bars)
+            & (
+                (up_hit > down_hit)
+                | ((up_hit == down_hit) & (terminal_arr < -atr_threshold))
+            )
+        )
+        fallback_up = (up_hit > horizon_bars) & (down_hit > horizon_bars) & (terminal_atr > atr_threshold)
+        fallback_down = (up_hit > horizon_bars) & (down_hit > horizon_bars) & (terminal_atr < -atr_threshold)
+        direction_up[up_first | fallback_up] = 1.0 - smoothing
+        direction_up[down_first | fallback_down] = 0.0 + smoothing
+        # Dead zone (no barrier and no terminal ATR edge): NaN → masked out in BCE loss
 
-        move_magnitude = np.log1p(np.abs(log_ret_k)).astype(np.float32)
+        dominant_exc = pd.concat([up_exc_atr, down_exc_atr], axis=1).max(axis=1)
+        move_magnitude = (dominant_exc / 3.0).clip(0.0, 1.0).astype(np.float32)
 
         # Efficiency ratio: directional purity of the move
         abs_moves = np.abs(close.diff()).rolling(horizon_bars, min_periods=horizon_bars).sum().shift(-horizon_bars)
         net_move  = np.abs(close.shift(-horizon_bars) - close)
         eff_ratio = (net_move / (abs_moves + 1e-9)).clip(0, 1).astype(np.float32)
 
-        entry_depth = np.clip(move_magnitude * 100.0, 0.0, 1.0)
+        forward_range_atr = ((f_high - f_low) / (atr + 1e-9)).clip(lower=0.0)
+        vol_target = (0.5 * vol_target.fillna(0.0).clip(lower=0.0) * 100.0 + 0.5 * (forward_range_atr / 4.0)).clip(0.0, 1.0).astype(np.float32)
+
+        entry_depth = move_magnitude.clip(0.0, 1.0)
 
         label_df = pd.DataFrame(
             {

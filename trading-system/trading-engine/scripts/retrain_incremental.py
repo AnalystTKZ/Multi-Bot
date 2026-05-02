@@ -533,6 +533,20 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         if os.path.exists(_stale_pt):
             os.remove(_stale_pt)
 
+    if os.getenv("GRU_FORCE_COLD_START", "1").lower() in ("1", "true", "yes", "on"):
+        for _stale in (
+            _stale_pt,
+            os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
+            os.path.join(WEIGHTS_DIR, "gru_lstm", "isotonic.pkl"),
+        ):
+            if os.path.exists(_stale):
+                os.remove(_stale)
+                logger.info("Deleted stale GRU artifact for cold start: %s", _stale)
+        model._model = None
+        model._loaded = False
+        model._temperature = 1.0
+        model._isotonic = None
+
     segments = []
     samples_total = 0
 
@@ -542,7 +556,12 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         for tf in GRU_TIMEFRAMES:
             df = _load_ohlcv(sym, tf, split=RETRAIN_DATA_SPLIT)
             if df is None or len(df) <= 200:
-                continue
+                return {
+                    "error": (
+                        f"GRU training data missing or too short for {sym}/{tf}: "
+                        f"{0 if df is None else len(df)} bars"
+                    )
+                }
 
             labels = model.create_labels(df)
             valid_idx = labels.dropna(subset=["direction_up", "move_magnitude", "volatility_target"]).index
@@ -550,8 +569,12 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
             labels_train = labels.loc[valid_idx]
 
             if len(df_train) < 500:
-                del df, labels, df_train, labels_train
-                continue
+                return {
+                    "error": (
+                        f"GRU labels too sparse for {sym}/{tf}: "
+                        f"{len(df_train)} valid samples"
+                    )
+                }
 
             end_ts = df_train.index[-1]
             htf_train = {}
@@ -597,6 +620,7 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         "samples": samples_total,
         "groups_trained": history.get("groups_trained", 0),
         "val_loss_points": len(history.get("val_loss", [])),
+        "best_val_direction_accuracy": history.get("best_val_direction_accuracy"),
     })
     return {"trained": True, "segments": len(segments), "samples": samples_total}
 
@@ -631,8 +655,12 @@ def retrain_gru(dry_run: bool = False) -> dict:
         for tf in GRU_TIMEFRAMES:
             df = _load_ohlcv(sym, tf, split=RETRAIN_DATA_SPLIT)
             if df is None or len(df) <= 200:
-                logger.warning("GRU: skipping %s/%s (insufficient data)", sym, tf)
-                continue
+                return {
+                    "error": (
+                        f"GRU training data missing or too short for {sym}/{tf}: "
+                        f"{0 if df is None else len(df)} bars"
+                    )
+                }
 
             labels = model.create_labels(df)
             valid_idx = labels.dropna(subset=["direction_up", "move_magnitude", "volatility_target"]).index
@@ -640,9 +668,12 @@ def retrain_gru(dry_run: bool = False) -> dict:
             labels_train = labels.loc[valid_idx]
 
             if len(df_train) < 500:
-                logger.warning("GRU: %s/%s has only %d samples — skipping", sym, tf, len(df_train))
-                del df, labels, df_train, labels_train
-                continue
+                return {
+                    "error": (
+                        f"GRU labels too sparse for {sym}/{tf}: "
+                        f"{len(df_train)} valid samples"
+                    )
+                }
 
             # Build HTF dict trimmed to end of training data (no future leakage)
             end_ts = df_train.index[-1]
@@ -673,6 +704,17 @@ def retrain_gru(dry_run: bool = False) -> dict:
                 if os.path.exists(_stale_pt):
                     os.remove(_stale_pt)
                     logger.info("Deleted stale GRU weights (%s) — full retrain from scratch", _stale_pt)
+                for _stale in (
+                    os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
+                    os.path.join(WEIGHTS_DIR, "gru_lstm", "isotonic.pkl"),
+                ):
+                    if os.path.exists(_stale):
+                        os.remove(_stale)
+                        logger.info("Deleted stale GRU sidecar (%s) — full retrain from scratch", _stale)
+                model._model = None
+                model._loaded = False
+                model._temperature = 1.0
+                model._isotonic = None
                 backup_done = True
 
             _t_sym = _time.perf_counter()
@@ -693,9 +735,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
                     "timeframe": tf,
                     "status": "symbol_tf_failed",
                 })
-                del df, labels, df_train, labels_train
-                import gc; gc.collect()
-                continue
+                return {"error": f"GRU-LSTM train failed on {sym}/{tf}: {history['error']}"}
             if not _gru_artifact_exists():
                 err = "GRU weights were not created"
                 logger.error("GRU-LSTM train failed on %s/%s: %s", sym, tf, err)
@@ -705,9 +745,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
                     "timeframe": tf,
                     "status": "symbol_tf_failed",
                 })
-                del df, labels, df_train, labels_train
-                import gc; gc.collect()
-                continue
+                return {"error": f"GRU-LSTM train failed on {sym}/{tf}: {err}"}
             logger.info("GRU-LSTM trained on %s/%s. Val loss points: %d",
                         sym, tf, len(history.get("val_loss", [])))
             log_retrain("gru_lstm", {
@@ -715,6 +753,7 @@ def retrain_gru(dry_run: bool = False) -> dict:
                 "status": "symbol_tf_complete",
                 "samples": len(df_train),
                 "val_loss_points": len(history.get("val_loss", [])),
+                "best_val_direction_accuracy": history.get("best_val_direction_accuracy"),
             })
             trained += 1
             samples_total += len(df_train)

@@ -632,8 +632,11 @@ class FeatureEngine:
             htf_atr = compute_atr(htf_df, 14).replace([np.inf, -np.inf], np.nan)
             htf_range = (htf_df["high"] - htf_df["low"]).abs().replace(0.0, np.nan)
             htf_atr = htf_atr.fillna(htf_range).ffill()
-            if htf_atr.isna().any():
-                raise ValueError("_build_sequence_df: HTF ATR warmup produced non-finite values")
+            first_valid = htf_atr.first_valid_index()
+            if first_valid is None:
+                raise ValueError("_build_sequence_df: HTF ATR warmup produced no finite values")
+            if htf_atr.loc[first_valid:].isna().any():
+                raise ValueError("_build_sequence_df: HTF ATR contains non-finite values after warmup")
             return htf_atr
 
         htf = df_htf if isinstance(df_htf, dict) else {}
@@ -1067,8 +1070,6 @@ class FeatureEngine:
             ml_base.get("expected_move", ml_base.get("entry_depth", 0.0)),
             0.0,
         )
-        if expected_move < 0.02:
-            expected_move *= 100.0
 
         feats[0] = _quality_strategy_code(signal.get("trader_id", ""))
         feats[1] = 1.0 if str(side).lower() == "buy" else 0.0
@@ -1221,8 +1222,6 @@ class FeatureEngine:
         p_bull = float(np.clip(_safe(ml_preds, "p_bull", 0.5), 0.0, 1.0))
         p_bear = float(np.clip(_safe(ml_preds, "p_bear", 0.5), 0.0, 1.0))
         expected_move = _safe(ml_preds, "expected_move", _safe(ml_preds, "entry_depth", 0.0))
-        if expected_move < 0.02:
-            expected_move *= 100.0
         close = _bar("close", 1.0)
         atr = _bar("atr_14", 0.001)
         atr_ratio = float(np.clip(atr / (close + 1e-9) * 1000.0, 0.0, 10.0))

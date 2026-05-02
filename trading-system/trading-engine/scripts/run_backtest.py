@@ -192,6 +192,15 @@ def _env_ml_enabled() -> bool:
     return True
 
 
+def _backtest_requires_quality(window_label: str | None = None) -> bool:
+    """Quality/RL are deferred for train-window label generation only."""
+    explicit = os.getenv("BACKTEST_REQUIRE_QUALITY")
+    if explicit is not None:
+        return explicit.strip().lower() not in ("0", "false", "no", "off")
+    label = (window_label or os.getenv("BACKTEST_WINDOW_LABEL") or os.getenv("BT_WINDOW", "")).strip().lower()
+    return label not in {"train", "training"}
+
+
 def _csv_columns(path: str) -> list[str]:
     with open(path, newline="") as fh:
         return next(csv.reader(fh), [])
@@ -344,6 +353,18 @@ def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
     if not np.isnan(p_bull):
         out["p_bull"] = p_bull
         out["p_bear"] = float(cache["p_bear"][idx])
+        if "expected_move" in cache:
+            expected_move = float(cache["expected_move"][idx])
+            if not np.isnan(expected_move):
+                out["expected_move"] = expected_move
+        if "entry_depth" in cache:
+            entry_depth = float(cache["entry_depth"][idx])
+            if not np.isnan(entry_depth):
+                out["entry_depth"] = entry_depth
+        if "expected_volatility" in cache:
+            expected_volatility = float(cache["expected_volatility"][idx])
+            if not np.isnan(expected_volatility):
+                out["expected_volatility"] = expected_volatility
         out["expected_variance"] = float(cache["expected_variance"][idx])
     regime_id = int(cache["regime"][idx])
     if regime_id >= 0:
@@ -1515,6 +1536,9 @@ def _precompute_ml_cache(
         cache = {
             "p_bull": np.full(n, np.nan, dtype=np.float32),
             "p_bear": np.full(n, np.nan, dtype=np.float32),
+            "expected_move": np.full(n, np.nan, dtype=np.float32),
+            "entry_depth": np.full(n, np.nan, dtype=np.float32),
+            "expected_volatility": np.full(n, np.nan, dtype=np.float32),
             "expected_variance": np.full(n, np.nan, dtype=np.float32),
             "regime": np.full(n, -1, dtype=np.int8),
             "regime_ltf": np.full(n, -1, dtype=np.int8),
@@ -1567,7 +1591,8 @@ def _precompute_ml_cache(
 
                     # Vectorised post-processing
                     var_vals    = np.log1p(np.exp(all_log_var)) + 1e-6   # softplus
-                    entry_depth = np.clip(all_mag * 100.0, 0.0, 1.0)
+                    expected_move = np.clip(all_mag, 0.0, 1.0).astype(np.float32, copy=False)
+                    entry_depth = expected_move
                     vol_arr     = np.sqrt(var_vals)
 
                     # Apply isotonic calibration if available — reduces ECE from 0.56
@@ -1583,8 +1608,11 @@ def _precompute_ml_cache(
 
                     cache["p_bull"][bar_indices] = all_p_bull
                     cache["p_bear"][bar_indices] = p_bear_arr
+                    cache["expected_move"][bar_indices] = expected_move
+                    cache["entry_depth"][bar_indices] = entry_depth
+                    cache["expected_volatility"][bar_indices] = vol_arr.astype(np.float32, copy=False)
                     cache["expected_variance"][bar_indices] = var_vals.astype(np.float32, copy=False)
-                    del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, entry_depth, vol_arr
+                    del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, expected_move, entry_depth, vol_arr
             except Exception as exc:
                 logger.error("ML cache: GRU batch failed for %s: %s", symbol, exc)
                 del seq_arr
@@ -2973,23 +3001,32 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
         try:
             _ensure_mpl_config_dir()
             from models.regime_classifier import RegimeClassifier
-            from models.quality_scorer import QualityScorer
             from models.gru_lstm_predictor import GRULSTMPredictor
             r_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
             if _model_ready(r_htf):
                 worker_ml_models["regime_htf"] = r_htf
                 worker_ml_models["regime_4h"] = r_htf
                 worker_ml_models["regime"] = r_htf
+            else:
+                raise RuntimeError("Worker HTF regime model is not ready")
             r_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
             if _model_ready(r_ltf):
                 worker_ml_models["regime_ltf"] = r_ltf
                 worker_ml_models["regime_1h"] = r_ltf
-            q = QualityScorer()
-            if _model_ready(q):
-                worker_ml_models["quality"] = q
+            else:
+                raise RuntimeError("Worker LTF regime model is not ready")
+            if _backtest_requires_quality():
+                from models.quality_scorer import QualityScorer
+                q = QualityScorer()
+                if _model_ready(q):
+                    worker_ml_models["quality"] = q
+                else:
+                    raise RuntimeError("Worker QualityScorer is not ready")
             g = GRULSTMPredictor()
             if _model_ready(g):
                 worker_ml_models["gru_lstm"] = g
+            else:
+                raise RuntimeError("Worker GRU-LSTM model is not ready")
         except Exception as exc:
             logger.error("Worker ML model load failed: %s", exc)
             raise
@@ -3358,6 +3395,8 @@ def main():
     bt_end   = args.end   or _split_end
     manual_window = bool(args.start or args.end)
     window_label = args.window_label or (_split_key if not manual_window else f"custom_{_split_key}")
+    os.environ["BACKTEST_WINDOW_LABEL"] = window_label
+    quality_required = _backtest_requires_quality(window_label)
     logger.info(
         "Backtest window: %s → %s  (split=%s, label=%s%s)",
         bt_start, bt_end, _split_key, window_label,
@@ -3401,16 +3440,22 @@ def main():
             logger.error("RegimeClassifier load failed: %s", exc)
             raise
 
-        try:
-            from models.quality_scorer import QualityScorer
-            qs = QualityScorer()
-            if _model_ready(qs):
-                ml_models["quality"] = qs
-            else:
-                raise RuntimeError("QualityScorer unavailable; train quality_scorer.pkl before backtesting with ML")
-        except Exception as exc:
-            logger.error("QualityScorer load failed: %s", exc)
-            raise
+        if quality_required:
+            try:
+                from models.quality_scorer import QualityScorer
+                qs = QualityScorer()
+                if _model_ready(qs):
+                    ml_models["quality"] = qs
+                else:
+                    raise RuntimeError("QualityScorer unavailable; train quality_scorer.pkl before backtesting with ML")
+            except Exception as exc:
+                logger.error("QualityScorer load failed: %s", exc)
+                raise
+        else:
+            logger.info(
+                "Quality/RL gate disabled for %s backtest — generating clean source journal from Regime + GRU only",
+                window_label,
+            )
 
         try:
             from models.gru_lstm_predictor import GRULSTMPredictor
