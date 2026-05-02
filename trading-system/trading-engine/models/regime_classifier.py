@@ -1221,7 +1221,8 @@ class RegimeClassifier(BaseModel):
         return self._fit(X, y, sample_weight=sample_weight)
 
     def _fit(self, X: np.ndarray, y: np.ndarray,
-             sample_weight: Optional[np.ndarray] = None) -> dict:
+             sample_weight: Optional[np.ndarray] = None,
+             _cold_start: bool = False) -> dict:
         """Core GPU training loop. X: (N, F) float32, y: (N,) int64.
 
         sample_weight: optional (N,) float32 — per-bar confidence from labeling.
@@ -1345,7 +1346,12 @@ class RegimeClassifier(BaseModel):
             if _class_mismatch:
                 logger.warning("RegimeClassifier[mode=%s]: class count changed %d→%d, resetting",
                                self._mode, _loaded_n_cls, _n_cls)
-            _warm_start = (self._model is not None and not _feature_mismatch and not _class_mismatch)
+            _warm_start = (
+                self._model is not None
+                and not _feature_mismatch
+                and not _class_mismatch
+                and not _cold_start
+            )
             if not _warm_start:
                 # Cold start: fresh random init
                 self._model      = _build_mlp(n_feat, _n_cls).to(DEVICE)
@@ -1511,6 +1517,26 @@ class RegimeClassifier(BaseModel):
                         self._model, torch.nn.DataParallel) else self._model
                     epoch_1_state = {k: v.cpu().clone() for k, v in m_e1.state_dict().items()}
 
+                    # If warm-start weights are barely above random (loaded pkl is
+                    # biased), continuing from them makes things worse — the observed
+                    # pattern is balanced_acc degrading from ~0.34 → ~0.24 over 50
+                    # epochs while val_loss decreases (confident wrong predictions).
+                    # Reset to cold start and retry with the same (already-undersampled)
+                    # data so we don't waste the majority-class filtering work.
+                    _random_baseline = 1.0 / _n_cls
+                    if _warm_start and balanced_acc < _random_baseline + 0.05:
+                        logger.warning(
+                            "Regime[mode=%s]: warm-start epoch-1 balanced_acc=%.3f "
+                            "barely above random (baseline=%.3f) — forcing cold restart",
+                            self._mode, balanced_acc, _random_baseline,
+                        )
+                        del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu, tr_idx_t
+                        if DEVICE.type == "cuda":
+                            torch.cuda.empty_cache()
+                        # Reset model to random init so next call sees cold start
+                        self._model = None
+                        return self._fit(X, y, sample_weight=sample_weight, _cold_start=True)
+
                 # Early abort: if balanced accuracy degraded >4pp from epoch 1
                 # after 3 warm-up epochs, training is making things worse.
                 if epoch >= 3 and epoch_1_balanced_acc is not None:
@@ -1625,7 +1651,7 @@ class RegimeClassifier(BaseModel):
                 "accuracy":  accuracy,
                 "n_train":   len(X_tr),
                 "n_val":     len(X_va),
-                "val_loss":  round(best_val_loss, 6),
+                "val_loss":  round(va_loss, 6),
                 "per_class_accuracy": per_class_accuracy,
                 "timeframe": self._timeframe or "default",
             }
