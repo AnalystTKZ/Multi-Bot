@@ -8,10 +8,12 @@ Run from trading-engine/:
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -145,3 +147,37 @@ def test_market_decision_uses_score_regime_as_filter():
     )
     assert allowed
     assert reason == "trend_structure_entry"
+
+
+def test_ltf_model_score_alignment_keeps_native_source_history():
+    cwd = os.getcwd()
+    try:
+        from scripts.run_backtest import _align_ltf_score_frame_complete
+    finally:
+        os.chdir(cwd)
+    from services.regime_scores import LTF_SCORE_COLUMNS
+
+    source_idx = pd.date_range("2020-01-01", periods=6, freq="h", tz="UTC")
+    target_idx = pd.date_range("2020-01-01 03:00", periods=8, freq="15min", tz="UTC")
+    score_frame = pd.DataFrame(
+        {
+            name: np.linspace(0.1, 0.9, len(source_idx), dtype=np.float32)
+            for name in LTF_SCORE_COLUMNS
+        },
+        index=source_idx,
+    )
+
+    source_aligned = _align_ltf_score_frame_complete(
+        score_frame, source_idx, LTF_SCORE_COLUMNS, "GBPUSD", "model source"
+    )
+    target_aligned = _align_ltf_score_frame_complete(
+        source_aligned, target_idx, LTF_SCORE_COLUMNS, "GBPUSD", "alignment"
+    )
+
+    assert not source_aligned[LTF_SCORE_COLUMNS].isna().any().any()
+    assert not target_aligned[LTF_SCORE_COLUMNS].isna().any().any()
+
+    with pytest.raises(RuntimeError, match="LTF score frame has gaps"):
+        _align_ltf_score_frame_complete(
+            target_aligned, source_idx, LTF_SCORE_COLUMNS, "GBPUSD", "model source"
+        )

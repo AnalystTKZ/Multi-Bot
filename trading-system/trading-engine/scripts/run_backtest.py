@@ -112,7 +112,7 @@ MAX_HOLD_BARS      = 200        # max bars before time-exit
 DATA_DIR           = _DATA_DIR_RESOLVED
 OUTPUT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backtest_results")
 ML_CACHE_DIR       = os.path.join(OUTPUT_DIR, "ml_cache")
-ML_CACHE_SCHEMA    = "context_availability_v4_regime_scores"
+ML_CACHE_SCHEMA    = "context_availability_v5_ltf_source_scores"
 _BACKTEST_WARMUP = {
     "5M": pd.Timedelta(days=7),
     "15M": pd.Timedelta(days=14),
@@ -345,6 +345,35 @@ def _load_ml_cache(path: str, expected_len: int) -> dict[str, np.ndarray] | None
     except Exception as exc:
         logger.warning("ML cache load failed %s: %s", path, exc)
         return None
+
+
+def _align_ltf_score_frame_complete(
+    score_frame: pd.DataFrame | None,
+    target_index: pd.Index,
+    score_columns: list[str],
+    symbol: str,
+    context: str,
+) -> pd.DataFrame:
+    if score_frame is None:
+        raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
+    missing = [name for name in score_columns if name not in score_frame.columns]
+    if missing:
+        raise RuntimeError(
+            f"ML cache {context} LTF score frame missing columns for {symbol}: {missing}"
+        )
+    aligned = score_frame.reindex(target_index, method="ffill")
+    gap_mask = aligned[score_columns].isna().any(axis=1)
+    if bool(gap_mask.any()):
+        gap_cols = [
+            name for name in score_columns
+            if bool(aligned[name].isna().any())
+        ]
+        first_gap = aligned.index[gap_mask.argmax()]
+        raise RuntimeError(
+            f"ML cache {context} LTF score frame has gaps for {symbol}: "
+            f"first_gap={first_gap} columns={gap_cols}"
+        )
+    return aligned
 
 
 def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
@@ -1356,6 +1385,7 @@ def _precompute_ml_cache(
         _regime_ltf_series = None
         _regime_ltf_conf   = None
         _regime_ltf_score_frame = None
+        _regime_ltf_score_source_frame = None
         _trade_regime_series = None
 
         _do_4h = bool(regime_4h and regime_4h.is_trained and regime_4h._model is not None)
@@ -1460,22 +1490,33 @@ def _precompute_ml_cache(
             gc.collect()
 
         if _do_1h and _X_1h is not None:
+            from services.regime_scores import LTF_SCORE_COLUMNS
+
             _t_ri = _time.perf_counter()
             _r1h, _c1h, _score_model_frame = _infer_regime(regime_1h, _X_1h, _df_src_1h)
             del _X_1h
+            if _score_model_frame is None:
+                raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
+            _regime_ltf_score_source_frame = _align_ltf_score_frame_complete(
+                _score_model_frame,
+                _df_src_1h.index,
+                LTF_SCORE_COLUMNS,
+                symbol,
+                "model source",
+            )
             if _df_src_1h is not df:
                 _regime_ltf_series = _align_complete(_r1h, df.index, "regime_ltf", int)
                 _regime_ltf_conf   = _align_complete(_c1h, df.index, "regime_ltf_conf")
-                if _score_model_frame is None:
-                    raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
-                _regime_ltf_score_frame = _score_model_frame.reindex(df.index, method="ffill")
-                if _regime_ltf_score_frame.isna().any().any():
-                    raise RuntimeError(f"ML cache alignment left gaps in LTF score frame for {symbol}")
+                _regime_ltf_score_frame = _align_ltf_score_frame_complete(
+                    _regime_ltf_score_source_frame,
+                    df.index,
+                    LTF_SCORE_COLUMNS,
+                    symbol,
+                    "alignment",
+                )
             else:
                 _regime_ltf_series, _regime_ltf_conf = _r1h, _c1h
-                if _score_model_frame is None:
-                    raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
-                _regime_ltf_score_frame = _score_model_frame
+                _regime_ltf_score_frame = _regime_ltf_score_source_frame
             gc.collect()
 
         if _do_1h and _df_src_1h is not None:
@@ -1486,15 +1527,13 @@ def _precompute_ml_cache(
             )
 
             _score_src = build_regime_score_frame(_df_src_1h, symbol=symbol)
-            if _regime_ltf_score_frame is None:
-                raise RuntimeError(f"ML cache missing LTF score frame for {symbol}")
-            _model_score_src = (
-                _regime_ltf_score_frame
-                if _df_src_1h is df
-                else _regime_ltf_score_frame.reindex(_df_src_1h.index, method="ffill")
+            _model_score_src = _align_ltf_score_frame_complete(
+                _regime_ltf_score_source_frame,
+                _df_src_1h.index,
+                LTF_SCORE_COLUMNS,
+                symbol,
+                "model source",
             )
-            if _model_score_src[LTF_SCORE_COLUMNS].isna().any().any():
-                raise RuntimeError(f"ML cache model LTF score frame has gaps for {symbol}")
             for _score_name in LTF_SCORE_COLUMNS:
                 _score_src[_score_name] = _model_score_src[_score_name]
             _score_src["volatility_score"] = _score_src["volatility_percentile"]
