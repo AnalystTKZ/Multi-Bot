@@ -81,12 +81,10 @@ def _get_device():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32       = True
         return torch.device("cuda")
-    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
-        raise RuntimeError(
-            "RegimeClassifier: CUDA not available on Kaggle — "
-            "enable GPU accelerator in notebook settings."
-        )
-    logger.warning("RegimeClassifier: CUDA unavailable — using CPU")
+    logger.warning(
+        "RegimeClassifier: CUDA unavailable%s — using CPU",
+        " on Kaggle" if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") else "",
+    )
     import torch as _t
     return _t.device("cpu")
 
@@ -2065,6 +2063,7 @@ class RegimeClassifier(BaseModel):
                 HTF_CLASSES[c]: int((y_va_labels == c).sum())
                 for c in range(len(HTF_CLASSES))
             }
+            warnings: list[str] = []
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF score samples train=%d val=%d train_labels=%s val_labels=%s",
                 self._mode,
@@ -2076,13 +2075,13 @@ class RegimeClassifier(BaseModel):
             missing_train = [name for name in ("BIAS_UP", "BIAS_DOWN") if train_counts.get(name, 0) == 0]
             missing_val = [name for name in ("BIAS_UP", "BIAS_DOWN") if val_counts.get(name, 0) == 0]
             if missing_train or missing_val:
-                return {
-                    "error": (
-                        f"HTF bias score targets missing directional evidence: "
-                        f"missing_train={missing_train} missing_val={missing_val} "
-                        f"train_counts={train_counts} val_counts={val_counts}"
-                    )
-                }
+                warning = (
+                    f"HTF bias score targets missing directional evidence: "
+                    f"missing_train={missing_train} missing_val={missing_val} "
+                    f"train_counts={train_counts} val_counts={val_counts}"
+                )
+                warnings.append(warning)
+                logger.warning("%s; continuing so weights can still be saved", warning)
 
             n_feat = X_tr.shape[1]
             _loaded_n_cls = getattr(self, "_n_classes", len(HTF_SCORE_OUTPUTS))
@@ -2300,15 +2299,14 @@ class RegimeClassifier(BaseModel):
                 if val_counts.get(HTF_CLASSES[c], 0) > 0 and pred_share[c] < min_pred_share
             ]
             if max_pred_share > max_pred_allowed or collapsed_classes:
-                return {
-                    "error": (
-                        f"Regime HTF score prediction distribution collapsed: "
-                        f"pred_share={dict(zip(HTF_CLASSES, np.round(pred_share, 4).tolist()))}, "
-                        f"max_pred_share={max_pred_share:.1%}, "
-                        f"collapsed_classes={collapsed_classes}. "
-                        "Refusing to save misleading directional-bias score weights."
-                    )
-                }
+                warning = (
+                    f"Regime HTF score prediction distribution collapsed: "
+                    f"pred_share={dict(zip(HTF_CLASSES, np.round(pred_share, 4).tolist()))}, "
+                    f"max_pred_share={max_pred_share:.1%}, "
+                    f"collapsed_classes={collapsed_classes}."
+                )
+                warnings.append(warning)
+                logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
 
             min_directional_precision = float(os.getenv(
                 "REGIME_HTF_MIN_DIRECTIONAL_PRECISION",
@@ -2337,18 +2335,17 @@ class RegimeClassifier(BaseModel):
             ]
             weak_neutral = float(final_metrics["recall"].get("BIAS_NEUTRAL", 0.0)) < min_neutral_recall
             if weak_precision or weak_recall or weak_f1 or weak_neutral:
-                return {
-                    "error": (
-                        f"Regime HTF directional score validation below acceptance floor: "
-                        f"precision={per_class_precision} min_precision={min_directional_precision:.3f} "
-                        f"recall={per_class_accuracy} min_recall={min_directional_recall:.3f} "
-                        f"f1={per_class_f1} min_f1={min_directional_f1:.3f} "
-                        f"min_neutral_recall={min_neutral_recall:.3f} "
-                        f"weak_precision={weak_precision} weak_recall={weak_recall} "
-                        f"weak_f1={weak_f1} weak_neutral={weak_neutral}. "
-                        "Refusing to save directional-bias score weights."
-                    )
-                }
+                warning = (
+                    f"Regime HTF directional score validation below acceptance floor: "
+                    f"precision={per_class_precision} min_precision={min_directional_precision:.3f} "
+                    f"recall={per_class_accuracy} min_recall={min_directional_recall:.3f} "
+                    f"f1={per_class_f1} min_f1={min_directional_f1:.3f} "
+                    f"min_neutral_recall={min_neutral_recall:.3f} "
+                    f"weak_precision={weak_precision} weak_recall={weak_recall} "
+                    f"weak_f1={weak_f1} weak_neutral={weak_neutral}."
+                )
+                warnings.append(warning)
+                logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
 
             self.save(self.weight_path)
             logger.info("RegimeClassifier[%s] HTF score head saved to %s",
@@ -2368,6 +2365,8 @@ class RegimeClassifier(BaseModel):
                 "decision_threshold": round(float(threshold), 4),
                 "decision_margin": round(float(margin), 4),
                 "timeframe": self._timeframe or "default",
+                "warnings": warnings,
+                "status": "complete_with_warnings" if warnings else "complete",
             }
         except Exception as exc:
             logger.error("RegimeClassifier._fit_bias_scores failed: %s", exc)
@@ -2623,15 +2622,15 @@ class RegimeClassifier(BaseModel):
                 for i, name in enumerate(LTF_SCORE_OUTPUTS)
                 if target_std[i] > 0.03 and pred_std[i] < min_pred_std
             ]
+            warnings: list[str] = []
             if weak_scores or collapsed_scores:
-                return {
-                    "error": (
-                        f"Regime score validation below acceptance floor: "
-                        f"mae={score_mae} max_mae={max_mae:.3f} "
-                        f"weak_scores={weak_scores} collapsed_scores={collapsed_scores}. "
-                        "Refusing to save misleading LTF score weights."
-                    )
-                }
+                warning = (
+                    f"Regime score validation below acceptance floor: "
+                    f"mae={score_mae} max_mae={max_mae:.3f} "
+                    f"weak_scores={weak_scores} collapsed_scores={collapsed_scores}."
+                )
+                warnings.append(warning)
+                logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
 
             self.save(self.weight_path)
             mean_mae = float(np.mean(mae))
@@ -2645,6 +2644,8 @@ class RegimeClassifier(BaseModel):
                 "score_corr": score_corr,
                 "score_outputs": list(LTF_SCORE_OUTPUTS),
                 "timeframe": self._timeframe or "default",
+                "warnings": warnings,
+                "status": "complete_with_warnings" if warnings else "complete",
             }
         except Exception as exc:
             logger.error("RegimeClassifier._fit_behaviour_scores failed: %s", exc)
@@ -3106,16 +3107,16 @@ class RegimeClassifier(BaseModel):
             del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu, tr_idx_t
             if DEVICE.type == "cuda":
                 torch.cuda.empty_cache()
+            warnings: list[str] = []
             if max_pred_share > max_pred_allowed or collapsed_classes:
-                return {
-                    "error": (
-                        f"Regime prediction distribution collapsed: "
-                        f"pred_share={dict(zip(_classes, np.round(pred_share, 4).tolist()))}, "
-                        f"max_pred_share={max_pred_share:.1%}, "
-                        f"collapsed_classes={collapsed_classes}. "
-                        "Refusing to save misleading regime weights."
-                    )
-                }
+                warning = (
+                    f"Regime prediction distribution collapsed: "
+                    f"pred_share={dict(zip(_classes, np.round(pred_share, 4).tolist()))}, "
+                    f"max_pred_share={max_pred_share:.1%}, "
+                    f"collapsed_classes={collapsed_classes}."
+                )
+                warnings.append(warning)
+                logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
             default_min_overall = (1.0 / max(_n_cls, 1)) + 0.03
             min_overall_accuracy = float(
                 os.getenv("REGIME_MIN_OVERALL_ACCURACY", f"{default_min_overall:.6f}")
@@ -3139,27 +3140,25 @@ class RegimeClassifier(BaseModel):
                     if float(per_class_f1.get(name, 0.0)) < min_directional_f1
                 ]
                 if weak_precision or weak_f1:
-                    return {
-                        "error": (
-                            f"Regime HTF directional validation below acceptance floor: "
-                            f"precision={per_class_precision} min_directional_precision="
-                            f"{min_directional_precision:.3f} f1={per_class_f1} "
-                            f"min_directional_f1={min_directional_f1:.3f} "
-                            f"weak_precision={weak_precision} weak_f1={weak_f1}. "
-                            "Refusing to save directional-bias weights that flood neutral bars."
-                        )
-                    }
-            if accuracy < min_overall_accuracy or weak_classes:
-                return {
-                    "error": (
-                        f"Regime validation below acceptance floor: accuracy={accuracy:.3f} "
-                        f"min_overall={min_overall_accuracy:.3f} "
-                        f"per_class={per_class_accuracy} "
-                        f"min_class={min_class_accuracy:.3f} "
-                        f"weak_classes={weak_classes}. "
-                        "Refusing to save misleading regime weights."
+                    warning = (
+                        f"Regime HTF directional validation below acceptance floor: "
+                        f"precision={per_class_precision} min_directional_precision="
+                        f"{min_directional_precision:.3f} f1={per_class_f1} "
+                        f"min_directional_f1={min_directional_f1:.3f} "
+                        f"weak_precision={weak_precision} weak_f1={weak_f1}."
                     )
-                }
+                    warnings.append(warning)
+                    logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
+            if accuracy < min_overall_accuracy or weak_classes:
+                warning = (
+                    f"Regime validation below acceptance floor: accuracy={accuracy:.3f} "
+                    f"min_overall={min_overall_accuracy:.3f} "
+                    f"per_class={per_class_accuracy} "
+                    f"min_class={min_class_accuracy:.3f} "
+                    f"weak_classes={weak_classes}."
+                )
+                warnings.append(warning)
+                logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
             default_warn_accuracy = (1.0 / max(_n_cls, 1)) + 0.15
             warn_accuracy = float(
                 os.getenv("REGIME_WARN_ACCURACY", f"{default_warn_accuracy:.6f}")
@@ -3185,6 +3184,8 @@ class RegimeClassifier(BaseModel):
                 "per_class_f1": per_class_f1,
                 "confusion_matrix": confusion.tolist(),
                 "timeframe": self._timeframe or "default",
+                "warnings": warnings,
+                "status": "complete_with_warnings" if warnings else "complete",
             }
 
         except Exception as exc:

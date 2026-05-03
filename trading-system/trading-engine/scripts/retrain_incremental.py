@@ -64,12 +64,10 @@ try:
         logger.info("cuDNN benchmark=True, TF32 matmul=True")
     else:
         _DEVICE = "cpu"
-        logger.info("Device: CPU")
-        if _ENV["on_kaggle"]:
-            raise RuntimeError(
-                "retrain_incremental: CUDA not available on Kaggle — "
-                "enable GPU accelerator in notebook settings."
-            )
+        logger.warning(
+            "Device: CPU%s — training will be slower but will continue",
+            " on Kaggle" if _ENV["on_kaggle"] else "",
+        )
     # ── CPU thread config: use all 4 Kaggle CPUs ──────────────────────────────
     _n_cpu = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
     _torch.set_num_threads(_n_cpu)
@@ -533,7 +531,7 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         if os.path.exists(_stale_pt):
             os.remove(_stale_pt)
 
-    if os.getenv("GRU_FORCE_COLD_START", "1").lower() in ("1", "true", "yes", "on"):
+    if os.getenv("GRU_FORCE_COLD_START", "0").lower() in ("1", "true", "yes", "on"):
         for _stale in (
             _stale_pt,
             os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
@@ -546,6 +544,10 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         model._loaded = False
         model._temperature = 1.0
         model._isotonic = None
+    elif os.path.exists(_stale_pt) and model._model is not None:
+        logger.info("GRU warm start enabled from existing weights: %s", _stale_pt)
+    else:
+        logger.info("GRU cold start: no compatible existing weights found")
 
     segments = []
     samples_total = 0
@@ -698,23 +700,24 @@ def retrain_gru(dry_run: bool = False) -> dict:
 
             if not backup_done:
                 _backup_weights(os.path.join(WEIGHTS_DIR, "gru_lstm"))
-                # Delete stale weights when SEQUENCE_FEATURES changes.
-                # Old model.pt would cause a shape mismatch on first train() call.
                 _stale_pt = os.path.join(WEIGHTS_DIR, "gru_lstm", "model.pt")
-                if os.path.exists(_stale_pt):
-                    os.remove(_stale_pt)
-                    logger.info("Deleted stale GRU weights (%s) — full retrain from scratch", _stale_pt)
-                for _stale in (
-                    os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
-                    os.path.join(WEIGHTS_DIR, "gru_lstm", "isotonic.pkl"),
-                ):
-                    if os.path.exists(_stale):
-                        os.remove(_stale)
-                        logger.info("Deleted stale GRU sidecar (%s) — full retrain from scratch", _stale)
-                model._model = None
-                model._loaded = False
-                model._temperature = 1.0
-                model._isotonic = None
+                if os.getenv("GRU_FORCE_COLD_START", "0").lower() in ("1", "true", "yes", "on"):
+                    for _stale in (
+                        _stale_pt,
+                        os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
+                        os.path.join(WEIGHTS_DIR, "gru_lstm", "isotonic.pkl"),
+                    ):
+                        if os.path.exists(_stale):
+                            os.remove(_stale)
+                            logger.info("Deleted stale GRU artifact for forced cold start: %s", _stale)
+                    model._model = None
+                    model._loaded = False
+                    model._temperature = 1.0
+                    model._isotonic = None
+                elif os.path.exists(_stale_pt) and model._model is not None:
+                    logger.info("GRU warm start enabled from existing weights: %s", _stale_pt)
+                else:
+                    logger.info("GRU cold start: no compatible existing weights found")
                 backup_done = True
 
             _t_sym = _time.perf_counter()
@@ -1141,6 +1144,23 @@ def retrain_regime(dry_run: bool = False) -> dict:
     from models.regime_classifier import RegimeClassifier as _RC
     import gc as _gc
 
+    def _new_regime_model(timeframe: str, mode: str):
+        try:
+            model = _RC(timeframe=timeframe, mode=mode)
+            if getattr(model, "_model", None) is not None:
+                logger.info("Regime %s/%s warm start enabled from existing weights", timeframe, mode)
+            else:
+                logger.info("Regime %s/%s cold start: no existing weights found", timeframe, mode)
+            return model
+        except Exception as exc:
+            logger.warning(
+                "Regime %s/%s existing weights are unusable (%s); cold starting",
+                timeframe,
+                mode,
+                exc,
+            )
+            return _RC(timeframe=timeframe, mode=mode, load_existing=False)
+
     symbols = _get_symbols("RETRAIN_SYMBOLS_REGIME", MAJOR_SYMBOLS)
 
     group_gmms_htf: dict = {}
@@ -1227,7 +1247,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
             if htf_path not in backed_up:
                 _backup_weights(htf_path)
                 backed_up.add(htf_path)
-            model_htf = _RC(timeframe="4H", mode="htf_bias", load_existing=False)
+            model_htf = _new_regime_model("4H", "htf_bias")
             _t_htf_train = _time.perf_counter()
             res_4h = model_htf.train_on_arrays(
                 X_4h, y_4h, sample_weight=sw_4h,
@@ -1280,7 +1300,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
             if ltf_path not in backed_up:
                 _backup_weights(ltf_path)
                 backed_up.add(ltf_path)
-            model_ltf = _RC(timeframe="1H", mode="ltf_behaviour", load_existing=False)
+            model_ltf = _new_regime_model("1H", "ltf_behaviour")
             _t_ltf_train = _time.perf_counter()
             res_1h = model_ltf.train_on_arrays(
                 X_1h, y_1h, sample_weight=sw_1h,

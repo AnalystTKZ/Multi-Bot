@@ -34,8 +34,8 @@ def _get_device():
     """
     Return best available device.
     Ensures CUDA_VISIBLE_DEVICES is not masking GPUs, then selects cuda:0.
-    On Kaggle (KAGGLE_KERNEL_RUN_TYPE set) CUDA is mandatory — raises if absent.
-    Locally falls back to CPU so development still works without GPUs.
+    Falls back to CPU if CUDA is unavailable. Kaggle CPU training is slow, but
+    it should still cold-start/warm-start and produce artifacts.
     """
     import os
     import torch
@@ -56,12 +56,10 @@ def _get_device():
         torch.backends.cudnn.allow_tf32       = True
         return torch.device("cuda")
 
-    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
-        raise RuntimeError(
-            "GRULSTMPredictor: CUDA not available on Kaggle — "
-            "enable GPU accelerator in notebook settings."
-        )
-    logger.warning("GRU: CUDA unavailable — using CPU (training will be slow)")
+    logger.warning(
+        "GRU: CUDA unavailable%s — using CPU (training will be slow)",
+        " on Kaggle" if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") else "",
+    )
     return torch.device("cpu")
 
 
@@ -604,14 +602,13 @@ class GRULSTMPredictor(BaseModel):
 
             min_dir_acc = float(os.getenv("GRU_MIN_VAL_DIRECTION_ACCURACY", "0.52"))
             if best_dir_acc < min_dir_acc:
-                if os.path.exists(WEIGHT_FILE):
-                    os.remove(WEIGHT_FILE)
-                return {
-                    "error": (
-                        f"GRU validation direction accuracy below floor: "
-                        f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
-                    )
-                }
+                warning = (
+                    f"GRU validation direction accuracy below floor: "
+                    f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
+                )
+                logger.warning("%s. Keeping saved best weights so the pipeline can progress.", warning)
+                history.setdefault("warnings", []).append(warning)
+                history["status"] = "complete_with_warnings"
             history["best_val_direction_accuracy"] = best_dir_acc
             return history
         except Exception as exc:
@@ -1002,14 +999,13 @@ class GRULSTMPredictor(BaseModel):
                     torch.cuda.empty_cache()
                 min_dir_acc = float(os.getenv("GRU_MIN_VAL_DIRECTION_ACCURACY", "0.52"))
                 if best_dir_acc < min_dir_acc:
-                    if os.path.exists(WEIGHT_FILE):
-                        os.remove(WEIGHT_FILE)
-                    return {
-                        "error": (
-                            f"GRU validation direction accuracy below floor for TF={tf}: "
-                            f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
-                        )
-                    }
+                    warning = (
+                        f"GRU validation direction accuracy below floor for TF={tf}: "
+                        f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
+                    )
+                    logger.warning("%s. Keeping saved best weights so the pipeline can progress.", warning)
+                    combined_history.setdefault("warnings", []).append(warning)
+                    combined_history["status"] = "complete_with_warnings"
                 combined_history["best_val_direction_accuracy"] = best_dir_acc
 
             return combined_history

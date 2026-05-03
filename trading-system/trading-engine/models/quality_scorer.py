@@ -50,12 +50,10 @@ def _get_device():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32       = True
         return torch.device("cuda")
-    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") and not os.environ.get("INFERENCE_ONLY"):
-        raise RuntimeError(
-            "QualityScorer: CUDA not available on Kaggle — "
-            "enable GPU accelerator in notebook settings."
-        )
-    logger.warning("QualityScorer: CUDA unavailable — using CPU")
+    logger.warning(
+        "QualityScorer: CUDA unavailable%s — using CPU",
+        " on Kaggle" if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") else "",
+    )
     import torch as _t
     return _t.device("cpu")
 
