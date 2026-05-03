@@ -40,11 +40,13 @@ from services.feature_engine import FeatureEngine, RL_STATE_DIM
 from monitors.portfolio_manager import PortfolioManager
 
 # ML models — only imported when ML_ENABLED=true
+# RLAgent is additionally gated behind RL_ENABLED (default false)
 if settings.ML_ENABLED:
     from models.gru_lstm_predictor import GRULSTMPredictor
     from models.regime_classifier import RegimeClassifier
     from models.quality_scorer import QualityScorer
-    from models.rl_agent import RLAgent
+    if settings.RL_ENABLED:
+        from models.rl_agent import RLAgent
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
@@ -68,6 +70,15 @@ def _ensure_mpl_config_dir() -> None:
     mpl_dir = os.path.join("/tmp", f"matplotlib-{os.getuid()}")
     os.makedirs(mpl_dir, exist_ok=True)
     os.environ["MPLCONFIGDIR"] = mpl_dir
+
+
+def _pip_size(symbol: str, entry: float = 0.0) -> float:
+    symbol = str(symbol or "").upper()
+    if symbol == "XAUUSD" or entry > 500:
+        return 0.10
+    if "JPY" in symbol or entry > 50:
+        return 0.01
+    return 0.0001
 
 
 class ProductionTradingEngine:
@@ -131,15 +142,18 @@ class ProductionTradingEngine:
             self._ml_models: dict = {}
             return
 
-        logger.info("ML_ENABLED=true — loading models")
+        logger.info("ML_ENABLED=true — loading models (RL_ENABLED=%s)", settings.RL_ENABLED)
         _ensure_mpl_config_dir()
         model_factories = [
             ("regime_htf", lambda: RegimeClassifier(timeframe="4H", mode="htf_bias")),
             ("regime_ltf", lambda: RegimeClassifier(timeframe="1H", mode="ltf_behaviour")),
             ("quality", QualityScorer),
             ("gru_lstm", GRULSTMPredictor),
-            ("rl", RLAgent),
         ]
+        # RL is optional — only loaded when explicitly enabled
+        if settings.RL_ENABLED:
+            model_factories.append(("rl", RLAgent))
+
         self._ml_models = {}
         for model_id, factory in model_factories:
             try:
@@ -152,17 +166,25 @@ class ProductionTradingEngine:
                 logger.info("Loaded %s (%s)", model_id, model.__class__.__name__)
             else:
                 logger.warning("Skipping %s: weights missing or load failed", model_id)
-        # Publish model status to Redis
-        for model_id in ["regime_htf", "regime_ltf", "quality", "gru_lstm", "rl"]:
+
+        # Publish model status to Redis (RL reported as dormant when disabled)
+        active_model_ids = ["regime_htf", "regime_ltf", "quality", "gru_lstm"]
+        for model_id in active_model_ids:
             model = self._ml_models.get(model_id)
             self._state_mgr.set_ml_model_status(model_id, {
                 "name": model.__class__.__name__ if model is not None else "",
                 "status": "active" if model is not None else "untrained",
                 "accuracy": 0.0,
             })
+        self._state_mgr.set_ml_model_status("rl", {
+            "name": "RLAgent",
+            "status": "active" if "rl" in self._ml_models else "dormant",
+            "accuracy": 0.0,
+        })
+
+        # Hard-fail only for the four active pipeline models; RL is optional
         missing_required = [
-            model_id
-            for model_id in ["regime_htf", "regime_ltf", "quality", "gru_lstm", "rl"]
+            model_id for model_id in active_model_ids
             if model_id not in self._ml_models
         ]
         if missing_required:
@@ -172,6 +194,8 @@ class ProductionTradingEngine:
             )
         if "rl" in self._ml_models:
             self._state_mgr.set_rl_agent_state({"episodes": 0, "avg_reward": 0.0})
+        else:
+            logger.info("RL agent: dormant (RL_ENABLED=false or weights missing)")
 
     def _init_session_manager(self) -> None:
         self._session_mgr = SessionManager()
@@ -198,7 +222,8 @@ class ProductionTradingEngine:
         logger.info("PortfolioManager initialised")
 
     def _init_trade_journal(self) -> None:
-        rl = self._ml_models.get("rl") if settings.ML_ENABLED else None
+        # Only wire RL into journal when explicitly enabled
+        rl = self._ml_models.get("rl") if (settings.ML_ENABLED and settings.RL_ENABLED) else None
         self._journal = TradeJournal(rl_agent=rl)
         # Inject journal into feature engine for rolling stats
         self._feature_engine._journal = self._journal
@@ -289,14 +314,31 @@ class ProductionTradingEngine:
         }
         features = self._feature_engine.get_quality_features(ctx, ml_base, bar)
         result = qs_model.predict(dict(zip(QUALITY_FEATURES, features)))
-        ev = float(result["ev"])
+        ev            = float(result["ev"])
         quality_score = float(result["quality_score"])
-        meta["ev"] = ev
-        meta["quality_score"] = quality_score
-        signal["ev"] = ev
-        signal["quality_score"] = quality_score
+        prob_profit   = float(result.get("probability_of_profit", max(0.0, min(1.0, (ev + 1.0) / (float(ctx["rr_ratio"]) + 1.0)))))
+        rr_ratio      = max(0.1, float(ctx["rr_ratio"]))
+        profit_factor_estimate = float(
+            (prob_profit * rr_ratio) / max(1e-6, 1.0 - prob_profit)
+        )
+        entry = float(signal.get("entry", 0.0) or 0.0)
+        stop_loss = float(signal.get("stop_loss", entry) or entry)
+        pip = _pip_size(signal.get("symbol", ""), entry)
+        stop_pips = abs(entry - stop_loss) / max(pip, 1e-9)
+        spread_pips = float(ml_base.get("spread_pips", 1.0) or 0.0)
+        spread_to_stop_ratio = float(spread_pips / max(stop_pips, 1e-6))
+        meta["ev"]                     = ev
+        meta["quality_score"]          = quality_score
+        meta["probability_of_profit"]  = prob_profit
+        meta["profit_factor_estimate"] = profit_factor_estimate
+        meta["spread_to_stop_ratio"]   = spread_to_stop_ratio
+        meta["expected_drawdown_risk"] = float(result.get("expected_drawdown_risk", 1.0 - prob_profit))
+        meta["trade_quality_score"]    = float(result.get("trade_quality_score", quality_score * prob_profit * 2.0))
+        signal["ev"]                   = ev
+        signal["quality_score"]        = quality_score
+        signal["probability_of_profit"] = prob_profit
 
-        min_ev = float(os.getenv("MIN_EV_THRESHOLD", "0.0"))
+        min_ev = float(os.getenv("MIN_EV_THRESHOLD", "0.10"))
         if ev < min_ev:
             logger.debug(
                 "Signal rejected by QualityScorer: %s %s ev=%.3f < %.3f",
@@ -304,6 +346,26 @@ class ProductionTradingEngine:
                 signal.get("side"),
                 ev,
                 min_ev,
+            )
+            return None
+        min_pf = float(os.getenv("MIN_QUALITY_PROFIT_FACTOR", "1.25"))
+        if profit_factor_estimate < min_pf:
+            logger.debug(
+                "Signal rejected by QualityScorer: %s %s pf_est=%.3f < %.3f",
+                signal.get("symbol"),
+                signal.get("side"),
+                profit_factor_estimate,
+                min_pf,
+            )
+            return None
+        max_spread_stop = float(os.getenv("MAX_SPREAD_TO_STOP_RATIO", "0.10"))
+        if spread_to_stop_ratio > max_spread_stop:
+            logger.debug(
+                "Signal rejected by QualityScorer: %s %s spread_to_stop=%.3f > %.3f",
+                signal.get("symbol"),
+                signal.get("side"),
+                spread_to_stop_ratio,
+                max_spread_stop,
             )
             return None
         return signal

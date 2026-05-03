@@ -1,203 +1,78 @@
-You are an expert quantitative ML engineer specialising in financial regime detection.
+First read the trading engine spun an agent to visit the following webpages and Read and report: goal is to find useful ways to make my strategy work.
 
-My current regime classifier is failing. The logs show that the HTF 4H bias classifier collapses toward BIAS_NEUTRAL and barely detects BIAS_DOWN, while the LTF 1H behaviour classifier almost never detects TRENDING. The current flat regime labels are not reliable enough for live trading.
+https://arxiv.org/html/2407.04500v1 https://medium.com/@jsgastoniriartecabrera/from-academic-research-to-profitable-trading-building-a-market-regime-detection-algorithm-46a4791ee014 https://www.tradingview.com/script/IUR1cEYW-Market-Structure-Algo/
 
-Your task is to refactor the regime detection system.
 
-IMPORTANT:
-This is a pure ML trading system, but regime detection may use mathematical/statistical rule-based labels as training targets. The final trading engine must use regime outputs as filters, not as standalone traders.
 
-Current problem:
-- HTF bias model:
-  - BIAS_UP recall is weak
-  - BIAS_DOWN recall is extremely weak
-  - BIAS_NEUTRAL dominates
-- LTF behaviour model:
-  - TRENDING recall is almost zero
-  - CONSOLIDATING and VOLATILE dominate predictions
-- This suggests the labels are overlapping, noisy, or poorly separated.
+Refactor the trading system to remove RL from the active pipeline for now.
 
-Refactor goals:
+The system should no longer require, load, train, validate, cache, or execute the RL/PPO agent in the main trading path.
 
-1. Replace the current flat regime classification design with a two-axis regime system.
+New active architecture:
 
-Axis A: Directional bias
-- BIAS_UP
-- BIAS_DOWN
-- BIAS_NEUTRAL
+1. Regime model
+   - Determines tradeability context:
+     TRADEABLE_UP, TRADEABLE_DOWN, NO_TRADE_CHOP, NO_TRADE_EXTREME_VOL, NO_TRADE_UNCERTAIN.
 
-Axis B: Behaviour state
-- TREND_SCORE
-- RANGE_SCORE
-- CHOP_SCORE
-- VOLATILITY_PERCENTILE
-- CONSOLIDATION_SCORE
+2. GRU model
+   - Technical execution model only.
+   - Outputs direction probability, expected move/R, and predicted volatility.
 
-Do not force all behaviour states into one mutually exclusive class unless absolutely necessary. Prefer multi-label or score-based outputs.
+3. Quality scorer
+   - EV judge.
+   - Decides whether the proposed trade has positive expected value after costs.
 
-2. Add robust mathematical regime features:
-- ADX
-- +DI and -DI
-- EMA 20/50/200 slope
-- price distance from EMA 50 and EMA 200
-- ATR / close
-- ATR percentile per symbol
-- rolling volatility percentile per symbol
-- Bollinger bandwidth percentile
-- efficiency ratio
-- rolling range percentile
-- candle body ratio
-- wick ratio
-- range expansion z-score
-- higher-high / lower-low structure
-- symbol group feature: dollar, cross, yen, gold
-- session feature if available
+4. Decision engine
+   - Combines regime + GRU + quality + risk rules.
+   - Final output is BUY, SELL, or NO_TRADE.
 
-3. Implement efficiency ratio:
+Remove RL from:
+- live signal pipeline
+- backtest decision path
+- model loading requirements
+- training pipeline requirements
+- cache schema
+- trade journal feature requirements
+- quality/RL circular dependencies
+- documentation references to required active models
 
-efficiency_ratio = abs(close - close.shift(window)) / sum(abs(close.diff()), window)
+Do not delete RL source files permanently. Mark RL as dormant/experimental.
 
-Use this to separate true trends from noisy chop.
+Expected changes:
+- main.py should not hard-fail if RL weights are missing.
+- signal_pipeline.py should not call RL.
+- run_backtest.py should not require RL.
+- step6/step7 pipeline should not train or expect RL.
+- Quality should not depend on RL outputs.
+- Reports should not include RL metrics as required.
+- Any env vars such as RL_ENABLED should default to false.
+- If RL code remains, it must be isolated behind an explicit optional flag.
 
-4. Use per-symbol normalisation.
-Do not compare raw ATR or raw volatility across EURUSD, GBPJPY, and XAUUSD.
-Use:
-- ATR / close
-- rolling percentiles per symbol
-- z-scores per symbol
-- symbol group encoding
+Final decision rule:
 
-5. Redesign the HTF bias labels.
+if risk_limits_breached:
+    return NO_TRADE
 
-BIAS_UP should require:
-- +DI > -DI
-- ADX above threshold
-- EMA slope positive
-- close above EMA 50 or EMA 200
-- positive forward directional movement if using forward structural labels
+if regime blocks trade:
+    return NO_TRADE
 
-BIAS_DOWN should require:
-- -DI > +DI
-- ADX above threshold
-- EMA slope negative
-- close below EMA 50 or EMA 200
-- negative forward directional movement if using forward structural labels
+if GRU confidence is too low:
+    return NO_TRADE
 
-BIAS_NEUTRAL should only be used when neither bullish nor bearish structure is clear.
-Do not allow BIAS_NEUTRAL to become a dumping ground for everything.
+if GRU expected_R is too low:
+    return NO_TRADE
 
-6. Redesign LTF behaviour labels.
+if Quality EV <= threshold:
+    return NO_TRADE
 
-TRENDING should require:
-- ADX above threshold
-- efficiency ratio above threshold
-- EMA slope meaningful
-- directional persistence
+return BUY or SELL
 
-RANGING should require:
-- ADX below threshold
-- efficiency ratio low
-- price oscillating around mean
-- moderate volatility
+After implementation, provide:
+1. files changed
+2. files where RL was disconnected
+3. confirmation that system can run without RL weights
+4. commands to train Regime, GRU, and Quality
+5. commands to backtest without RL
+6. any dormant RL files left untouched
 
-CONSOLIDATING should require:
-- low ATR percentile
-- low Bollinger bandwidth percentile
-- compressed rolling range
-
-VOLATILE should require:
-- high ATR percentile
-- high rolling volatility percentile
-- large range expansion z-score
-
-Allow overlap by producing scores where possible:
-- trend_score
-- range_score
-- consolidation_score
-- volatility_score
-- chop_score
-
-7. Add a final regime decision function.
-
-Example output:
-- TRADEABLE_TREND
-- TRADEABLE_TREND_HIGH_VOL
-- RANGE
-- CONSOLIDATION
-- NO_TRADE_CHOP
-- NO_TRADE_EXTREME_VOL
-- UNCERTAIN
-
-The trading engine should block:
-- NO_TRADE_CHOP
-- NO_TRADE_EXTREME_VOL
-- UNCERTAIN
-
-8. Improve model training.
-
-If using classifiers:
-- use chronological validation only
-- report per-class precision, recall, F1, balanced accuracy
-- report confusion matrix
-- reject weights if any critical class recall is below threshold
-- tune thresholds using validation set only
-- do not tune on test set
-
-If using multi-label outputs:
-- train separate binary classifiers or a multi-output model for:
-  - is_trend
-  - is_range
-  - is_consolidation
-  - is_volatile
-  - is_chop
-
-9. Add diagnostics.
-
-After training, print:
-- label distribution by symbol
-- label distribution by year
-- label distribution by symbol group
-- per-class recall
-- per-class precision
-- confusion matrix
-- examples of misclassified TRENDING as CONSOLIDATING
-- examples of BIAS_DOWN misclassified as NEUTRAL
-- feature importance if using tree models
-
-10. Add tests.
-
-Create unit tests for:
-- efficiency ratio
-- ATR percentile
-- Bollinger bandwidth percentile
-- HTF bias label generation
-- LTF behaviour score generation
-- no future leakage
-- final regime decision logic
-
-11. Important restrictions.
-
-Do not create individual rule-based traders.
-Do not make regime detection a trading strategy by itself.
-Do not use future candles in live features.
-Do not random-shuffle time-series data.
-Do not compare raw volatility across symbols without normalisation.
-Do not save regime weights if validation per-class recall is misleading.
-
-Expected deliverables:
-- list of files changed
-- explanation of new regime architecture
-- explanation of new labels/scores
-- explanation of how future leakage is prevented
-- commands to train regime detector
-- commands to evaluate regime detector
-- sample output report
-
-My recommendation
-Do not try to fix this by simply lowering the acceptance threshold.
-Your current model is failing in the exact classes you need most:
-BIAS_DOWNTRENDING
-Lowering the threshold would just save bad weights.
-The correct fix is:
-Redesign regime labels → add better trend/chop features → normalise per symbol → move from flat class labels to score-based/multi-label regime detection.
-That should make the regime module much more useful for the pure ML trading system.
+Regime → GRU → Quality → Decision Engine → Risk/Execution

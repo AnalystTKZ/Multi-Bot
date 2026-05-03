@@ -1512,7 +1512,7 @@ class RegimeClassifier(BaseModel):
         """
         from indicators.market_structure import (
             compute_adx, compute_atr, compute_ema_stack_score,
-            compute_bollinger_bands,
+            compute_bollinger_bands, compute_market_structure_scores,
         )
         from services.feature_engine import INDEX_NAMES, _vec_atr_pctile, _vec_autocorr
 
@@ -1638,6 +1638,24 @@ class RegimeClassifier(BaseModel):
                 + df["sweep_bear"].fillna(False).astype(np.int8)
             ).rolling(24, min_periods=1).sum()
             _set("liquidity_sweep_24h", np.clip(_sw_count.to_numpy(dtype=np.float32), 0, 20))
+
+        structure_score_features = {
+            "mss_bull_flag", "mss_bear_flag",
+            "mss_bull_bars_ago", "mss_bear_bars_ago", "bars_since_mss",
+            "external_trend_direction", "external_structure_score",
+            "internal_structure_state", "swing_sequence_score",
+            "position_in_external_range", "dist_to_external_high_atr",
+            "dist_to_external_low_atr",
+        }
+        if requested_set.intersection(structure_score_features):
+            try:
+                structure_df = compute_market_structure_scores(df)
+                for name in sorted(requested_set.intersection(structure_score_features)):
+                    if name not in structure_df.columns:
+                        raise RuntimeError(f"structure score helper missing {name}")
+                    _set(name, structure_df[name].to_numpy(dtype=np.float32))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: structure scoring failed: {exc}") from exc
 
         # ── MTF features ─────────────────────────────────────────────────────
         _tf_specs = {

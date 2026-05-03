@@ -17,6 +17,7 @@ import pandas as pd
 
 from services.event_bus import EventBus, EventType
 from services.market_decision import combined_market_decision
+from services.regime_scores import classify_tradeability_directional
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,15 @@ def _first_present_frame(df_htf: dict, *keys: str, default=None):
 
 class SignalPipeline:
     """
-    Per-bar pipeline: ML inference → RL threshold → market-decision gate.
+    Per-bar pipeline: Regime → GRU → Quality → Decision Engine.
+
+    Decision hierarchy (no RL in active path):
+      1. Risk limits (checked in main.py before this)
+      2. Regime tradeability (TRADEABLE_UP / TRADEABLE_DOWN / NO_TRADE_*)
+      3. GRU confidence ≥ ML_DIRECTION_THRESHOLD
+      4. GRU expected_R ≥ MIN_EXPECTED_R
+      5. Quality EV gate (runs post-PM-enrichment in main.py)
+      6. Optional RL refinement (only when RL_ENABLED=true)
 
     Signal logic mirrors run_backtest._compute_backtest_signal (source of truth).
     PortfolioManager and QualityScorer run after this in main.py; only the final
@@ -107,48 +116,46 @@ class SignalPipeline:
         if now.hour == 12:
             return []
 
-        # Step 2: RL agent selects dynamic confidence threshold.
-        # decide() returns (trader_id=1, threshold) or (0, 0.0) for NoTrade.
-        # Uses trained PPO when available; session-aware heuristic before training.
-        rl_agent = self._ml.get("rl")
         bar = df.iloc[-1]
         session = self._detect_session(now)
-        if rl_agent is not None:
-            rl_state = self._build_rl_state(symbol, ml_preds, bar, portfolio)
-            _trader_id, rl_threshold = rl_agent.decide(
-                rl_state, {"ml_trader": True}, session
-            )
-            if _trader_id == 0:
-                logger.debug("RL NoTrade %s (session=%s)", symbol, session)
-                return []
-        else:
-            rl_threshold = float(getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62))
-            from services.feature_engine import RL_STATE_DIM
-            rl_state = np.zeros(RL_STATE_DIM, dtype=np.float32)
 
-        from models.rl_agent import _encode_action
-        rl_action = _encode_action(rl_threshold) if rl_threshold > 0 else 0
-
-        # Step 3: Generate signal gated by RL-determined threshold.
-        raw_signal = self._compute_ml_signal(symbol, df, ml_preds, threshold=rl_threshold)
+        # Step 2: Generate signal via Regime → GRU → EV decision hierarchy.
+        raw_signal = self._compute_ml_signal(symbol, df, ml_preds)
         if raw_signal is None:
             return []
 
-        # Attach RL metadata so TradeJournal can reconstruct episodes for RL training.
+        # Optional Step 3: RL refinement (dormant unless RL_ENABLED=true).
+        # RL can block a trade but never creates one; it refines, not gates.
+        from services.feature_engine import RL_STATE_DIM
+        rl_action = 0
+        rl_state = np.zeros(RL_STATE_DIM, dtype=np.float32)
+        _rl_enabled = str(os.getenv("RL_ENABLED", "0")).lower() in ("1", "true", "yes")
+        if _rl_enabled:
+            rl_agent = self._ml.get("rl")
+            if rl_agent is not None:
+                rl_state = self._build_rl_state(symbol, ml_preds, bar, portfolio)
+                from models.rl_agent import _encode_action
+                _trader_id, _rl_threshold = rl_agent.decide(
+                    rl_state, {"ml_trader": True}, session
+                )
+                rl_action = _encode_action(_rl_threshold) if _rl_threshold > 0 else 0
+                if _trader_id == 0:
+                    logger.debug("RL refinement blocked %s (session=%s)", symbol, session)
+                    return []
+
+        meta = raw_signal.setdefault("signal_metadata", {})
+        meta["session"] = session
+        meta["rl_action"] = rl_action
+        meta["rl_threshold"] = 0.0   # kept for journal schema compatibility
         raw_signal["rl_action"] = rl_action
         raw_signal["state_at_entry"] = rl_state.tolist()
-        meta = raw_signal.setdefault("signal_metadata", {})
-        meta["rl_action"] = rl_action
-        meta["rl_threshold"] = rl_threshold
-
-        meta["session"] = session
 
         logger.info(
-            "Signal APPROVED ml_trader %s %s — conf=%.3f rl_thresh=%.2f htf=%s ltf=%s "
+            "Signal APPROVED ml_trader %s %s — conf=%.3f tradeability=%s htf=%s ltf=%s "
             "p_bull=%.3f p_bear=%.3f",
             symbol, raw_signal.get("side"),
             raw_signal.get("confidence", 0),
-            rl_threshold,
+            meta.get("tradeability", "?"),
             ml_preds.get("regime", "?"),
             ml_preds.get("regime_ltf", "?"),
             ml_preds.get("p_bull", 0.5),
@@ -272,18 +279,18 @@ class SignalPipeline:
     ) -> dict | None:
         """
         Mirrors run_backtest._compute_backtest_signal (source of truth).
-        threshold: RL-determined confidence threshold; falls back to settings.
+        threshold: optional override for direction confidence (defaults to settings).
 
         Gate order:
           1. ATR sanity
           2. GRU variance ≤ MAX_UNCERTAINTY
-          3. GRU direction ≥ threshold  →  determines side
-          4. HTF bias must agree with GRU side
-          5. LTF behaviour must permit entry:
-               TRENDING   → optional pullback filter (REQUIRE_TRENDING_PULLBACK=1 is strict)
-               VOLATILE   → high-conviction GRU only
-               RANGING    → significant range + price at correct boundary
-               CONSOLIDATING → blocked
+          3. GRU direction ≥ ML_DIRECTION_THRESHOLD  →  determines side
+          4. Directional tradeability: TRADEABLE_UP (buy) / TRADEABLE_DOWN (sell)
+             Derived from classify_tradeability_directional(ltf_trade_regime, htf_bias)
+          5. HTF regime confidence ≥ HTF_MIN_REGIME_CONFIDENCE
+          6. Per-bar structural validation (range_valid, pullback, BOS, FVG)
+          7. Geometric RR ≥ MIN_REWARD_TO_RISK
+          8. Probability-weighted expected_R ≥ MIN_EXPECTED_R
         EV gate runs in main.py after PM enrichment (needs actual rr_ratio).
         """
         if df is None or len(df) == 0:
@@ -304,11 +311,11 @@ class SignalPipeline:
         if _uncertainty > _max_unc:
             return None
 
-        # Gate 3: GRU direction — use RL-determined threshold (or settings default)
+        # Gate 3: GRU direction — use settings threshold (RL no longer sets this)
         p_bull = float(ml_preds.get("p_bull", 0.5))
         p_bear = float(ml_preds.get("p_bear", 0.5))
         _dir_thresh = threshold if threshold is not None else float(
-            getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.62)
+            getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.65)
         )
         if p_bull >= p_bear and p_bull >= _dir_thresh:
             side = "buy"
@@ -319,31 +326,45 @@ class SignalPipeline:
         else:
             return None
 
-        # Gate 4: HTF regime classifier confidence
+        # Gate 4: Directional tradeability — replaces old HTF bias + LTF routing
+        # TRADEABLE_UP → buy only; TRADEABLE_DOWN → sell only; NO_TRADE_* → block
         _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
         _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
         _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.55"))
-        if _htf_bias != "BIAS_NEUTRAL" and _htf_regime_conf < _htf_min_conf:
+        _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
+
+        _tradeability = classify_tradeability_directional(_ltf_trade_regime, _htf_bias)
+
+        if _tradeability in ("NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "NO_TRADE_UNCERTAIN"):
+            logger.debug("Signal rejected %s — tradeability=%s", symbol, _tradeability)
+            return None
+        if side == "buy" and _tradeability != "TRADEABLE_UP":
+            logger.debug("Signal rejected %s buy — tradeability=%s", symbol, _tradeability)
+            return None
+        if side == "sell" and _tradeability != "TRADEABLE_DOWN":
+            logger.debug("Signal rejected %s sell — tradeability=%s", symbol, _tradeability)
+            return None
+
+        # Gate 5: HTF regime classifier confidence
+        if _htf_regime_conf < _htf_min_conf:
             logger.debug(
-                "Signal rejected %s — htf_low_regime_confidence htf=%s conf=%.3f",
-                symbol, _htf_bias, _htf_regime_conf,
+                "Signal rejected %s — htf_low_regime_confidence conf=%.3f",
+                symbol, _htf_regime_conf,
             )
             return None
 
-        # Gate 5: combined HTF/LTF market-decision matrix
-        _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
-        _trade_regime = str(ml_preds.get("trade_regime", "") or "").upper()
-        if _trade_regime in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
+        # Gate 6: Per-bar structural validation (range, pullback, BOS, FVG)
+        _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING")).upper()
+        if _ltf_trade_regime in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
             _ltf_behaviour = "TRENDING"
-        elif _trade_regime == "RANGE":
+        elif _ltf_trade_regime == "RANGE":
             _ltf_behaviour = "RANGING"
-        elif _trade_regime == "CONSOLIDATION":
+        elif _ltf_trade_regime == "CONSOLIDATION":
             _ltf_behaviour = "CONSOLIDATING"
-        elif _trade_regime == "NO_TRADE_EXTREME_VOL":
+        elif _ltf_trade_regime == "NO_TRADE_EXTREME_VOL":
             _ltf_behaviour = "VOLATILE"
-        _range_valid    = bool(bar.get("range_valid", False))
+        _range_valid = bool(bar.get("range_valid", False))
         _pullback_valid = bool(bar.get("pullback_valid", False))
-        _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.60"))
         _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.70"))
         _block_consol = str(os.getenv("BLOCK_LTF_CONSOLIDATING", "1")).lower() in ("1", "true", "yes")
         _require_range = str(os.getenv("RANGING_REQUIRE_RANGE", "1")).lower() in ("1", "true", "yes")
@@ -353,13 +374,13 @@ class SignalPipeline:
             side=side,
             confidence=conf,
             bar=bar,
-            neutral_threshold=_neutral_thresh,
+            neutral_threshold=0.60,
             volatile_threshold=_volatile_thresh,
             block_consolidating=_block_consol,
             require_range=_require_range,
             htf_confidence=_htf_regime_conf,
             regime_scores=ml_preds.get("regime_scores"),
-            trade_regime=ml_preds.get("trade_regime"),
+            trade_regime=_tradeability,   # pass directional state for structural routing
         )
         if not _allowed:
             logger.debug(
@@ -433,19 +454,24 @@ class SignalPipeline:
             "signal_metadata": {
                 "regime":            _htf_bias,
                 "regime_ltf":        _ltf_behaviour,
-                "trade_regime":      _trade_regime or "",
+                "trade_regime":      _ltf_trade_regime,
+                "tradeability":      _tradeability,
                 "regime_scores":     ml_preds.get("regime_scores", {}),
                 "expected_variance": _uncertainty,
                 "p_bull":            p_bull,
                 "p_bear":            p_bear,
                 "atr":               atr,
                 "atr_at_entry":      atr,
+                "expected_r":        float(expected_r),
                 "strategy":          "ml_native",
                 "pullback_valid":    _pullback_valid,
                 "pullback_level":    float(bar.get("pullback_level", float("nan"))),
+                "mss_bull":          int(bool(bar.get("mss_bull", False))),
+                "mss_bear":          int(bool(bar.get("mss_bear", False))),
                 "adx_at_signal":     float(ml_preds.get("adx_14", ml_preds.get("adx", 20.0))),
                 "atr_ratio_at_signal": float(ml_preds.get("atr_normalized", ml_preds.get("atr_ratio", 1.0))),
                 "spread_at_signal":  float(ml_preds.get("spread_pips", 1.0)),
+                "spread_pips":       float(ml_preds.get("spread_pips", 1.0)),
                 "news_in_30min":     int(ml_preds.get("news_in_30min", 0)),
             },
         }
@@ -472,6 +498,7 @@ class SignalPipeline:
                 "regime": str(meta.get("regime", "")),
                 "regime_ltf": str(meta.get("regime_ltf", "")),
                 "trade_regime": str(meta.get("trade_regime", "")),
+                "tradeability": str(meta.get("tradeability", "")),
                 "rr_ratio": float(sig.get("rr_ratio", 1.5)),
             },
         }

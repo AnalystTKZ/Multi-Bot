@@ -125,6 +125,52 @@ class ModelNotTrainedError(RuntimeError):
     pass
 
 
+def _group_ev_smooth(
+    df: pd.DataFrame,
+    min_group_size: int = 10,
+    blend_weight: float = 0.30,
+) -> pd.DataFrame:
+    """
+    Blend each trade's raw EV label with the mean EV for similar setups
+    (p_win_gru bin × trade_regime_code bin × session_at_signal).
+
+    EV is a population property — individual trade outcomes have high variance.
+    This reduces label noise without introducing lookahead: we're smoothing
+    supervision signal across setups that the model should treat identically,
+    not conditioning on future trades.
+    """
+    df = df.copy()
+    conf_bins = [0.0, 0.55, 0.65, 0.75, 0.85, 1.01]
+    conf_labels = [0, 1, 2, 3, 4]
+    df["_cb"] = pd.cut(
+        df["p_win_gru"].clip(0.0, 1.0),
+        bins=conf_bins,
+        labels=conf_labels,
+        include_lowest=True,
+    ).astype(str)
+    df["_rb"] = df["trade_regime_code"].round(1).astype(str)
+    df["_sb"] = df["session_at_signal"].astype(str)
+    df["_gkey"] = df["_cb"] + "-" + df["_rb"] + "-" + df["_sb"]
+
+    group_counts = df.groupby("_gkey")["label"].transform("count")
+    group_means  = df.groupby("_gkey")["label"].transform("mean")
+    eligible = group_counts >= min_group_size
+
+    df["label"] = np.where(
+        eligible,
+        (1.0 - blend_weight) * df["label"] + blend_weight * group_means,
+        df["label"],
+    )
+    n_smoothed = int(eligible.sum())
+    logger.info(
+        "QualityScorer: group EV smoothing applied to %d/%d rows "
+        "(blend=%.0f%% group, min_group=%d)",
+        n_smoothed, len(df), blend_weight * 100, min_group_size,
+    )
+    df.drop(columns=["_cb", "_rb", "_sb", "_gkey"], inplace=True)
+    return df
+
+
 # ── Scorer ────────────────────────────────────────────────────────────────────
 
 class QualityScorer(BaseModel):
@@ -150,8 +196,11 @@ class QualityScorer(BaseModel):
         """
         features keys = FeatureEngine.QUALITY_FEATURES (exact order enforced internally).
         Returns dict with:
-          "ev"            : float — raw expected value prediction (unbounded)
-          "quality_score" : float in [0,1] — sigmoid(ev) for backward compatibility
+          "ev"                    : float — raw expected value prediction (unbounded)
+          "quality_score"         : float in [0,1] — sigmoid(ev) for backward compat
+          "probability_of_profit" : float in [0,1] — p_win derived analytically from ev + rr
+          "expected_drawdown_risk": float in [0,1] — 1 − probability_of_profit
+          "trade_quality_score"   : float in [0,1] — composite quality × p_profit
         Raises ModelNotTrainedError if weights not present.
         """
         if not self.is_trained or self._model is None:
@@ -180,7 +229,16 @@ class QualityScorer(BaseModel):
                     ev_raw = _infer_m(x)
                 ev = float(ev_raw.float()[0].item())
                 quality_score = float(torch.sigmoid(ev_raw.float())[0].item())
-            return {"ev": ev, "quality_score": float(np.clip(quality_score, 0.0, 1.0))}
+            quality_score = float(np.clip(quality_score, 0.0, 1.0))
+            rr_ratio = max(0.1, float(features.get("rr_ratio", 1.5)))
+            prob_profit = float(np.clip((ev + 1.0) / (rr_ratio + 1.0), 0.0, 1.0))
+            return {
+                "ev": ev,
+                "quality_score": quality_score,
+                "probability_of_profit": prob_profit,
+                "expected_drawdown_risk": float(np.clip(1.0 - prob_profit, 0.0, 1.0)),
+                "trade_quality_score": float(np.clip(quality_score * prob_profit * 2.0, 0.0, 1.0)),
+            }
         except Exception as exc:
             logger.error("QualityScorer.predict failed: %s", exc)
             raise
@@ -204,14 +262,18 @@ class QualityScorer(BaseModel):
             _cpu_m = copy.deepcopy(_raw).to("cpu").eval()
 
         def _infer(feat: np.ndarray) -> tuple:
+            """Returns (ev, quality_score, probability_of_profit).
+            rr_ratio is read from feat[2] (QUALITY_FEATURES index 2)."""
             arr = np.asarray(feat, dtype=np.float32).reshape(1, -1)
             arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
             x = torch.from_numpy(arr)
             with torch.no_grad():
                 ev_raw = _cpu_m(x)
             ev = float(ev_raw.float().item())
-            qs = float(torch.sigmoid(ev_raw.float()).item())
-            return ev, float(np.clip(qs, 0.0, 1.0))
+            qs = float(np.clip(torch.sigmoid(ev_raw.float()).item(), 0.0, 1.0))
+            rr_ratio = max(0.1, float(feat[2]) if len(feat) > 2 else 1.5)
+            prob_profit = float(np.clip((ev + 1.0) / (rr_ratio + 1.0), 0.0, 1.0))
+            return ev, qs, prob_profit
 
         return _infer
 
@@ -220,7 +282,8 @@ class QualityScorer(BaseModel):
         Batch inference on CPU — small MLP (input→128→64→32→1) runs faster on CPU
         than GPU due to H2D transfer overhead at the batch sizes used here.
         feature_matrix: (N, n_features) float32 array, columns in QUALITY_FEATURES order.
-        Returns (ev_array, quality_score_array) each shape (N,) float32.
+        Returns (ev_array, quality_score_array, prob_profit_array) each shape (N,) float32.
+        rr_ratio is read from column index 2 (QUALITY_FEATURES[2] = "rr_ratio").
         """
         if not self.is_trained or self._model is None:
             raise ModelNotTrainedError("QualityScorer has no trained weights.")
@@ -238,7 +301,11 @@ class QualityScorer(BaseModel):
                 ev_raw = _cpu_m(x)
                 ev_arr = ev_raw.float().squeeze(-1).numpy()
                 qs_arr = torch.sigmoid(ev_raw.float()).squeeze(-1).numpy()
-            return ev_arr.astype(np.float32), np.clip(qs_arr, 0.0, 1.0).astype(np.float32)
+            ev_arr = ev_arr.astype(np.float32)
+            qs_arr = np.clip(qs_arr, 0.0, 1.0).astype(np.float32)
+            rr_arr = np.maximum(0.1, arr[:, 2]) if arr.shape[1] > 2 else np.full(len(ev_arr), 1.5, dtype=np.float32)
+            prob_profit_arr = np.clip((ev_arr + 1.0) / (rr_arr + 1.0), 0.0, 1.0).astype(np.float32)
+            return ev_arr, qs_arr, prob_profit_arr
 
     # ── Labels ────────────────────────────────────────────────────────────────
 
@@ -321,8 +388,8 @@ class QualityScorer(BaseModel):
         # the win rates from *prior* trades only, then we append the current outcome.
         from collections import defaultdict
         from services.feature_engine import (
+            _quality_expected_r_gross,
             _quality_float,
-            _quality_htf_bias_alignment,
             _quality_regime_scores,
             _quality_session_code,
             _quality_side_probabilities,
@@ -389,10 +456,7 @@ class QualityScorer(BaseModel):
                     score_source.get("trade_regime", ""),
                     regime_scores,
                 ),
-                "htf_bias_alignment":   _quality_htf_bias_alignment(
-                    score_source.get("regime", "BIAS_NEUTRAL"),
-                    side,
-                ),
+                "expected_r_gross":      _quality_expected_r_gross(p_win, rr),
                 "volatility_percentile": float(np.clip(_quality_float(
                     regime_scores.get("volatility_percentile", score_source.get("volatility_percentile", 0.5)),
                     0.5,
@@ -432,7 +496,10 @@ class QualityScorer(BaseModel):
             # Append outcome *after* recording the row (strict no-lookahead)
             _outcomes[trader_id].append(ev_label > 0)
 
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
+        if len(df) >= 20:
+            df = _group_ev_smooth(df)
+        return df
 
     # ── Train ─────────────────────────────────────────────────────────────────
 
@@ -471,20 +538,6 @@ class QualityScorer(BaseModel):
                         "n_pos": int(np.sum(y > 0)), "n_neg": int(np.sum(y <= 0))}
             logger.info("QualityScorer: %d samples, EV stats=%s, device=%s",
                         len(y), ev_stats, DEVICE)
-
-            # Normalise EV labels to [-1, +1] range so losers and winners occupy
-            # symmetric scales. Without this, winners cluster at +0.5–+3.0 while
-            # losers spike at -1.0, causing the model to predict negative EV for
-            # almost all bars (since 80% of trades lose).
-            # Wins: scale by median winner RR so +1.0 = "typical win".
-            # Losses stay at -1.0 (already 1R loss by definition).
-            pos_mask = y > 0
-            if pos_mask.sum() > 5:
-                median_win = float(np.median(y[pos_mask]))
-                if median_win > 0.1:
-                    y = y.copy()
-                    y[pos_mask] = np.clip(y[pos_mask] / median_win, 0.0, 3.0)
-                    logger.info("QualityScorer: normalised win labels by median_win=%.3f — EV range now [-1, +3]", median_win)
 
             # Temporal split
             split      = int(len(X) * 0.8)

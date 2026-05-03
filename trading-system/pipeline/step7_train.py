@@ -330,6 +330,7 @@ def collect_model_artifacts() -> dict:
         return {"found": [], "missing_required": ["weights_dir"], "missing_deferred": []}
 
     found, missing_required, missing_deferred = [], [], []
+    # RL_PPO is dormant (RL_ENABLED=false by default); never required
     checks = {
         "gru_lstm":       (weights_dir / "gru_lstm" / "model.pt", True),
         "regime_htf":     (weights_dir / "regime_htf.pkl", True),
@@ -337,7 +338,12 @@ def collect_model_artifacts() -> dict:
         "quality_scorer": (weights_dir / "quality_scorer.pkl", False),
         "rl_ppo":         (weights_dir / "rl_ppo" / "model.zip", False),
     }
+    rl_enabled = os.getenv("RL_ENABLED", "0").lower() in ("1", "true", "yes")
+
     for name, (path, required_now) in checks.items():
+        if name == "rl_ppo" and not rl_enabled:
+            logger.info("  [DORMANT] rl_ppo — RL_ENABLED=false, skipping")
+            continue
         if path.exists():
             found.append(name)
             logger.info("  [OK] %s → %s", name, path)

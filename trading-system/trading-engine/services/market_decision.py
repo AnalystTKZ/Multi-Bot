@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from services.regime_scores import classify_trade_regime
+from services.regime_scores import classify_entry_readiness, classify_trade_regime
 
 
 def _bar_value(bar: Any, key: str, default: Any = None) -> Any:
@@ -21,6 +21,11 @@ def _bar_value(bar: Any, key: str, default: Any = None) -> Any:
 
 
 def _as_bool(value: Any) -> bool:
+    try:
+        if value != value:
+            return False
+    except Exception:
+        pass
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return bool(value)
@@ -75,11 +80,23 @@ def combined_market_decision(
         except Exception:
             score_state = ""
 
-    if score_state in {"NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "UNCERTAIN"}:
+    # New directional tradeability states (from classify_tradeability_directional)
+    if score_state == "TRADEABLE_UP":
+        if side != "buy":
+            return False, "tradeability_direction_conflict"
+    elif score_state == "TRADEABLE_DOWN":
+        if side != "sell":
+            return False, "tradeability_direction_conflict"
+    elif score_state == "WAIT_PULLBACK":
+        return False, "wait_pullback"
+    elif score_state == "NO_TRADE_UNCERTAIN":
+        return False, "no_trade_uncertain"
+    # Legacy regime states (backward-compatible)
+    elif score_state in {"NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "UNCERTAIN"}:
         return False, score_state.lower()
-    if score_state == "CONSOLIDATION" and block_consolidating:
+    elif score_state == "CONSOLIDATION" and block_consolidating:
         return False, "blocked_consolidation"
-    if score_state in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
+    elif score_state in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
         ltf = "TRENDING"
     elif score_state == "RANGE":
         ltf = "RANGING"
@@ -96,19 +113,36 @@ def combined_market_decision(
     bos_bear = _as_bool(_bar_value(bar, "bos_bear", False))
     fvg_bull = _as_bool(_bar_value(bar, "fvg_bull", False))
     fvg_bear = _as_bool(_bar_value(bar, "fvg_bear", False))
+    mss_bull = _as_bool(_bar_value(bar, "mss_bull", False))
+    mss_bear = _as_bool(_bar_value(bar, "mss_bear", False))
     adx = _as_float(_bar_value(bar, "adx_14", _bar_value(bar, "adx", 20.0)), 20.0)
 
     bullish_structure = (
         (pullback_valid and pullback_side == "buy")
         or bos_bull
         or fvg_bull
+        or mss_bull
     )
     bearish_structure = (
         (pullback_valid and pullback_side == "sell")
         or bos_bear
         or fvg_bear
+        or mss_bear
     )
     side_structure = bullish_structure if side == "buy" else bearish_structure
+
+    if score_state in {"TRADEABLE_UP", "TRADEABLE_DOWN"}:
+        entry_state = classify_entry_readiness(
+            score_state,
+            side,
+            bar,
+            ltf_behaviour=ltf,
+            require_range=require_range,
+        )
+        if entry_state == "WAIT_PULLBACK":
+            return False, "wait_pullback"
+        if entry_state != score_state:
+            return False, entry_state.lower()
 
     if ltf == "CONSOLIDATING" and block_consolidating:
         return False, "blocked_consolidating"

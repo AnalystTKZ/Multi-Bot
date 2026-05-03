@@ -515,6 +515,203 @@ def detect_break_of_structure(df: pd.DataFrame, swing_n: int = 5) -> pd.DataFram
     return result
 
 
+def detect_market_structure_shift(
+    df: pd.DataFrame,
+    swing_n: int = 5,
+) -> pd.DataFrame:
+    """
+    CHoCH / MSS detection: a BOS that runs AGAINST the prevailing confirmed swing sequence.
+
+    Local structure is assessed from the last two confirmed swing highs/lows:
+      - HH pattern  (last_sh > prev_sh) → bullish local structure
+      - LH pattern  (last_sh < prev_sh) → bearish local structure
+
+    mss_bull: bearish swing sequence (LH) → close breaks above last swing high
+              = potential reversal upward; sell structure being broken
+    mss_bear: bullish swing sequence (HH) → close breaks below last swing low
+              = potential reversal downward; buy structure being broken
+
+    Returns DataFrame with columns: mss_bull (bool), mss_bear (bool)
+    Requires ≥ 2 confirmed swings before emitting True; False until then.
+    """
+    high  = df["high"].to_numpy(dtype=np.float64)
+    low   = df["low"].to_numpy(dtype=np.float64)
+    close = df["close"]
+
+    swing_h_arr, swing_l_arr = _confirmed_swing_arrays(high, low, swing_n)
+    sh = pd.Series(swing_h_arr, index=df.index)
+    sl = pd.Series(swing_l_arr, index=df.index)
+
+    last_sh = sh.ffill()
+    last_sl = sl.ffill()
+
+    # For each bar: what was the swing high/low BEFORE the most recent one?
+    # Technique: at every event bar, record the ffill value shifted back 1 event.
+    prev_sh_at_event = sh.shift(1).ffill()
+    prev_sh_record   = pd.Series(np.nan, index=df.index, dtype=np.float64)
+    prev_sh_record[sh.notna()] = prev_sh_at_event[sh.notna()]
+    prev_sh = prev_sh_record.ffill()
+
+    prev_sl_at_event = sl.shift(1).ffill()
+    prev_sl_record   = pd.Series(np.nan, index=df.index, dtype=np.float64)
+    prev_sl_record[sl.notna()] = prev_sl_at_event[sl.notna()]
+    prev_sl = prev_sl_record.ffill()
+
+    # Need at least 2 events — mask bars before the second swing event
+    has_two_sh = prev_sh.notna()
+    has_two_sl = prev_sl.notna()
+
+    is_bullish_sh = (last_sh > prev_sh) & has_two_sh   # HH pattern
+    is_bearish_sh = (last_sh < prev_sh) & has_two_sh   # LH pattern
+    is_bullish_sl = (last_sl > prev_sl) & has_two_sl   # HL pattern
+
+    # BOS events (same logic as detect_break_of_structure)
+    bos_bull = (close > last_sh.shift(1)) & (close.shift(1) <= last_sh.shift(1))
+    bos_bear = (close < last_sl.shift(1)) & (close.shift(1) >= last_sl.shift(1))
+
+    # MSS bull: bearish swing structure → BOS bull (reversal up)
+    # MSS bear: bullish swing structure → BOS bear (reversal down)
+    mss_bull = is_bearish_sh.shift(1).fillna(False) & bos_bull.fillna(False)
+    mss_bear = (is_bullish_sh | is_bullish_sl).shift(1).fillna(False) & bos_bear.fillna(False)
+
+    result = pd.DataFrame(index=df.index)
+    result["mss_bull"] = mss_bull.fillna(False)
+    result["mss_bear"] = mss_bear.fillna(False)
+    return result
+
+
+def compute_market_structure_scores(
+    df: pd.DataFrame,
+    swing_n: int = 5,
+    external_swing_n: int = 20,
+    mss_cap: int = 40,
+) -> pd.DataFrame:
+    """
+    Causal internal/external structure scores built from confirmed swings.
+
+    The scores are intentionally compact:
+      external_trend_direction: -1 bearish, 0 mixed/unknown, +1 bullish
+      internal_structure_state: -1 bearish, 0 mixed/unknown, +1 bullish
+      swing_sequence_score: weighted internal/external agreement in [-1, 1]
+      bars_since_mss: normalized distance since the last MSS event, 0 recent, 1 stale
+    """
+    required = {"high", "low", "close"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"compute_market_structure_scores missing columns: {sorted(missing)}")
+
+    n = len(df)
+    result = pd.DataFrame(index=df.index)
+    if n == 0:
+        for col in (
+            "mss_bull", "mss_bear", "mss_bull_flag", "mss_bear_flag",
+            "mss_bull_bars_ago", "mss_bear_bars_ago", "bars_since_mss",
+            "external_trend_direction", "external_structure_score",
+            "internal_structure_state", "swing_sequence_score",
+            "position_in_external_range", "dist_to_external_high_atr",
+            "dist_to_external_low_atr",
+        ):
+            result[col] = np.asarray([], dtype=np.float32)
+        return result
+
+    close = df["close"].to_numpy(dtype=np.float64)
+    high = df["high"].to_numpy(dtype=np.float64)
+    low = df["low"].to_numpy(dtype=np.float64)
+    atr = (
+        df["atr_14"].astype(float)
+        if "atr_14" in df.columns
+        else compute_atr(df, 14).astype(float)
+    )
+    atr = atr.replace([np.inf, -np.inf], np.nan)
+    fallback_range = (df["high"] - df["low"]).abs().replace(0.0, np.nan)
+    atr = atr.fillna(fallback_range).ffill().fillna(1e-9)
+    atr_arr = np.where(atr.to_numpy(dtype=np.float64) > 1e-12, atr.to_numpy(dtype=np.float64), 1e-9)
+
+    def _swing_context(local_swing_n: int) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+        swing_high_arr, swing_low_arr = _confirmed_swing_arrays(high, low, local_swing_n)
+        sh = pd.Series(swing_high_arr, index=df.index)
+        sl = pd.Series(swing_low_arr, index=df.index)
+        last_sh = sh.ffill()
+        last_sl = sl.ffill()
+
+        prev_sh_at_event = sh.shift(1).ffill()
+        prev_sh_record = pd.Series(np.nan, index=df.index, dtype=np.float64)
+        prev_sh_record[sh.notna()] = prev_sh_at_event[sh.notna()]
+        prev_sh = prev_sh_record.ffill()
+
+        prev_sl_at_event = sl.shift(1).ffill()
+        prev_sl_record = pd.Series(np.nan, index=df.index, dtype=np.float64)
+        prev_sl_record[sl.notna()] = prev_sl_at_event[sl.notna()]
+        prev_sl = prev_sl_record.ffill()
+
+        high_dir = np.sign((last_sh - prev_sh).fillna(0.0))
+        low_dir = np.sign((last_sl - prev_sl).fillna(0.0))
+        direction = ((high_dir + low_dir) / 2.0).clip(-1.0, 1.0).fillna(0.0)
+        return last_sh, last_sl, prev_sh, prev_sl, direction
+
+    int_last_sh, int_last_sl, _, _, internal_dir = _swing_context(swing_n)
+    ext_last_sh, ext_last_sl, _, _, external_dir = _swing_context(external_swing_n)
+
+    mss = detect_market_structure_shift(df, swing_n=swing_n)
+    mss_bull = mss["mss_bull"].fillna(False).to_numpy(dtype=bool)
+    mss_bear = mss["mss_bear"].fillna(False).to_numpy(dtype=bool)
+    any_mss = mss_bull | mss_bear
+
+    idx = np.arange(n, dtype=np.float32)
+    cap = float(max(1, int(mss_cap)))
+
+    def _bars_since(mask: np.ndarray) -> np.ndarray:
+        event_positions = np.where(mask)[0]
+        if len(event_positions) == 0:
+            return np.ones(n, dtype=np.float32)
+        grp = np.searchsorted(event_positions, idx, side="right") - 1
+        last_bar = np.where(
+            grp >= 0,
+            event_positions[np.clip(grp, 0, len(event_positions) - 1)].astype(np.float32),
+            -cap,
+        )
+        return np.clip((idx - last_bar) / cap, 0.0, 1.0).astype(np.float32)
+
+    mss_bull_ago = _bars_since(mss_bull)
+    mss_bear_ago = _bars_since(mss_bear)
+    bars_since_mss = _bars_since(any_mss)
+
+    ext_high = ext_last_sh.to_numpy(dtype=np.float64)
+    ext_low = ext_last_sl.to_numpy(dtype=np.float64)
+    range_span = ext_high - ext_low
+    valid_range = np.isfinite(ext_high) & np.isfinite(ext_low) & (range_span > 1e-12)
+    position = np.where(valid_range, (close - ext_low) / (range_span + 1e-9), 0.5)
+
+    result["mss_bull"] = mss_bull
+    result["mss_bear"] = mss_bear
+    result["mss_bull_flag"] = mss_bull.astype(np.float32)
+    result["mss_bear_flag"] = mss_bear.astype(np.float32)
+    result["mss_bull_bars_ago"] = mss_bull_ago
+    result["mss_bear_bars_ago"] = mss_bear_ago
+    result["bars_since_mss"] = bars_since_mss
+    result["external_trend_direction"] = external_dir.to_numpy(dtype=np.float32)
+    result["external_structure_score"] = result["external_trend_direction"]
+    result["internal_structure_state"] = internal_dir.to_numpy(dtype=np.float32)
+    result["swing_sequence_score"] = np.clip(
+        0.60 * result["internal_structure_state"].to_numpy(dtype=np.float32)
+        + 0.40 * result["external_trend_direction"].to_numpy(dtype=np.float32),
+        -1.0,
+        1.0,
+    ).astype(np.float32)
+    result["position_in_external_range"] = np.clip(position, 0.0, 1.0).astype(np.float32)
+    result["dist_to_external_high_atr"] = np.where(
+        np.isfinite(ext_high),
+        np.clip((ext_high - close) / atr_arr, -5.0, 5.0),
+        0.0,
+    ).astype(np.float32)
+    result["dist_to_external_low_atr"] = np.where(
+        np.isfinite(ext_low),
+        np.clip((close - ext_low) / atr_arr, -5.0, 5.0),
+        0.0,
+    ).astype(np.float32)
+    return result
+
+
 def detect_liquidity_sweeps(df: pd.DataFrame, lookback: int = 20) -> pd.DataFrame:
     """
     Detect high-quality stop hunts: price sweeps a key level then closes
@@ -979,7 +1176,7 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     Master function. Computes all indicators and returns an enriched DataFrame.
 
     Trend / momentum: ema_21/50/200, atr_14, rsi_14, adx_14, bb_*, stoch_k/d, ema_stack
-    SMC structure:    fvg_bull/bear, bos_bull/bear, sweep_bull/bear, ob_bull/bear
+    SMC structure:    fvg_bull/bear, bos_bull/bear, mss_bull/bear, sweep_bull/bear, ob_bull/bear
     S/R zones:        sr_nearest_resist/support, sr_dist_*, sr_in_supply/demand_zone
     Range / pullback: range_valid/side/support/resist, pullback_valid/side/level
     Institutional:    vwap, vwap_upper/lower1/2, vwap_dist_atr
@@ -1026,6 +1223,10 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     out["swing_low"] = bos["swing_low"]
     out["last_swing_high"] = bos["last_swing_high"]
     out["last_swing_low"] = bos["last_swing_low"]
+
+    structure = compute_market_structure_scores(out)
+    for col in structure.columns:
+        out[col] = structure[col]
 
     sweeps = detect_liquidity_sweeps(df)
     out["sweep_bull"] = sweeps["sweep_bull"]

@@ -52,6 +52,7 @@ except Exception:
 import numpy as np
 import pandas as pd
 from services.market_decision import combined_market_decision
+from services.regime_scores import classify_tradeability_directional
 
 # Write logs to both stderr (visible in terminal/notebook) AND a timestamped
 # file under trading-engine/logs/ so they survive subprocess pipe capture.
@@ -143,6 +144,7 @@ _LIVE_SIGNAL_DEFAULTS = {
     "ML_DIRECTION_THRESHOLD": 0.65,
     "MAX_UNCERTAINTY": 0.15,
     "MIN_REWARD_TO_RISK": 1.50,
+    "MIN_EXPECTED_R": 1.30,
     "ATR_STOP_MULTIPLIER": 1.5,
     "ATR_TARGET_MULTIPLIER": 2.5,
     "GOLD_ATR_STOP_MULTIPLIER": 2.0,
@@ -1740,31 +1742,44 @@ def _compute_backtest_signal(
         _reject("weak_gru_direction")
         return None
 
-    # ── Gate 4: HTF regime confidence ─────────────────────────────────────────
-    # Low-confidence regime predictions are unreliable — training accuracy was
-    # only 0.366 overall with BIAS_DOWN recall=0.239. Blocking trades when the
-    # regime classifier is uncertain prevents acting on misclassified NEUTRAL bars.
+    # ── Gate 4: Directional tradeability ─────────────────────────────────────
+    # classify_tradeability_directional maps (ltf_trade_regime, htf_bias) →
+    # TRADEABLE_UP / TRADEABLE_DOWN / NO_TRADE_*.
+    # This replaces the old BIAS_UP/DOWN + TRENDING/RANGING routing.
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
     _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
     _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.55"))
-    if _htf_bias != "BIAS_NEUTRAL" and _htf_regime_conf < _htf_min_conf:
+    _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
+
+    _tradeability = classify_tradeability_directional(_ltf_trade_regime, _htf_bias)
+
+    if _tradeability in ("NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "NO_TRADE_UNCERTAIN"):
+        _reject(_tradeability.lower())
+        return None
+    if side == "buy" and _tradeability != "TRADEABLE_UP":
+        _reject("tradeability_direction_conflict")
+        return None
+    if side == "sell" and _tradeability != "TRADEABLE_DOWN":
+        _reject("tradeability_direction_conflict")
+        return None
+
+    # HTF classifier confidence gate
+    if _htf_regime_conf < _htf_min_conf:
         _reject("htf_low_regime_confidence")
         return None
 
-    # ── Gate 5: combined HTF/LTF market-decision matrix ───────────────────────
-    _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING"))
-    _trade_regime = str(ml_preds.get("trade_regime", "") or "").upper()
-    if _trade_regime in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
+    # ── Gate 5: Per-bar structural validation ─────────────────────────────────
+    _ltf_behaviour = str(ml_preds.get("regime_ltf", "TRENDING")).upper()
+    if _ltf_trade_regime in {"TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"}:
         _ltf_behaviour = "TRENDING"
-    elif _trade_regime == "RANGE":
+    elif _ltf_trade_regime == "RANGE":
         _ltf_behaviour = "RANGING"
-    elif _trade_regime == "CONSOLIDATION":
+    elif _ltf_trade_regime == "CONSOLIDATION":
         _ltf_behaviour = "CONSOLIDATING"
-    elif _trade_regime == "NO_TRADE_EXTREME_VOL":
+    elif _ltf_trade_regime == "NO_TRADE_EXTREME_VOL":
         _ltf_behaviour = "VOLATILE"
-    _range_valid    = bool(bar.get("range_valid", False))
+    _range_valid = bool(bar.get("range_valid", False))
     _pullback_valid = bool(bar.get("pullback_valid", False))
-    _neutral_thresh = float(os.getenv("NEUTRAL_BIAS_THRESHOLD", "0.60"))
     _volatile_thresh = float(os.getenv("VOLATILE_ENTRY_THRESHOLD", "0.70"))
     _block_consol = str(os.getenv("BLOCK_LTF_CONSOLIDATING", "1")).lower() in ("1", "true", "yes")
     _require_range = str(os.getenv("RANGING_REQUIRE_RANGE", "1")).lower() in ("1", "true", "yes")
@@ -1774,13 +1789,13 @@ def _compute_backtest_signal(
         side=side,
         confidence=conf,
         bar=bar,
-        neutral_threshold=_neutral_thresh,
+        neutral_threshold=0.60,
         volatile_threshold=_volatile_thresh,
         block_consolidating=_block_consol,
         require_range=_require_range,
         htf_confidence=_htf_regime_conf,
         regime_scores=ml_preds.get("regime_scores"),
-        trade_regime=ml_preds.get("trade_regime"),
+        trade_regime=_tradeability,   # pass directional state for structural routing
     )
     if not _allowed:
         _reject(_reason)
@@ -1819,6 +1834,19 @@ def _compute_backtest_signal(
             stop_loss   = close + sl_dist
             take_profit = close - sl_dist * _tp_mult
 
+    actual_rr = abs(take_profit - close) / (abs(close - stop_loss) + 1e-9)
+    _min_rr = _live_float_env("MIN_REWARD_TO_RISK")
+    if actual_rr < _min_rr:
+        _reject("min_reward_to_risk")
+        return None
+
+    p_win = p_bull if side == "buy" else p_bear
+    expected_r = p_win * actual_rr - (1.0 - p_win) * 1.0
+    _min_er = _live_float_env("MIN_EXPECTED_R")
+    if expected_r < _min_er:
+        _reject("expected_r_below_threshold")
+        return None
+
     _range_width = float(bar.get("range_width_atr", 0.0)) if _ltf_behaviour == "RANGING" else 0.0
 
     return {
@@ -1832,7 +1860,8 @@ def _compute_backtest_signal(
         "signal_metadata": {
             "regime":            _htf_bias,
             "regime_ltf":        _ltf_behaviour,
-            "trade_regime":      _trade_regime or "",
+            "trade_regime":      _ltf_trade_regime,
+            "tradeability":      _tradeability,
             "regime_scores":     ml_preds.get("regime_scores", {}),
             "expected_variance": _uncertainty,
             "p_bull":            p_bull,
@@ -1841,6 +1870,11 @@ def _compute_backtest_signal(
             "range_width_atr":   _range_width,
             "pullback_valid":    _pullback_valid,
             "pullback_level":    float(bar.get("pullback_level", float("nan"))),
+            "mss_bull":          int(bool(bar.get("mss_bull", False))),
+            "mss_bear":          int(bool(bar.get("mss_bear", False))),
+            "expected_r":        float(expected_r),
+            "spread_pips":       float(ml_preds.get("spread_pips", 1.0)),
+            "spread_at_signal":  float(ml_preds.get("spread_pips", 1.0)),
         },
     }
 
@@ -2357,7 +2391,7 @@ def _backtest_trader(
     # Pre-instantiate QualityScorer helper (avoid per-signal construction cost)
     _qs_fe    = None
     _qs_model = (ml_models or {}).get("quality") if ml_models else None
-    _qs_infer = None  # fast CPU inference fn: (feat_array) -> (ev, quality_score)
+    _qs_infer = None  # fast CPU inference fn: (feat_array) -> (ev, quality_score, prob_profit)
     if _qs_model is not None:
         from services.feature_engine import FeatureEngine, QUALITY_FEATURES
         _qs_fe = FeatureEngine()
@@ -2374,7 +2408,7 @@ def _backtest_trader(
     _cfg_density_lambda   = float(os.getenv("DENSITY_LAMBDA",             "0.12"))
     _cfg_dir_thresh       = _live_float_env("ML_DIRECTION_THRESHOLD")
     _cfg_min_conf         = float(os.getenv("MIN_CONFIDENCE",             "0.0"))
-    _cfg_min_ev           = float(os.getenv("MIN_EV_THRESHOLD",           "0.0"))
+    _cfg_min_ev           = float(os.getenv("MIN_EV_THRESHOLD",           "0.10"))
 
     # ── Main loop ─────────────────────────────────────────────────────────────
     import time as _time
@@ -2667,13 +2701,19 @@ def _backtest_trader(
             _qs_feats = _qs_fe.get_quality_features(_sig_ctx, _qs_preds, bar)
             if _qs_infer is not None:
                 # CPU path: ~3–5 µs vs ~500 µs GPU kernel launch for batch=1
-                _ev, _qs = _qs_infer(_qs_feats)
+                _ev, _qs, _prob_profit = _qs_infer(_qs_feats)
             else:
                 _qs_dict   = dict(zip(QUALITY_FEATURES, _qs_feats))
                 _qs_result = _qs_model.predict(_qs_dict)
-                _ev, _qs   = float(_qs_result["ev"]), float(_qs_result["quality_score"])
-            ml_preds["ev"]            = _ev
-            ml_preds["quality_score"] = _qs
+                _ev   = float(_qs_result["ev"])
+                _qs   = float(_qs_result["quality_score"])
+                _rr   = max(0.1, float(_sig_ctx.get("rr_ratio", 1.5)))
+                _prob_profit = float(_qs_result.get(
+                    "probability_of_profit", max(0.0, min(1.0, (_ev + 1.0) / (_rr + 1.0)))
+                ))
+            ml_preds["ev"]                    = _ev
+            ml_preds["quality_score"]         = _qs
+            ml_preds["probability_of_profit"] = _prob_profit
             # Block trades where predicted EV < threshold. 0.0 = only take trades the
             # model believes are positive EV. Set MIN_EV_THRESHOLD env var to override.
             # Previously defaulted to -1.0 (never blocks) — raised to 0.0 so the quality
@@ -2713,6 +2753,45 @@ def _backtest_trader(
                     timestamp=dt.isoformat(),
                     executed=False,
                     rejection_reason="cached_ev_below_threshold",
+                    pm_open_positions_seen=len(open_positions_detail),
+                    run_id=run_id,
+                    source_split=source_split,
+                    bt_start=start,
+                    bt_end=end,
+                    split_summary_hash=split_summary_hash,
+                    correlation_id=candidate_correlation_id,
+                )
+                continue
+
+        if ml_preds and ml_preds.get("ev") is not None:
+            _prob_profit = float(ml_preds.get(
+                "probability_of_profit",
+                max(0.0, min(1.0, (float(ml_preds.get("ev", 0.0)) + 1.0) / (rr_ratio + 1.0))),
+            ))
+            _pf_est = float((_prob_profit * max(rr_ratio, 0.1)) / max(1e-6, 1.0 - _prob_profit))
+            _sig_meta_final = enriched.get("signal_metadata", {}) or raw_signal.get("signal_metadata", {}) or {}
+            _spread_pips = float(_sig_meta_final.get("spread_at_signal", ml_preds.get("spread_pips", 1.0)) or 0.0)
+            _stop_pips = abs(entry - sl) / max(_pip_for_entry(entry), 1e-9)
+            _spread_to_stop = float(_spread_pips / max(_stop_pips, 1e-6))
+            ml_preds["profit_factor_estimate"] = _pf_est
+            ml_preds["spread_to_stop_ratio"] = _spread_to_stop
+            _quality_reject_reason = None
+            if _pf_est < float(os.getenv("MIN_QUALITY_PROFIT_FACTOR", "1.25")):
+                _quality_reject_reason = "quality_profit_factor_below_threshold"
+            elif _spread_to_stop > float(os.getenv("MAX_SPREAD_TO_STOP_RATIO", "0.10")):
+                _quality_reject_reason = "quality_spread_to_stop_too_high"
+            if _quality_reject_reason:
+                _dbg["quality_block"] += 1
+                _log_backtest_candidate(
+                    candidate_logger,
+                    df=df,
+                    entry_idx=i,
+                    raw_signal={**raw_signal, "rr_ratio": rr_ratio},
+                    ml_preds=ml_preds,
+                    bar=bar,
+                    timestamp=dt.isoformat(),
+                    executed=False,
+                    rejection_reason=_quality_reject_reason,
                     pm_open_positions_seen=len(open_positions_detail),
                     run_id=run_id,
                     source_split=source_split,

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # ── Trading mode ──────────────────────────────────────────────────────────
     PAPER_TRADING: bool = True
     ML_ENABLED: bool = True
+    RL_ENABLED: bool = False     # RL is dormant; isolated behind this flag
 
     # ── Symbols ───────────────────────────────────────────────────────────────
     TRADING_PAIRS: List[str] = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "XAUUSD"]

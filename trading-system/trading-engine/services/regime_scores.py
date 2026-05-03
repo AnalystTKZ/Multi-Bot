@@ -360,6 +360,146 @@ def build_regime_score_frame(
     return out.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
 
 
+TRADEABILITY_STATES = frozenset({
+    "TRADEABLE_UP",
+    "TRADEABLE_DOWN",
+    "WAIT_PULLBACK",
+    "NO_TRADE_CHOP",
+    "NO_TRADE_EXTREME_VOL",
+    "NO_TRADE_UNCERTAIN",
+})
+
+
+def classify_tradeability_directional(ltf_trade_regime: str, htf_bias: str) -> str:
+    """
+    Map (ltf_trade_regime, htf_bias) → direction-aware tradeability state.
+
+    ltf_trade_regime: output of classify_trade_regime()
+      e.g. TRADEABLE_TREND, TRADEABLE_TREND_HIGH_VOL, RANGE,
+           CONSOLIDATION, UNCERTAIN, NO_TRADE_CHOP, NO_TRADE_EXTREME_VOL
+    htf_bias: output of HTF regime classifier
+      e.g. BIAS_UP, BIAS_DOWN, BIAS_NEUTRAL
+
+    Returns one of:
+      TRADEABLE_UP            — HTF up + LTF tradeable/range → buy-only
+      TRADEABLE_DOWN          — HTF down + LTF tradeable/range → sell-only
+      NO_TRADE_CHOP           — low-momentum choppy market
+      NO_TRADE_EXTREME_VOL    — volatility too high to trade
+      NO_TRADE_UNCERTAIN      — regime unclear or neutral HTF bias
+    """
+    tr = str(ltf_trade_regime or "").upper()
+    bias = str(htf_bias or "BIAS_NEUTRAL").upper()
+
+    # Hard no-trade: volatility and chop override everything
+    if tr == "NO_TRADE_EXTREME_VOL":
+        return "NO_TRADE_EXTREME_VOL"
+    if tr == "NO_TRADE_CHOP":
+        return "NO_TRADE_CHOP"
+
+    # Consolidation and unclear LTF → no edge
+    if tr in ("CONSOLIDATION", "UNCERTAIN", ""):
+        return "NO_TRADE_UNCERTAIN"
+
+    # Neutral HTF bias → no directional conviction
+    if bias == "BIAS_NEUTRAL":
+        return "NO_TRADE_UNCERTAIN"
+
+    # Trending LTF + aligned HTF bias → directional trade
+    if tr in ("TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"):
+        if bias == "BIAS_UP":
+            return "TRADEABLE_UP"
+        if bias == "BIAS_DOWN":
+            return "TRADEABLE_DOWN"
+
+    # Range LTF + HTF bias → trade only in the bias direction
+    # (buy range bottoms in uptrend context; sell range tops in downtrend context)
+    if tr == "RANGE":
+        if bias == "BIAS_UP":
+            return "TRADEABLE_UP"
+        if bias == "BIAS_DOWN":
+            return "TRADEABLE_DOWN"
+
+    return "NO_TRADE_UNCERTAIN"
+
+
+def _entry_bar_value(bar: Any, key: str, default: Any = None) -> Any:
+    try:
+        return bar.get(key, default)
+    except AttributeError:
+        return default
+
+
+def _entry_truthy(value: Any) -> bool:
+    try:
+        if value != value:
+            return False
+    except Exception:
+        pass
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def classify_entry_readiness(
+    tradeability: str,
+    side: str,
+    bar: Any,
+    *,
+    ltf_behaviour: str = "TRENDING",
+    require_range: bool = True,
+) -> str:
+    """
+    Convert direction-aware tradeability into entry readiness for the current bar.
+
+    WAIT_PULLBACK means the broader context is tradable in this direction, but
+    the current candle is not at an acceptable structure/range/pullback entry.
+    """
+    state = str(tradeability or "NO_TRADE_UNCERTAIN").upper()
+    if state not in {"TRADEABLE_UP", "TRADEABLE_DOWN"}:
+        return state if state in TRADEABILITY_STATES else "NO_TRADE_UNCERTAIN"
+
+    side_s = str(side or "").lower()
+    if state == "TRADEABLE_UP" and side_s != "buy":
+        return "NO_TRADE_UNCERTAIN"
+    if state == "TRADEABLE_DOWN" and side_s != "sell":
+        return "NO_TRADE_UNCERTAIN"
+
+    ltf = str(ltf_behaviour or "TRENDING").upper()
+    if ltf in {"CONSOLIDATION", "CONSOLIDATING", "UNCERTAIN"}:
+        return "NO_TRADE_UNCERTAIN"
+
+    range_valid = _entry_truthy(_entry_bar_value(bar, "range_valid", False))
+    range_side = str(_entry_bar_value(bar, "range_side", "") or "").lower()
+    pullback_valid = _entry_truthy(_entry_bar_value(bar, "pullback_valid", False))
+    pullback_side = str(_entry_bar_value(bar, "pullback_side", "") or "").lower()
+
+    bullish_structure = (
+        (pullback_valid and pullback_side == "buy")
+        or _entry_truthy(_entry_bar_value(bar, "bos_bull", False))
+        or _entry_truthy(_entry_bar_value(bar, "fvg_bull", False))
+        or _entry_truthy(_entry_bar_value(bar, "mss_bull", False))
+    )
+    bearish_structure = (
+        (pullback_valid and pullback_side == "sell")
+        or _entry_truthy(_entry_bar_value(bar, "bos_bear", False))
+        or _entry_truthy(_entry_bar_value(bar, "fvg_bear", False))
+        or _entry_truthy(_entry_bar_value(bar, "mss_bear", False))
+    )
+    side_structure = bullish_structure if side_s == "buy" else bearish_structure
+
+    if ltf == "RANGING":
+        if require_range and not range_valid:
+            return "WAIT_PULLBACK"
+        if range_valid and range_side and range_side != side_s:
+            return "WAIT_PULLBACK"
+        return state
+
+    if ltf in {"TRENDING", "VOLATILE"} and not side_structure:
+        return "WAIT_PULLBACK"
+
+    return state
+
+
 def classify_trade_regime(row: pd.Series | dict[str, Any]) -> str:
     """Convert score outputs into a final trading filter state."""
     get = row.get if hasattr(row, "get") else lambda key, default=0.0: default

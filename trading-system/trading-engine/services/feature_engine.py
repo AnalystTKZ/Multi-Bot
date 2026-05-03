@@ -171,8 +171,22 @@ SEQUENCE_FEATURES = [
     "atr_pctile",
     "vwap_dist_atr",
     "wick_auction_ratio",
+    # ── MSS / CHoCH (market structure shift) ─────────────────────────────────
+    "mss_bull_flag",            # 1 at bar where bullish MSS/CHoCH occurred
+    "mss_bear_flag",            # 1 at bar where bearish MSS/CHoCH occurred
+    "mss_bull_bars_ago",        # normalised bars since last bullish MSS (0=recent, 1=cap)
+    "mss_bear_bars_ago",        # normalised bars since last bearish MSS
+    "bars_since_mss",           # normalised bars since any MSS/CHoCH
+    # ── External (major-swing) structure ─────────────────────────────────────
+    "external_trend_direction", # +1 bullish major swing sequence, -1 bearish
+    "external_structure_score", # +1 = external HH, -1 = external LH (normalised to [-1,1])
+    "internal_structure_state", # +1 internal HH/HL, -1 internal LH/LL
+    "swing_sequence_score",     # weighted internal/external structure agreement
+    "position_in_external_range",# price position inside [ext_swing_low, ext_swing_high] in [0,1]
+    "dist_to_external_high_atr",# (ext_swing_high - close) / ATR — clipped [-5, 5]
+    "dist_to_external_low_atr", # (close - ext_swing_low)  / ATR — clipped [-5, 5]
 ]
-# Total: 59 technical execution/structure features.
+# Total: technical execution/structure features.
 
 # ─── 4H BIAS classifier features ─────────────────────────────────────────────
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
@@ -196,6 +210,13 @@ REGIME_4H_FEATURES = [
     "rolling_range_percentile",
     "hh_hl_structure",
     "lh_ll_structure",
+    "external_trend_direction",
+    "external_structure_score", # major-swing direction from larger swing window
+    "internal_structure_state",
+    "swing_sequence_score",
+    "bars_since_mss",
+    "mss_bull_bars_ago",        # bars since last bullish MSS at 4H resolution
+    "mss_bear_bars_ago",        # bars since last bearish MSS at 4H resolution
     "symbol_group_code",
 ]
 
@@ -224,6 +245,16 @@ REGIME_1H_FEATURES = [
     "swing_hh_hl_count",
     "liquidity_sweep_24h",
     "vol_slope",
+    "mss_bull_flag",
+    "mss_bear_flag",
+    "mss_bull_bars_ago",
+    "mss_bear_bars_ago",
+    "bars_since_mss",
+    "external_trend_direction",
+    "external_structure_score",
+    "internal_structure_state",
+    "swing_sequence_score",
+    "position_in_external_range",
     "symbol_group_code",
 ]
 
@@ -235,20 +266,21 @@ QUALITY_FEATURES = [
     "gru_edge",                # 4  side probability minus opposite-side probability
     "expected_move",           # 5  short-horizon move magnitude score from GRU
     "gru_uncertainty",         # 6  expected_variance from GRU variance head
-    "trade_regime_code",       # 7  compact LTF trade-regime suitability code
-    "htf_bias_alignment",      # 8  HTF directional-bias agreement with side
+    "trade_regime_code",       # 7  compact LTF trade-regime suitability code (RANGE=0.55, TREND=1.0)
+    "expected_r_gross",        # 8  probability-weighted EV before costs: p_win×rr − (1−p_win)×1
+                               #    replaces htf_bias_alignment (always 1.0 after tradeability gate)
     "volatility_percentile",   # 9  regime volatility percentile, not raw volatility
     "chop_score",              # 10 noisy/two-way behaviour score
     "adx_at_signal",           # 11 directional strength at candidate bar
     "atr_ratio_at_signal",     # 12 symbol-normalised ATR ratio at candidate bar
-    "spread_at_signal",        # 13 execution friction
+    "spread_at_signal",        # 13 execution friction in raw pips
     "session_at_signal",       # 14 compact session code
     "news_in_30min",           # 15 near-news execution risk
     "strategy_win_rate_5",     # 16 prior short-term strategy outcome context
     "strategy_win_rate_20",    # 17 prior medium-term strategy outcome context
     "strategy_win_rate_50",    # 18 prior longer-term strategy outcome context
     "vol_slope_at_signal",     # 19 expanding vs contracting volatility
-]  # 20 features
+]  # 20 features — contract fixed; add features only by replacing degenerate ones
 
 # RL state dimension layout (total = 43):
 # [0-5]   GRU execution forecast (p_bull, p_bear, strength, entry_depth, expected_move, variance)
@@ -291,13 +323,19 @@ _QUALITY_SESSION_MAP = {
 }
 
 _TRADE_REGIME_CODE = {
-    "NO_TRADE_CHOP": 0.0,
-    "NO_TRADE_EXTREME_VOL": 0.0,
-    "UNCERTAIN": 0.10,
-    "CONSOLIDATION": 0.25,
-    "RANGE": 0.55,
+    # No-trade states — lowest code (0 = no edge)
+    "NO_TRADE_CHOP":         0.0,
+    "NO_TRADE_EXTREME_VOL":  0.0,
+    "NO_TRADE_UNCERTAIN":    0.0,
+    "UNCERTAIN":             0.10,
+    "CONSOLIDATION":         0.25,
+    # Tradeable states
+    "RANGE":                 0.55,
     "TRADEABLE_TREND_HIGH_VOL": 0.75,
-    "TRADEABLE_TREND": 1.0,
+    "TRADEABLE_TREND":       1.0,
+    # New directional states — same quality tier as their trend equivalents
+    "TRADEABLE_UP":          1.0,
+    "TRADEABLE_DOWN":        1.0,
 }
 
 
@@ -363,16 +401,18 @@ def _quality_trade_regime_code(trade_regime: Any, regime_scores: Optional[dict] 
     return 0.10
 
 
-def _quality_htf_bias_alignment(htf_bias: Any, side: Any) -> float:
-    bias = str(htf_bias or "BIAS_NEUTRAL").upper()
-    side_s = str(side or "").lower()
-    if bias == "BIAS_NEUTRAL":
-        return 0.5
-    if side_s == "buy":
-        return 1.0 if bias == "BIAS_UP" else 0.0
-    if side_s == "sell":
-        return 1.0 if bias == "BIAS_DOWN" else 0.0
-    return 0.5
+def _quality_expected_r_gross(p_win: float, rr_ratio: float) -> float:
+    """
+    Probability-weighted expected R before execution costs.
+    EV = p_win × rr_ratio − (1 − p_win) × 1.0
+
+    This replaces htf_bias_alignment (feature 8), which became degenerate after
+    the directional tradeability gate: all passing trades have alignment=1.0, so
+    it contributed zero discriminative signal.  expected_r_gross directly encodes
+    how much edge this setup carries according to GRU before quality refinement.
+    """
+    ev = float(p_win) * float(rr_ratio) - (1.0 - float(p_win)) * 1.0
+    return float(np.clip(ev, -2.0, 6.0))
 
 
 def _quality_side_probabilities(source: dict, side: Any) -> tuple[float, float]:
@@ -539,6 +579,7 @@ class FeatureEngine:
         from indicators.market_structure import (
             compute_rsi, compute_adx, compute_bollinger_bands,
             detect_break_of_structure, detect_fair_value_gaps,
+            compute_market_structure_scores,
         )
 
         out = df.copy(deep=False)
@@ -605,6 +646,39 @@ class FeatureEngine:
             out["fvg_bear_bottom"] = fvg["fvg_bear_bottom"]
         out["fvg_bull_open"] = out["fvg_bull"].astype(float)
         out["fvg_bear_open"] = out["fvg_bear"].astype(float)
+
+        structure_cols = {
+            "mss_bull", "mss_bear", "mss_bull_flag", "mss_bear_flag",
+            "mss_bull_bars_ago", "mss_bear_bars_ago", "bars_since_mss",
+            "external_trend_direction", "external_structure_score",
+            "internal_structure_state", "swing_sequence_score",
+            "position_in_external_range", "dist_to_external_high_atr",
+            "dist_to_external_low_atr",
+        }
+        if not structure_cols.issubset(out.columns):
+            structure = compute_market_structure_scores(out)
+            for col in structure_cols:
+                out[col] = structure[col]
+        out["mss_bull"] = out["mss_bull"].fillna(False).astype(bool)
+        out["mss_bear"] = out["mss_bear"].fillna(False).astype(bool)
+        out["mss_bull_flag"] = out["mss_bull_flag"].fillna(0.0).astype(float)
+        out["mss_bear_flag"] = out["mss_bear_flag"].fillna(0.0).astype(float)
+        _structure_defaults = {
+            "mss_bull_bars_ago": 1.0,
+            "mss_bear_bars_ago": 1.0,
+            "bars_since_mss": 1.0,
+            "position_in_external_range": 0.5,
+        }
+        for col in (
+            "mss_bull_bars_ago", "mss_bear_bars_ago", "bars_since_mss",
+            "external_trend_direction", "external_structure_score",
+            "internal_structure_state", "swing_sequence_score",
+            "position_in_external_range", "dist_to_external_high_atr",
+            "dist_to_external_low_atr",
+        ):
+            out[col] = pd.to_numeric(out[col], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            ).fillna(_structure_defaults.get(col, 0.0)).astype(float)
 
         # ── Helper: reindex a required HTF series onto base df index ──────────
         def _htf_series(htf_df: Optional[pd.DataFrame], tf_name: str, compute_fn) -> pd.Series:
@@ -1071,15 +1145,16 @@ class FeatureEngine:
             0.0,
         )
 
+        _rr_val = float(np.clip(_quality_float(signal.get("rr_ratio", 1.5), 1.5), 0.0, 10.0))
         feats[0] = _quality_strategy_code(signal.get("trader_id", ""))
         feats[1] = 1.0 if str(side).lower() == "buy" else 0.0
-        feats[2] = float(np.clip(_quality_float(signal.get("rr_ratio", 1.5), 1.5), 0.0, 10.0))
+        feats[2] = _rr_val
         feats[3] = float(np.clip(p_win, 0.0, 1.0))
         feats[4] = float(np.clip(p_win - p_loss, -1.0, 1.0))
         feats[5] = float(np.clip(expected_move, 0.0, 1.0))
         feats[6] = float(np.clip(_quality_float(ml_base.get("expected_variance", 0.1), 0.1), 0.0, 5.0))
         feats[7] = _quality_trade_regime_code(ml_base.get("trade_regime", ""), regime_scores)
-        feats[8] = _quality_htf_bias_alignment(ml_base.get("regime", "BIAS_NEUTRAL"), side)
+        feats[8] = _quality_expected_r_gross(p_win, _rr_val)   # p_win×rr − (1-p_win)×1
         feats[9] = float(np.clip(_quality_float(
             regime_scores.get("volatility_percentile", ml_base.get("volatility_percentile", 0.5)),
             0.5,
