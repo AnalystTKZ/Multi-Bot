@@ -1,0 +1,28 @@
+{
+  "trained_at": "2026-05-03T08:00:01.324124+00:00",
+  "models": {
+    "regime": {
+      "success": true,
+      "model": "regime"
+    },
+    "gru": {
+      "success": true,
+      "model": "gru"
+    },
+    "artifacts": {
+      "found": [
+        "gru_lstm",
+        "regime_htf",
+        "regime_ltf"
+      ],
+      "missing_required": [],
+      "missing_deferred": [
+        "quality_scorer"
+      ]
+    },
+    "history": {
+      "records": 9
+    }
+  },
+  "journal_path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/logs/trade_journal_detailed.jsonl"
+}
