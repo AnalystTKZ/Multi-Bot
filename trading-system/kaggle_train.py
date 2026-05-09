@@ -39,8 +39,8 @@ Step 7a always re-runs (GRU + Regime full training on train set).
              → optional research-only Quality/RL eval-journal feedback loop
 
 Data split (step5_split.py):
-  train      = data_start → (test_end - 4yr)      models train on this
-  validation = 2yr before test                     Round 1 backtest
+  train      = fixed 2-year fold                   models train on this
+  validation = following 1-year fold               Round 1 backtest
   test       = last 2yr of available data          Round 2 backtest (blind)
 """
 from __future__ import annotations
@@ -48,6 +48,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # Anchor to this file's directory (trading-system/)
@@ -170,11 +171,22 @@ def _allow_eval_journal_retraining() -> bool:
     return str(os.getenv("ALLOW_EVAL_JOURNAL_RETRAINING", "0")).lower() in {"1", "true", "yes", "on"}
 
 
-def run_step(name: str, script: str, done_check: Path, extra_env: dict | None = None) -> None:
+def _step_is_done(done_check: Path | Callable[[], bool]) -> bool:
+    if callable(done_check):
+        return bool(done_check())
+    return done_check.exists()
+
+
+def run_step(
+    name: str,
+    script: str,
+    done_check: Path | Callable[[], bool],
+    extra_env: dict | None = None,
+) -> None:
     script_path = pipeline_dir / script
     if not script_path.exists():
         raise FileNotFoundError(f"{name}: script not found at {script_path}")
-    if done_check.exists():
+    if _step_is_done(done_check):
         print(f"  SKIP  {name}")
         return
     print(f"  START {name}")
@@ -272,6 +284,25 @@ def _print_split_info() -> None:
         pass
 
 
+def _fixed_split_ready() -> bool:
+    ds = env["ml_training"] / "datasets"
+    sp = ds / "split_summary.json"
+    required = [sp, ds / "train.parquet", ds / "validation.parquet", ds / "test.parquet"]
+    if not all(path.exists() for path in required):
+        return False
+    try:
+        summary = json.loads(sp.read_text())
+    except Exception:
+        return False
+    return (
+        summary.get("split_method") == "fixed_calendar"
+        and summary.get("train_window") == "fixed"
+        and summary.get("train_years") == 2
+        and summary.get("val_years") == 1
+        and summary.get("leakage_check") == "PASS"
+    )
+
+
 # ─── Phase 0-5: Data preparation (skip if outputs exist) ─────────────────────
 
 PREP_STEPS = [
@@ -280,7 +311,7 @@ PREP_STEPS = [
     ("Step 2 - Cleaning",  "step2_clean.py",      env["processed"] / "clean" / "XAUUSD_15M.parquet"),
     ("Step 3 - Alignment", "step3_align.py",      env["processed"] / "aligned_multi_asset.parquet"),
     ("Step 4 - Features",  "step4_features.py",   env["processed"] / "feature_engineered.parquet"),
-    ("Step 5 - Split",     "step5_split.py",      env["ml_training"] / "datasets" / "train.parquet"),
+    ("Step 5 - Split",     "step5_split.py",      _fixed_split_ready),
 ]
 
 print("\n=== Phase 0-5: Data preparation ===")

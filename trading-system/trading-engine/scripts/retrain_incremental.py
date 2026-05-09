@@ -1201,7 +1201,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
 
     _gc.collect()
 
-    fold_selector = os.getenv("REGIME_ROLLING_FOLDS", "all").strip().lower()
+    fold_selector = os.getenv("REGIME_ROLLING_FOLDS", "latest").strip().lower()
     available_folds = _available_rolling_folds()
     if fold_selector in {"all", "rolling", "cv"}:
         active_folds = available_folds
@@ -1507,7 +1507,7 @@ def log_retrain(model_name: str, result: dict) -> None:
         "model": model_name,
         "retrain_data_split": RETRAIN_DATA_SPLIT,
         "retrain_rolling_fold": RETRAIN_ROLLING_FOLD,
-        "regime_rolling_folds": os.getenv("REGIME_ROLLING_FOLDS", "all"),
+        "regime_rolling_folds": os.getenv("REGIME_ROLLING_FOLDS", "latest"),
         "split_summary_hash": split_hash,
         "journal_sha256": _file_sha256(JOURNAL_PATH),
         "artifact_hashes": _artifact_hashes(model_name),

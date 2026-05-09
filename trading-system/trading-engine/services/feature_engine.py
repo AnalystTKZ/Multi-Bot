@@ -681,8 +681,13 @@ class FeatureEngine:
             ).fillna(_structure_defaults.get(col, 0.0)).astype(float)
 
         # ── Helper: reindex a required HTF series onto base df index ──────────
-        def _htf_series(htf_df: Optional[pd.DataFrame], tf_name: str, compute_fn) -> pd.Series:
-            """Compute a series on htf_df, forward-fill to out.index."""
+        def _htf_series(
+            htf_df: Optional[pd.DataFrame],
+            tf_name: str,
+            compute_fn,
+            default_value: float = 0.0,
+        ) -> pd.Series:
+            """Compute an HTF series and align it to the base index without lookahead."""
             if htf_df is None:
                 raise ValueError(f"_build_sequence_df: missing required HTF frame {tf_name}")
             if len(htf_df) < 14:
@@ -694,13 +699,29 @@ class FeatureEngine:
                 raise ValueError(
                     f"_build_sequence_df: HTF frame {tf_name} missing columns: {htf_missing}"
                 )
-            s = compute_fn(htf_df)
+            htf_df = htf_df.sort_index()
+            if htf_df.index.has_duplicates:
+                htf_df = htf_df[~htf_df.index.duplicated(keep="last")]
+            s = pd.to_numeric(compute_fn(htf_df), errors="coerce").replace([np.inf, -np.inf], np.nan)
+            s = s.sort_index().ffill()
             aligned = s.reindex(out.index, method="ffill")
-            if aligned.isna().any():
-                raise ValueError(
-                    f"_build_sequence_df: HTF frame {tf_name} has non-finite warmup or alignment gaps"
+            missing = aligned.isna()
+            if missing.any():
+                # Leading base bars can precede the first finite HTF value after
+                # calendar slicing or indicator warmup. Fill those with the
+                # neutral value for that feature; never backfill from the future.
+                logger.warning(
+                    "_build_sequence_df: HTF frame %s filled %d warmup/alignment gaps with %.3f",
+                    tf_name,
+                    int(missing.sum()),
+                    default_value,
                 )
-            return aligned
+                aligned = aligned.fillna(float(default_value))
+            if not np.isfinite(aligned.to_numpy(dtype=np.float64, copy=False)).all():
+                raise ValueError(
+                    f"_build_sequence_df: HTF frame {tf_name} has non-finite values after alignment"
+                )
+            return aligned.astype(float)
 
         def _safe_htf_atr(htf_df: pd.DataFrame) -> pd.Series:
             htf_atr = compute_atr(htf_df, 14).replace([np.inf, -np.inf], np.nan)
