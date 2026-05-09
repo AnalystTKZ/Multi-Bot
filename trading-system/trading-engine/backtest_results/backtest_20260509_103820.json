@@ -1,0 +1,163 @@
+{
+  "run_id": "bt_20260509_103820",
+  "run_at": "2026-05-09T10:38:20.404144+00:00",
+  "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
+  "start": "2021-08-05",
+  "end": "2023-08-04",
+  "split": "train_tail",
+  "requested_split": "train",
+  "manual_window": true,
+  "split_summary": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/ml_training/datasets/split_summary.json",
+    "sha256": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "date_ranges": {
+      "train": {
+        "start": "2016-01-04 00:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "validation": {
+        "start": "2022-08-05 05:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "train_tail": {
+        "start": "2021-08-05 05:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "test": {
+        "start": "2023-08-07 00:00:00+00:00",
+        "end": "2025-08-05 05:00:00+00:00"
+      }
+    },
+    "rows": {
+      "train": 174951,
+      "validation": 20412,
+      "train_tail": 44000,
+      "test": 46792
+    },
+    "leakage_check": "PASS",
+    "split_method": "expanding_calendar",
+    "selected_fold": "fold_005",
+    "fold_count": 6,
+    "blind_test_policy": "final_2_years_excluded_from_train_train_tail_and_internal_validation_folds"
+  },
+  "weight_artifact_hashes": {
+    "weights/gru_lstm/model.pt": "8006ca80e667ff66ce7c2c4c1515d57dddac2098d742a17384919a8df86ea3c3",
+    "weights/gru_lstm/weights_manifest.json": "7a2fd038333cc0e17ec850db520f71710a2804c25c88ad03395267555df39880",
+    "weights/regime_htf.pkl": "dbe2768accf932861dbfadac55c102242ff0811f81584bd5734ef846fe86f94d",
+    "weights/regime_ltf.pkl": "8239ad0a3f387e921ae4f962b18e41a1479244f6f9bece1197dd664958eaad3c",
+    "weights/quality_scorer.pkl": "436da06eab4b1162ab3b197d3042d1ceb16e1d13fb73bafe36eef1a185064b8d",
+    "weights/rl_ppo/model.zip": "5ab911702b9b2fd710de398d467f403c95879140292240f49a3277c08e3e2e6c"
+  },
+  "config": {
+    "trader": "ml_trader",
+    "initial_capital": 10000.0,
+    "risk_per_trade": 0.01,
+    "max_daily_loss_pct": 1.0,
+    "max_drawdown_halt": 1.0,
+    "enforce_daily_halt": false,
+    "compound_equity": false,
+    "portfolio_manager": "enabled"
+  },
+  "results": {
+    "ml_trader": {
+      "trades": 0,
+      "win_rate": 0.0,
+      "total_return": 0.0,
+      "profit_factor": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe": 0.0,
+      "primary_metric_basis": "fixed_risk_r_multiple",
+      "primary_metrics": {
+        "basis": "fixed_risk_r_multiple",
+        "risk_amount": 100.0,
+        "expectancy_r": 0.0,
+        "total_r": 0.0,
+        "net_pnl": 0.0,
+        "gross_profit": 0.0,
+        "gross_loss": 0.0,
+        "profit_factor": 0.0,
+        "win_rate": 0.0,
+        "total_return": 0.0,
+        "max_drawdown": 0.0,
+        "sharpe": 0.0,
+        "sortino": 0.0,
+        "calmar": 0.0,
+        "omega": 0.0,
+        "var_95": 0.0,
+        "cvar_95": 0.0,
+        "t_statistic": 0.0,
+        "t_pvalue": 1.0,
+        "sharpe_ci_95_lower": 0.0,
+        "sharpe_ci_95_upper": 0.0,
+        "information_coefficient": 0.0,
+        "longest_losing_streak": 0,
+        "rolling_expectancy_last20": 0.0,
+        "rolling_expectancy_first20": 0.0,
+        "edge_decay": 0.0,
+        "monthly_returns": {},
+        "best_month": 0.0,
+        "worst_month": 0.0,
+        "mc_median_final_equity": 10000.0,
+        "mc_p10_final_equity": 10000.0,
+        "mc_p90_final_equity": 10000.0,
+        "mc_p95_max_drawdown": 0.0,
+        "verdict": "FAIL",
+        "verdict_rules": {
+          "min_trades": false
+        }
+      },
+      "primary_profit_factor": 0.0,
+      "primary_total_return": 0.0,
+      "primary_max_drawdown": 0.0,
+      "primary_sharpe": 0.0,
+      "expectancy_r": 0.0,
+      "tp1_rate": 0.0,
+      "tp2_rate": 0.0,
+      "gate_diagnostics": {
+        "total": 263960,
+        "dd_halt": 0,
+        "daily": 0,
+        "session": 145857,
+        "cooldown": 0,
+        "density": 0,
+        "no_signal": 117779,
+        "pm_reject": 0,
+        "quality_block": 324,
+        "daily_halt_events": 0,
+        "no_signal_reasons": {
+          "weak_gru_direction": 55467,
+          "no_trade_uncertain": 37273,
+          "no_trade_chop": 10457,
+          "no_trade_extreme_vol": 12481,
+          "wait_pullback": 1569,
+          "expected_r_below_threshold": 66,
+          "tradeability_direction_conflict": 466
+        },
+        "daily_halt_dates": [],
+        "drawdown_halt_timestamp": null,
+        "drawdown_halt_drawdown": 0.0,
+        "enforce_daily_halt": false,
+        "compound_equity": false
+      }
+    }
+  },
+  "trade_log": [],
+  "calibration": {
+    "timestamp": "2026-05-09T10:40:18.840639+00:00",
+    "traders": {
+      "all": {
+        "trader_id": "all",
+        "bins": [],
+        "monotonic": null,
+        "reliable": null,
+        "note": "Insufficient data: 0 samples"
+      }
+    },
+    "run_id": "bt_20260509_103820",
+    "source_split": "train_tail",
+    "bt_start": "2021-08-05",
+    "bt_end": "2023-08-04",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0"
+  },
+  "diagnostic_breakdowns": {}
+}

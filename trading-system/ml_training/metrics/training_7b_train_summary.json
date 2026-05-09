@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-05-09T10:38:17.666390+00:00",
+  "step": "7b",
+  "journal_entries": 630,
+  "allowed_journal_entries": 630,
+  "allowed_splits": [
+    "live",
+    "paper",
+    "production",
+    "train"
+  ],
+  "models": {
+    "quality": {
+      "success": true,
+      "model": "quality"
+    },
+    "rl": {
+      "success": true,
+      "model": "rl"
+    }
+  }
+}
