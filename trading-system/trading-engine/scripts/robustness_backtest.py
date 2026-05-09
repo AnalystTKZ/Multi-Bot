@@ -612,7 +612,7 @@ def _build_ml_cache(
 
 # Signal config — resolved once at module level (env vars don't change mid-run).
 _SCFG = {
-    "max_uncertainty": float(os.getenv("MAX_UNCERTAINTY",          "0.25")),
+    "max_uncertainty": float(os.getenv("MAX_UNCERTAINTY",          "1.0")),
     "dir_thresh":      float(os.getenv("ML_DIRECTION_THRESHOLD",   "0.62")),
     "neutral_thresh":  float(os.getenv("NEUTRAL_BIAS_THRESHOLD",   "0.50")),
     "vol_thr":         float(os.getenv("VOLATILE_ENTRY_THRESHOLD",

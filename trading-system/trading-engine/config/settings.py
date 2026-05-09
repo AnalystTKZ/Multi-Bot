@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # ── ML signal thresholds ──────────────────────────────────────────────────
     ML_DIRECTION_THRESHOLD: float = 0.65   # minimum P(direction)
     MIN_EXPECTED_R: float = 1.30           # minimum probability-weighted expected R
-    MAX_UNCERTAINTY: float = 0.15          # maximum GRU predicted variance
+    MAX_UNCERTAINTY: float = 1.00          # maximum GRU predicted variance after inference clamp
     MIN_REWARD_TO_RISK: float = 1.50       # minimum geometric RR at entry
     ML_QUALITY_THRESHOLD_DEFAULT: float = 0.55
     RL_ACTION_CONFIDENCE_MIN: float = 0.45

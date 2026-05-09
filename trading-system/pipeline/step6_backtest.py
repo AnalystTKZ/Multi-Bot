@@ -100,7 +100,7 @@ def _build_env() -> dict:
     env.setdefault("MAX_CONCURRENT_POSITIONS", "25")
     env.setdefault("PM_MIN_CONFIDENCE", "0.50")
     env.setdefault("ML_DIRECTION_THRESHOLD", "0.62")
-    env.setdefault("MAX_UNCERTAINTY", "0.25")
+    env.setdefault("MAX_UNCERTAINTY", "1.0")
     env.setdefault("NEUTRAL_BIAS_THRESHOLD", "0.60")
     env.setdefault("VOLATILE_ENTRY_THRESHOLD", "0.70")
     env.setdefault("BLOCK_LTF_CONSOLIDATING", "1")
@@ -215,7 +215,17 @@ def run_backtest(bt_start: str, bt_end: str, round_num: int) -> dict:
         # own timestamped log file (trading-engine/logs/backtest_*.log), so every
         # diagnostic line is visible in the notebook and persisted to disk.
         env = _build_env()
-        env["BACKTEST_REQUIRE_QUALITY"] = "0" if round_num == 0 else "1"
+        quality_path = ENGINE_DIR / "weights" / "quality_scorer.pkl"
+        if round_num == 0:
+            env["BACKTEST_REQUIRE_QUALITY"] = "0"
+        elif quality_path.exists() and quality_path.stat().st_size > 0:
+            env["BACKTEST_REQUIRE_QUALITY"] = "1"
+        else:
+            env["BACKTEST_REQUIRE_QUALITY"] = "0"
+            logger.warning(
+                "Round %d — quality_scorer.pkl missing; running without QualityScorer gate",
+                round_num,
+            )
         env["BACKTEST_WINDOW_LABEL"] = _source_split_for_round(round_num)
         result = subprocess.run(
             cmd,

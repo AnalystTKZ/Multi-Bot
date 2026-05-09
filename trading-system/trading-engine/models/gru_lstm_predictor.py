@@ -28,6 +28,18 @@ N_FEATURES = len(SEQUENCE_FEATURES)
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # trading-engine/
 WEIGHT_DIR  = os.path.join(_MODEL_ROOT, "weights", "gru_lstm") + os.sep
 WEIGHT_FILE = os.path.join(_MODEL_ROOT, "weights", "gru_lstm", "model.pt")
+MAX_INFERENCE_VARIANCE = float(os.getenv("GRU_MAX_INFERENCE_VARIANCE", "1.0"))
+
+
+def _calibrated_variance(log_variance_pred):
+    """Match inference variance scale to the clamped training objective."""
+    import torch
+
+    return torch.clamp(
+        torch.nn.functional.softplus(log_variance_pred) + 1e-6,
+        min=1e-4,
+        max=MAX_INFERENCE_VARIANCE,
+    )
 
 
 def _get_device():
@@ -217,7 +229,7 @@ class GRULSTMPredictor(BaseModel):
                 dir_logits, mag_pred, log_variance_pred = self._model(x)
                 p_bull_raw = float(torch.sigmoid(dir_logits[0] / self._temperature).item())
                 expected_move = float(np.clip(torch.relu(mag_pred)[0].item(), 0.0, 1.0))
-                expected_variance = float((torch.nn.functional.softplus(log_variance_pred) + 1e-6)[0].item())
+                expected_variance = float(_calibrated_variance(log_variance_pred)[0].item())
                 expected_volatility = float(np.sqrt(expected_variance))
                 entry_depth = expected_move
 

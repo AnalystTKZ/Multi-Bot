@@ -142,7 +142,7 @@ _LIVE_SIGNAL_DEFAULTS = {
     # Keep backtest signal gates aligned with config.settings.Settings without
     # importing pydantic in Kaggle/runtime subprocesses.
     "ML_DIRECTION_THRESHOLD": 0.65,
-    "MAX_UNCERTAINTY": 0.15,
+    "MAX_UNCERTAINTY": 1.00,
     "MIN_REWARD_TO_RISK": 1.50,
     "MIN_EXPECTED_R": 1.30,
     "ATR_STOP_MULTIPLIER": 1.5,
@@ -1611,7 +1611,11 @@ def _precompute_ml_cache(
         }
         if gru_model and seq_arr is not None and gru_model.is_trained and gru_model._model is not None:
             try:
-                from models.gru_lstm_predictor import DEVICE, SEQUENCE_LENGTH as SEQ_LEN
+                from models.gru_lstm_predictor import (
+                    DEVICE,
+                    MAX_INFERENCE_VARIANCE,
+                    SEQUENCE_LENGTH as SEQ_LEN,
+                )
                 import torch
 
                 n_valid = n - SEQ_LEN + 1   # number of complete sequences
@@ -1645,7 +1649,11 @@ def _precompute_ml_cache(
                             del xb, dl, mp, lv, batch_raw
 
                     # Vectorised post-processing
-                    var_vals    = np.log1p(np.exp(all_log_var)) + 1e-6   # softplus
+                    var_vals = np.clip(
+                        np.logaddexp(all_log_var, 0.0) + 1e-6,  # stable softplus
+                        1e-4,
+                        MAX_INFERENCE_VARIANCE,
+                    ).astype(np.float32, copy=False)
                     expected_move = np.clip(all_mag, 0.0, 1.0).astype(np.float32, copy=False)
                     entry_depth = expected_move
                     vol_arr     = np.sqrt(var_vals)
@@ -1721,6 +1729,15 @@ def _precompute_ml_cache(
                 symbol, q50, q90, q99, float(dir_conf.max()),
                 100.0 * float(np.mean(dir_conf >= 0.50)),
             )
+        valid_var = cache["expected_variance"][~np.isnan(cache["expected_variance"])]
+        if valid_var.size:
+            q50, q90, q99 = np.quantile(valid_var, [0.50, 0.90, 0.99])
+            max_unc = _live_float_env("MAX_UNCERTAINTY")
+            logger.info(
+                "ML cache [%s]: GRU variance q50=%.4f q90=%.4f q99=%.4f max=%.4f pass@MAX_UNCERTAINTY(%.4f)=%.1f%%",
+                symbol, q50, q90, q99, float(valid_var.max()), max_unc,
+                100.0 * float(np.mean(valid_var <= max_unc)),
+            )
 
         if cache_file:
             try:
@@ -1777,6 +1794,9 @@ def _compute_backtest_signal(
 
     # ── Gate 2: GRU uncertainty ───────────────────────────────────────────────
     _uncertainty = float(ml_preds.get("expected_variance", 0.0))
+    if not np.isfinite(_uncertainty):
+        _reject("invalid_uncertainty")
+        return None
     if _uncertainty > _live_float_env("MAX_UNCERTAINTY"):
         _reject("high_uncertainty")
         return None

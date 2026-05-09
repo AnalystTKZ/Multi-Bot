@@ -28,7 +28,7 @@ Step 7a always re-runs (GRU + Regime full training on train set).
   Clean Quality/RL source — backtest on train window only
              → retrain Quality + RL on train-split journal
 
-  Round 1 — backtest on val window (last 2yr of training data)
+  Round 1 — backtest on validation window (latest 1yr before blind test)
              → no Quality/RL retrain from validation journal by default
 
   Round 2 — backtest on test window (unseen 2yr — BLIND)
@@ -39,7 +39,7 @@ Step 7a always re-runs (GRU + Regime full training on train set).
              → optional research-only Quality/RL eval-journal feedback loop
 
 Data split (step5_split.py):
-  train      = fixed 2-year fold                   models train on this
+  train      = latest expanding train fold         models train on this
   validation = following 1-year fold               Round 1 backtest
   test       = last 2yr of available data          Round 2 backtest (blind)
 """
@@ -284,7 +284,7 @@ def _print_split_info() -> None:
         pass
 
 
-def _fixed_split_ready() -> bool:
+def _expanding_split_ready() -> bool:
     ds = env["ml_training"] / "datasets"
     sp = ds / "split_summary.json"
     required = [sp, ds / "train.parquet", ds / "validation.parquet", ds / "test.parquet"]
@@ -295,9 +295,9 @@ def _fixed_split_ready() -> bool:
     except Exception:
         return False
     return (
-        summary.get("split_method") == "fixed_calendar"
-        and summary.get("train_window") == "fixed"
-        and summary.get("train_years") == 2
+        summary.get("split_method") == "expanding_calendar"
+        and summary.get("train_window") == "expanding"
+        and summary.get("min_train_years") == 2
         and summary.get("val_years") == 1
         and summary.get("leakage_check") == "PASS"
     )
@@ -311,7 +311,7 @@ PREP_STEPS = [
     ("Step 2 - Cleaning",  "step2_clean.py",      env["processed"] / "clean" / "XAUUSD_15M.parquet"),
     ("Step 3 - Alignment", "step3_align.py",      env["processed"] / "aligned_multi_asset.parquet"),
     ("Step 4 - Features",  "step4_features.py",   env["processed"] / "feature_engineered.parquet"),
-    ("Step 5 - Split",     "step5_split.py",      _fixed_split_ready),
+    ("Step 5 - Split",     "step5_split.py",      _expanding_split_ready),
 ]
 
 print("\n=== Phase 0-5: Data preparation ===")
@@ -362,11 +362,11 @@ if train_done.exists() and not train_dest.exists():
 _archive_journal("train_only")
 
 # ─── Round 1: Backtest on val window ─────────────────────────────────────────
-# Covers the last 2 years of the training window (val set).
+# Covers the latest 1-year validation window before the blind test.
 # Tests whether trained models generalise beyond the training period.
 # Journal is cleared before Round 1 so it accumulates only evaluation evidence.
 
-print("\n=== Round 1: Backtest on validation window (last 2yr of training data) ===")
+print("\n=== Round 1: Backtest on validation window (latest 1yr before blind test) ===")
 
 j = _journal_path()
 if j.exists():

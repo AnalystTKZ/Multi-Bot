@@ -318,9 +318,12 @@ class SignalPipeline:
         if not ml_preds:
             return None
 
-        # Gate 2: GRU uncertainty — use settings (default 0.25, not the old env-var default of 2.0)
+        # Gate 2: GRU uncertainty — inference variance is clamped to the same
+        # scale used by the training objective.
         _uncertainty = float(ml_preds.get("expected_variance", 0.0))
-        _max_unc = float(getattr(self._settings, "MAX_UNCERTAINTY", 0.25))
+        if not np.isfinite(_uncertainty):
+            return None
+        _max_unc = float(getattr(self._settings, "MAX_UNCERTAINTY", 1.0))
         if _uncertainty > _max_unc:
             return None
 

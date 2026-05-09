@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-Step 5: Fixed 2-year train / 1-year validation folds plus a blind test reserve.
+Step 5: Expanding 2-year-minimum train / 1-year validation folds plus a blind
+test reserve.
 
 Split logic:
   test  = final 2 years of data, never used by training/validation
-  folds = non-overlapping 2-year train window + following 1-year validation
+  folds = expanding train window starting at the first available bar, with a
+          2-year minimum train span and the following 1-year validation window
           over pre-test history
 
 Example:
   fold_000: train 2016-01-01..2017-12-31, val 2018-01-01..2018-12-31
-  fold_001: train 2019-01-01..2020-12-31, val 2021-01-01..2021-12-31
+  fold_001: train 2016-01-01..2018-12-31, val 2019-01-01..2019-12-31
+  fold_002: train 2016-01-01..2019-12-31, val 2020-01-01..2020-12-31
 
-The latest fold is also written to train.parquet / validation.parquet for
-backward-compatible consumers. All folds are isolated from the final blind test.
+The latest expanding fold is also written to train.parquet / validation.parquet
+for backward-compatible consumers. All folds are isolated from the final blind
+test.
 """
 from __future__ import annotations
 
@@ -38,10 +42,10 @@ OUTPUT_DIR = _ENV["processed"]
 ML_DIR = _ENV["ml_training"] / "datasets"
 ML_DIR.mkdir(parents=True, exist_ok=True)
 
-TRAIN_YEARS = 2
+MIN_TRAIN_YEARS = 2
 VAL_YEARS = 1
 TEST_YEARS = 2
-FOLD_STEP_YEARS = TRAIN_YEARS + VAL_YEARS
+FOLD_STEP_YEARS = VAL_YEARS
 
 
 def _date_str(ts) -> str:
@@ -81,16 +85,16 @@ def main():
     data_start = df.index[0]
     data_end = df.index[-1]
     total_years = (data_end - data_start).days / 365.25
-    required = TRAIN_YEARS + VAL_YEARS + TEST_YEARS
+    required = MIN_TRAIN_YEARS + VAL_YEARS + TEST_YEARS
 
     logger.info("Data span: %s -> %s  (%.1f years)", data_start.date(), data_end.date(), total_years)
     if total_years < required:
         logger.error(
             "Insufficient data: %.1f years available, need at least %d "
-            "(train=%dyr + val=%dyr + test=%dyr). Add more historical data and re-run step0.",
+            "(min_train=%dyr + val=%dyr + test=%dyr). Add more historical data and re-run step0.",
             total_years,
             required,
-            TRAIN_YEARS,
+            MIN_TRAIN_YEARS,
             VAL_YEARS,
             TEST_YEARS,
         )
@@ -104,57 +108,74 @@ def main():
 
     fold_meta: list[dict] = []
     train_start_dt = data_start
+    val_start_dt = data_start + relativedelta(years=MIN_TRAIN_YEARS)
     fold_idx = 0
-    while True:
-        train_end_dt = train_start_dt + relativedelta(years=TRAIN_YEARS)
-        val_end_dt = train_end_dt + relativedelta(years=VAL_YEARS)
-        if val_end_dt > test_start_dt:
-            break
 
+    def _append_fold(idx: int, train_end_dt, val_end_dt) -> bool:
         train_start_pos = df.index.searchsorted(train_start_dt, side="left")
         train_end_pos = df.index.searchsorted(train_end_dt, side="left")
         val_start_pos = train_end_pos
         val_end_pos = df.index.searchsorted(val_end_dt, side="left")
 
-        if train_end_pos > train_start_pos and val_end_pos > val_start_pos:
-            train_path = ML_DIR / f"train_fold_{fold_idx:03d}.parquet"
-            val_path = ML_DIR / f"validation_fold_{fold_idx:03d}.parquet"
-            train_meta = _slice_meta(df, train_start_pos, train_end_pos, train_path)
-            val_meta = _slice_meta(df, val_start_pos, val_end_pos, val_path)
-            fold_meta.append(
-                {
-                    "fold_id": f"fold_{fold_idx:03d}",
-                    "index": fold_idx,
-                    "train": train_meta,
-                    "validation": val_meta,
-                }
-            )
-            logger.info(
-                "Fold %03d train %s -> %s (%d bars), val %s -> %s (%d bars)",
-                fold_idx,
-                train_meta["start"].date(),
-                train_meta["end"].date(),
-                train_meta["rows"],
-                val_meta["start"].date(),
-                val_meta["end"].date(),
-                val_meta["rows"],
-            )
+        if train_end_pos <= train_start_pos or val_end_pos <= val_start_pos:
+            return False
+
+        train_path = ML_DIR / f"train_fold_{idx:03d}.parquet"
+        val_path = ML_DIR / f"validation_fold_{idx:03d}.parquet"
+        train_meta = _slice_meta(df, train_start_pos, train_end_pos, train_path)
+        val_meta = _slice_meta(df, val_start_pos, val_end_pos, val_path)
+        fold_meta.append(
+            {
+                "fold_id": f"fold_{idx:03d}",
+                "index": idx,
+                "train": train_meta,
+                "validation": val_meta,
+            }
+        )
+        logger.info(
+            "Fold %03d train %s -> %s (%d bars), val %s -> %s (%d bars)",
+            idx,
+            train_meta["start"].date(),
+            train_meta["end"].date(),
+            train_meta["rows"],
+            val_meta["start"].date(),
+            val_meta["end"].date(),
+            val_meta["rows"],
+        )
+        return True
+
+    while True:
+        train_end_dt = val_start_dt
+        val_end_dt = val_start_dt + relativedelta(years=VAL_YEARS)
+        if val_end_dt > test_start_dt:
+            break
+
+        if _append_fold(fold_idx, train_end_dt, val_end_dt):
             fold_idx += 1
 
-        train_start_dt = train_start_dt + relativedelta(years=FOLD_STEP_YEARS)
+        val_start_dt = val_start_dt + relativedelta(years=FOLD_STEP_YEARS)
+
+    final_train_end_dt = test_start_dt - relativedelta(years=VAL_YEARS)
+    if final_train_end_dt > train_start_dt + relativedelta(years=MIN_TRAIN_YEARS):
+        latest_val_end = fold_meta[-1]["validation"]["end"] if fold_meta else None
+        final_val_end_pos = df.index.searchsorted(test_start_dt, side="left")
+        final_val_end = df.index[final_val_end_pos - 1] if final_val_end_pos > 0 else None
+        if latest_val_end is None or final_val_end is None or latest_val_end < final_val_end:
+            if _append_fold(fold_idx, final_train_end_dt, test_start_dt):
+                fold_idx += 1
 
     if not fold_meta:
         logger.error(
-            "No fixed train/validation folds fit before blind test start %s. Need at least %d pre-test years.",
+            "No expanding train/validation folds fit before blind test start %s. Need at least %d pre-test years.",
             test_start_dt.date(),
-            TRAIN_YEARS + VAL_YEARS,
+            MIN_TRAIN_YEARS + VAL_YEARS,
         )
         sys.exit(1)
 
     latest_fold = fold_meta[-1]
     test_meta = _slice_meta(df, test_start_pos, n, ML_DIR / "test.parquet")
 
-    # Compatibility aliases point to the latest fixed fold.
+    # Compatibility aliases point to the latest expanding fold.
     split_meta = {
         "train": {**latest_fold["train"], "path": ML_DIR / "train.parquet"},
         "validation": {**latest_fold["validation"], "path": ML_DIR / "validation.parquet"},
@@ -166,7 +187,7 @@ def main():
     for fold in fold_meta:
         assert fold["train"]["end"] < fold["validation"]["start"], "Fold train/val overlap!"
         assert fold["validation"]["end"] < test_meta["start"], "Fold validation touches blind test!"
-    logger.info("No leakage confirmed: every fold ends before final 2-year blind test")
+    logger.info("No leakage confirmed: every expanding fold ends before final 2-year blind test")
 
     rows = {}
     date_ranges = {}
@@ -197,8 +218,8 @@ def main():
             {
                 "fold_id": fold["fold_id"],
                 "index": fold["index"],
-                "train_years": TRAIN_YEARS,
-                "train_window": "fixed",
+                "min_train_years": MIN_TRAIN_YEARS,
+                "train_window": "expanding",
                 "validation_years": VAL_YEARS,
                 "date_ranges": {
                     "train": {
@@ -228,9 +249,9 @@ def main():
         )
 
     summary = {
-        "split_method": "fixed_calendar",
-        "train_window": "fixed",
-        "train_years": TRAIN_YEARS,
+        "split_method": "expanding_calendar",
+        "train_window": "expanding",
+        "min_train_years": MIN_TRAIN_YEARS,
         "val_years": VAL_YEARS,
         "test_years": TEST_YEARS,
         "fold_step_years": FOLD_STEP_YEARS,
@@ -246,13 +267,13 @@ def main():
         "date_ranges": date_ranges,
         "features": len(df.columns),
         "leakage_check": "PASS",
-        "blind_test_policy": "final_2_years_excluded_from_all_fixed_train_validation_folds",
+        "blind_test_policy": "final_2_years_excluded_from_all_expanding_train_validation_folds",
     }
     with open(ML_DIR / "split_summary.json", "w") as f:
         json.dump(summary, f, indent=2, default=str)
 
-    print("\n=== SPLIT COMPLETE (FIXED CALENDAR, no shuffling) ===")
-    print(f"  Folds:      {len(fold_meta):>7} fixed folds ({TRAIN_YEARS}y train + {VAL_YEARS}y val, step={FOLD_STEP_YEARS}y)")
+    print("\n=== SPLIT COMPLETE (EXPANDING CALENDAR, no shuffling) ===")
+    print(f"  Folds:      {len(fold_meta):>7} expanding folds (min {MIN_TRAIN_YEARS}y train + {VAL_YEARS}y val, step={FOLD_STEP_YEARS}y)")
     print(f"  Selected:   {latest_fold['fold_id']} for train.parquet / validation.parquet aliases")
     print(f"  Train:      {rows['train']:>7,} bars  {_date_str(date_ranges['train']['start'])} -> {_date_str(date_ranges['train']['end'])}")
     print(f"  Validation: {rows['validation']:>7,} bars  {_date_str(date_ranges['validation']['start'])} -> {_date_str(date_ranges['validation']['end'])}")
