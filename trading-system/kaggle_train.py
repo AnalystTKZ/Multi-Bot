@@ -28,8 +28,8 @@ Step 7a always re-runs (GRU + Regime full training on train set).
   Clean Quality/RL source — backtest on train window only
              → retrain Quality + RL on train-split journal
 
-  Round 1 — backtest on validation window (latest 1yr before blind test)
-             → no Quality/RL retrain from validation journal by default
+  Round 1 — backtest on train-tail window (latest 2yr inside training data)
+             → no Quality/RL retrain from train-tail journal by default
 
   Round 2 — backtest on test window (unseen 2yr — BLIND)
              → no Quality/RL retrain from test journal by default
@@ -39,8 +39,9 @@ Step 7a always re-runs (GRU + Regime full training on train set).
              → optional research-only Quality/RL eval-journal feedback loop
 
 Data split (step5_split.py):
-  train      = latest expanding train fold         models train on this
-  validation = following 1-year fold               Round 1 backtest
+  train      = all pre-test data                   models train on this
+  validation = internal 1-year fold                training diagnostics only
+  train_tail = final 2yr inside train              Round 1 seen backtest
   test       = last 2yr of available data          Round 2 backtest (blind)
 """
 from __future__ import annotations
@@ -276,7 +277,7 @@ def _print_split_info() -> None:
         s = json.loads(sp.read_text())
         dr = s.get("date_ranges", {})
         print(f"\n  Data split ({s.get('split_method','?')}):")
-        for name in ("train", "validation", "test"):
+        for name in ("train", "validation", "train_tail", "test"):
             w = dr.get(name, {})
             rows = s.get("rows", {}).get(name, "?")
             print(f"    {name:<12} {rows:>7} bars  {w.get('start','?')[:10]} → {w.get('end','?')[:10]}")
@@ -287,7 +288,7 @@ def _print_split_info() -> None:
 def _expanding_split_ready() -> bool:
     ds = env["ml_training"] / "datasets"
     sp = ds / "split_summary.json"
-    required = [sp, ds / "train.parquet", ds / "validation.parquet", ds / "test.parquet"]
+    required = [sp, ds / "train.parquet", ds / "validation.parquet", ds / "train_tail.parquet", ds / "test.parquet"]
     if not all(path.exists() for path in required):
         return False
     try:
@@ -299,6 +300,7 @@ def _expanding_split_ready() -> bool:
         and summary.get("train_window") == "expanding"
         and summary.get("min_train_years") == 2
         and summary.get("val_years") == 1
+        and summary.get("train_tail_years") == 2
         and summary.get("leakage_check") == "PASS"
     )
 
@@ -361,12 +363,12 @@ if train_done.exists() and not train_dest.exists():
     train_done.rename(train_dest)
 _archive_journal("train_only")
 
-# ─── Round 1: Backtest on val window ─────────────────────────────────────────
-# Covers the latest 1-year validation window before the blind test.
-# Tests whether trained models generalise beyond the training period.
+# ─── Round 1: Backtest on train-tail window ───────────────────────────────────
+# Covers the latest 2 years inside the training data. This is a seen train-tail
+# execution check, not a validation backtest and not blind evidence.
 # Journal is cleared before Round 1 so it accumulates only evaluation evidence.
 
-print("\n=== Round 1: Backtest on validation window (latest 1yr before blind test) ===")
+print("\n=== Round 1: Backtest on train-tail window (latest 2yr inside training data) ===")
 
 j = _journal_path()
 if j.exists():
@@ -374,7 +376,7 @@ if j.exists():
     print("  Cleared journal for fresh Round 1 run")
 
 run_step(
-    "Round 1 - Backtest (val)",
+    "Round 1 - Backtest (train-tail)",
     "step6_backtest.py",
     env["base"] / "backtesting" / "results" / "round1_summary.json",
     extra_env={"BT_WINDOW": "round1"},
@@ -383,7 +385,7 @@ _copy_bt_result("Round 1", "round1_summary.json")
 print(f"  Journal after Round 1: {_journal_count()} entries")
 
 if _allow_eval_journal_retraining():
-    print("\n=== RESEARCH ONLY: Round 1 → Retrain Quality + RL on validation journal ===")
+    print("\n=== RESEARCH ONLY: Round 1 → Retrain Quality + RL on train-tail journal ===")
     run_step(
         "Round 1 - Quality+RL retrain",
         "step7b_train.py",
@@ -396,7 +398,7 @@ if _allow_eval_journal_retraining():
     if r1_done.exists() and not r1_dest.exists():
         r1_done.rename(r1_dest)
 else:
-    print("\n  SKIP  Round 1 Quality+RL retrain — validation journal kept evaluation-only")
+    print("\n  SKIP  Round 1 Quality+RL retrain — train-tail journal kept evaluation-only")
 
 # ─── Round 2: BLIND backtest on test window ───────────────────────────────────
 # This is the true out-of-sample evaluation.
@@ -483,7 +485,7 @@ else:
 print("\n" + "=" * 70)
 print("  BLIND BACKTEST PIPELINE COMPLETE")
 print("=" * 70)
-for rnd, fname in [("Round 1 (val window)", "round1_summary.json"),
+for rnd, fname in [("Round 1 (train-tail window)", "round1_summary.json"),
                    ("Round 2 (blind test)", "round2_summary.json"),
                    ("Round 3 (last 3yr)",   "round3_summary.json")]:
     p = env["base"] / "backtesting" / "results" / fname

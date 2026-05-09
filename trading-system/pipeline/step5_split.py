@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """
-Step 5: Expanding 2-year-minimum train / 1-year validation folds plus a blind
-test reserve.
+Step 5: Expanding 2-year train / 1-year internal-validation folds, plus train
+tail and blind-test windows.
 
 Split logic:
   test  = final 2 years of data, never used by training/validation
+  train = all data before the final 2-year blind test
+  train_tail = final 2 years inside train; Round 1 backtests this seen data
   folds = expanding train window starting at the first available bar, with a
-          2-year minimum train span and the following 1-year validation window
-          over pre-test history
+          2-year minimum train span and the following 1-year internal validation
+          window over pre-test history
 
 Example:
-  fold_000: train 2016-01-01..2017-12-31, val 2018-01-01..2018-12-31
-  fold_001: train 2016-01-01..2018-12-31, val 2019-01-01..2019-12-31
-  fold_002: train 2016-01-01..2019-12-31, val 2020-01-01..2020-12-31
+  fold_000:   train 2016-01-01..2017-12-31, val 2018-01-01..2018-12-31
+  fold_001:   train 2016-01-01..2018-12-31, val 2019-01-01..2019-12-31
+  train_tail: final 2 pre-test years, used for Round 1 seen backtest
 
-The latest expanding fold is also written to train.parquet / validation.parquet
-for backward-compatible consumers. All folds are isolated from the final blind
-test.
+train.parquet contains all pre-test data for model fitting. validation.parquet
+is an internal training-validation alias only; it is not the Round 1 backtest
+window. All outputs are isolated from the final blind test.
 """
 from __future__ import annotations
 
@@ -44,8 +46,9 @@ ML_DIR.mkdir(parents=True, exist_ok=True)
 
 MIN_TRAIN_YEARS = 2
 VAL_YEARS = 1
+TRAIN_TAIL_YEARS = 2
 TEST_YEARS = 2
-FOLD_STEP_YEARS = VAL_YEARS
+FOLD_STEP_YEARS = 1
 
 
 def _date_str(ts) -> str:
@@ -174,20 +177,24 @@ def main():
 
     latest_fold = fold_meta[-1]
     test_meta = _slice_meta(df, test_start_pos, n, ML_DIR / "test.parquet")
+    train_meta = _slice_meta(df, 0, test_start_pos, ML_DIR / "train.parquet")
+    train_tail_start_dt = test_start_dt - relativedelta(years=TRAIN_TAIL_YEARS)
+    train_tail_start_pos = df.index.searchsorted(train_tail_start_dt, side="left")
+    train_tail_meta = _slice_meta(df, train_tail_start_pos, test_start_pos, ML_DIR / "train_tail.parquet")
 
-    # Compatibility aliases point to the latest expanding fold.
     split_meta = {
-        "train": {**latest_fold["train"], "path": ML_DIR / "train.parquet"},
+        "train": train_meta,
         "validation": {**latest_fold["validation"], "path": ML_DIR / "validation.parquet"},
+        "train_tail": train_tail_meta,
         "test": test_meta,
     }
 
-    assert split_meta["train"]["end"] < split_meta["validation"]["start"], "Train/val overlap!"
-    assert split_meta["validation"]["end"] < split_meta["test"]["start"], "Val/test overlap!"
+    assert split_meta["train"]["end"] < split_meta["test"]["start"], "Train/test overlap!"
+    assert split_meta["train_tail"]["end"] < split_meta["test"]["start"], "Train-tail/test overlap!"
     for fold in fold_meta:
         assert fold["train"]["end"] < fold["validation"]["start"], "Fold train/val overlap!"
         assert fold["validation"]["end"] < test_meta["start"], "Fold validation touches blind test!"
-    logger.info("No leakage confirmed: every expanding fold ends before final 2-year blind test")
+    logger.info("No leakage confirmed: train/train_tail/internal folds end before final 2-year blind test")
 
     rows = {}
     date_ranges = {}
@@ -253,6 +260,7 @@ def main():
         "train_window": "expanding",
         "min_train_years": MIN_TRAIN_YEARS,
         "val_years": VAL_YEARS,
+        "train_tail_years": TRAIN_TAIL_YEARS,
         "test_years": TEST_YEARS,
         "fold_step_years": FOLD_STEP_YEARS,
         "selected_fold": latest_fold["fold_id"],
@@ -261,22 +269,24 @@ def main():
         "split_ratios": {
             "train": round(rows["train"] / n, 4),
             "validation": round(rows["validation"] / n, 4),
+            "train_tail": round(rows["train_tail"] / n, 4),
             "test": round(rows["test"] / n, 4),
         },
         "rows": rows,
         "date_ranges": date_ranges,
         "features": len(df.columns),
         "leakage_check": "PASS",
-        "blind_test_policy": "final_2_years_excluded_from_all_expanding_train_validation_folds",
+        "blind_test_policy": "final_2_years_excluded_from_train_train_tail_and_internal_validation_folds",
     }
     with open(ML_DIR / "split_summary.json", "w") as f:
         json.dump(summary, f, indent=2, default=str)
 
     print("\n=== SPLIT COMPLETE (EXPANDING CALENDAR, no shuffling) ===")
     print(f"  Folds:      {len(fold_meta):>7} expanding folds (min {MIN_TRAIN_YEARS}y train + {VAL_YEARS}y val, step={FOLD_STEP_YEARS}y)")
-    print(f"  Selected:   {latest_fold['fold_id']} for train.parquet / validation.parquet aliases")
-    print(f"  Train:      {rows['train']:>7,} bars  {_date_str(date_ranges['train']['start'])} -> {_date_str(date_ranges['train']['end'])}")
-    print(f"  Validation: {rows['validation']:>7,} bars  {_date_str(date_ranges['validation']['start'])} -> {_date_str(date_ranges['validation']['end'])}")
+    print(f"  Selected:   {latest_fold['fold_id']} for internal validation alias")
+    print(f"  Train:      {rows['train']:>7,} bars  {_date_str(date_ranges['train']['start'])} -> {_date_str(date_ranges['train']['end'])}  <- model fitting")
+    print(f"  TrainTail:  {rows['train_tail']:>7,} bars  {_date_str(date_ranges['train_tail']['start'])} -> {_date_str(date_ranges['train_tail']['end'])}  <- Round 1 seen backtest")
+    print(f"  Validation: {rows['validation']:>7,} bars  {_date_str(date_ranges['validation']['start'])} -> {_date_str(date_ranges['validation']['end'])}  <- internal only")
     print(f"  Test:       {rows['test']:>7,} bars  {_date_str(date_ranges['test']['start'])} -> {_date_str(date_ranges['test']['end'])}  <- Blind / Round 2")
     print(f"  Features:   {len(df.columns)}")
     print("  Leakage check: PASS")

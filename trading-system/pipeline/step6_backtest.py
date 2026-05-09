@@ -4,13 +4,13 @@ Step 6: Backtest + Reinforced Training Loop
 
 Blind-backtest pipeline:
   Train   — train window (train_start → train_end): Quality/RL label source
-  Round 1 — validation window:                      seen evaluation window
+  Round 1 — train-tail window:                      seen training-window check
   Round 2 — test window  (test_start → test_end):   fully blind OOS evaluation
   Round 3 — last 3yr     (3yr_before_end → end):    post-incremental-retrain evaluation
 
 Control via BT_WINDOW env var:
   BT_WINDOW=train    — train period only (Quality/RL label generation)
-  BT_WINDOW=round1   — val period only   (default; protects test set)
+  BT_WINDOW=round1   — final 2yr inside train only (not validation, not blind)
   BT_WINDOW=round2   — test period only  (blind backtest)
   BT_WINDOW=round3   — last 3yr          (post-full-retrain evaluation)
 
@@ -131,7 +131,7 @@ def _source_split_for_round(round_num: int) -> str:
     if round_num == 0:
         return "train"
     if round_num == 1:
-        return "validation"
+        return "train_tail"
     if round_num == 2:
         return "test"
     return "combined_eval"
@@ -140,7 +140,7 @@ def _source_split_for_round(round_num: int) -> str:
 def _run_split_for_round(round_num: int) -> str:
     if round_num == 0:
         return "train"
-    return "test" if round_num in (2, 3) else "validation"
+    return "test" if round_num in (2, 3) else "train"
 
 
 def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
@@ -148,7 +148,7 @@ def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
     Return (bt_start, bt_end) for the requested backtest window.
 
     train  — train window: train_start → train_end (clean Quality/RL labels)
-    round1 — val window: val_start → val_end   (test set protected)
+    round1 — train-tail window: final 2 years inside train (test protected)
     round2 — test window: test_start → test_end (blind OOS)
     round3 — last 3yr: (test_end - 3yr) → test_end (post-incremental-retrain eval)
     """
@@ -161,8 +161,9 @@ def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
 
     train_start = dr["train"]["start"][:10]
     train_end   = dr["train"]["end"][:10]
-    val_start   = dr["validation"]["start"][:10]
-    val_end    = dr["validation"]["end"][:10]
+    train_tail = dr.get("train_tail") or dr.get("validation")
+    tail_start = train_tail["start"][:10]
+    tail_end   = train_tail["end"][:10]
     test_start = dr["test"]["start"][:10]
     test_end   = dr["test"]["end"][:10]
 
@@ -179,8 +180,8 @@ def _resolve_bt_window(bt_window: str) -> tuple[str, str]:
         bt_end   = test_end
         logger.info("BT_WINDOW=round3 — post-retrain eval: %s → %s (last 3yr)", bt_start, bt_end)
     elif bt_window == "round1":
-        bt_start, bt_end = val_start, val_end
-        logger.info("BT_WINDOW=round1 — val-window backtest: %s → %s (test set protected)", bt_start, bt_end)
+        bt_start, bt_end = tail_start, tail_end
+        logger.info("BT_WINDOW=round1 — train-tail backtest: %s → %s (seen training data; test set protected)", bt_start, bt_end)
     else:
         logger.error(
             "Unknown BT_WINDOW=%r — must be one of: train, round1, round2, round3", bt_window

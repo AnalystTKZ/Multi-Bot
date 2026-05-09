@@ -309,14 +309,40 @@ def _load_split_boundaries(fold_id: str | int | None = None) -> dict:
         )
 
     selected_fold = None
-    if requested in {"", "latest", "last"}:
-        selected_fold = folds[-1]
-    elif requested == "all":
+    if requested in {"", "latest", "last", "train_all", "top_level"}:
+        ranges = summary.get("date_ranges") or {}
+        if not {"train", "validation", "test"}.issubset(ranges):
+            selected_fold = folds[-1]
+        else:
+            fold_name = "train_all"
+            _SPLIT_BOUNDARIES[requested] = {
+                "fold_id": fold_name,
+                "train_start": _ts(ranges["train"]["start"]),
+                "train_end":   _ts(ranges["train"]["end"]),
+                "val_start":   _ts(ranges["validation"]["start"]),
+                "val_end":     _ts(ranges["validation"]["end"]),
+                "test_start":  _ts(ranges["test"]["start"]),
+                "test_end":    _ts(ranges["test"]["end"]),
+                "fold_count":  len(folds),
+            }
+            logger.info(
+                "Split boundaries loaded fold=%s/%s — train %s→%s  val %s→%s  test %s→%s",
+                fold_name,
+                max(1, len(folds)),
+                _SPLIT_BOUNDARIES[requested]["train_start"].date(),
+                _SPLIT_BOUNDARIES[requested]["train_end"].date(),
+                _SPLIT_BOUNDARIES[requested]["val_start"].date(),
+                _SPLIT_BOUNDARIES[requested]["val_end"].date(),
+                _SPLIT_BOUNDARIES[requested]["test_start"].date(),
+                _SPLIT_BOUNDARIES[requested]["test_end"].date(),
+            )
+            return _SPLIT_BOUNDARIES[requested]
+    if selected_fold is None and requested == "all":
         raise ValueError(
             "RETRAIN_ROLLING_FOLD='all' is only valid for REGIME_ROLLING_FOLDS; "
             "single dataset loads require a concrete fold id or 'latest'."
         )
-    else:
+    elif selected_fold is None:
         for fold in folds:
             candidates = {
                 str(fold.get("fold_id", "")).lower(),
@@ -1206,7 +1232,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
     if fold_selector in {"all", "rolling", "cv"}:
         active_folds = available_folds
     elif fold_selector in {"", "latest", "last"}:
-        active_folds = [available_folds[-1]]
+        active_folds = [None]
     else:
         active_folds = [fold_selector]
     logger.info("Regime rolling folds selected: %s", active_folds)
@@ -1216,7 +1242,7 @@ def retrain_regime(dry_run: bool = False) -> dict:
     backed_up: set[str] = set()
 
     for fold_i, fold_id in enumerate(active_folds):
-        fold_key = str(fold_id)
+        fold_key = str(fold_id if fold_id is not None else "train_all")
         fold_results: dict = {}
         logger.info("=== Regime rolling fold %s/%s: %s ===",
                     fold_i + 1, len(active_folds), fold_key)

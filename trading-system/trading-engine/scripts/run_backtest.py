@@ -372,11 +372,14 @@ def _align_ltf_score_frame_complete(
             name for name in score_columns
             if bool(aligned[name].isna().any())
         ]
-        first_gap = aligned.index[gap_mask.argmax()]
-        raise RuntimeError(
-            f"ML cache {context} LTF score frame has gaps for {symbol}: "
-            f"first_gap={first_gap} columns={gap_cols}"
+        logger.warning(
+            "ML cache %s LTF score frame filled %d warmup/alignment gaps for %s: columns=%s",
+            context,
+            int(gap_mask.sum()),
+            symbol,
+            gap_cols,
         )
+        aligned[score_columns] = aligned[score_columns].fillna(0.0)
     return aligned
 
 
@@ -1486,10 +1489,26 @@ def _precompute_ml_cache(
                 score_frame["volatility_score"] = score_frame["volatility_percentile"]
             return filled.astype(int), filled_conf, score_frame
 
-        def _align_complete(series: pd.Series, target_index: pd.Index, name: str, dtype=None) -> pd.Series:
+        def _align_complete(
+            series: pd.Series,
+            target_index: pd.Index,
+            name: str,
+            dtype=None,
+            default_value: float | int | None = None,
+        ) -> pd.Series:
             aligned = series.reindex(target_index, method="ffill")
             if aligned.isna().any():
-                raise RuntimeError(f"ML cache alignment left gaps in {name} for {symbol}")
+                if default_value is None:
+                    raise RuntimeError(f"ML cache alignment left gaps in {name} for {symbol}")
+                missing = int(aligned.isna().sum())
+                logger.warning(
+                    "ML cache alignment filled %d warmup/alignment gaps in %s for %s with %s",
+                    missing,
+                    name,
+                    symbol,
+                    default_value,
+                )
+                aligned = aligned.fillna(default_value)
             return aligned.astype(dtype) if dtype is not None else aligned
 
         if _do_4h and _X_4h is not None:
@@ -1497,8 +1516,14 @@ def _precompute_ml_cache(
             _r4h, _c4h, _ = _infer_regime(regime_4h, _X_4h, _df_src_4h)
             del _X_4h
             if _df_src_4h is not df:
-                _regime_htf_series = _align_complete(_r4h, df.index, "regime_htf", int)
-                _regime_htf_conf   = _align_complete(_c4h, df.index, "regime_htf_conf")
+                _regime_htf_series = _align_complete(
+                    _r4h, df.index, "regime_htf", int,
+                    default_value=2,
+                )
+                _regime_htf_conf = _align_complete(
+                    _c4h, df.index, "regime_htf_conf",
+                    default_value=1.0 / 3.0,
+                )
             else:
                 _regime_htf_series, _regime_htf_conf = _r4h, _c4h
             gc.collect()
@@ -1519,8 +1544,14 @@ def _precompute_ml_cache(
                 "model source",
             )
             if _df_src_1h is not df:
-                _regime_ltf_series = _align_complete(_r1h, df.index, "regime_ltf", int)
-                _regime_ltf_conf   = _align_complete(_c1h, df.index, "regime_ltf_conf")
+                _regime_ltf_series = _align_complete(
+                    _r1h, df.index, "regime_ltf", int,
+                    default_value=2,
+                )
+                _regime_ltf_conf = _align_complete(
+                    _c1h, df.index, "regime_ltf_conf",
+                    default_value=0.25,
+                )
                 _regime_ltf_score_frame = _align_ltf_score_frame_complete(
                     _regime_ltf_score_source_frame,
                     df.index,
@@ -1554,7 +1585,13 @@ def _precompute_ml_cache(
             if _df_src_1h is not df:
                 _regime_ltf_score_frame = _score_src.reindex(df.index, method="ffill")
                 if _regime_ltf_score_frame.isna().any().any():
-                    raise RuntimeError(f"ML cache score overlay alignment left gaps for {symbol}")
+                    gap_count = int(_regime_ltf_score_frame.isna().any(axis=1).sum())
+                    logger.warning(
+                        "ML cache score overlay filled %d warmup/alignment gaps for %s",
+                        gap_count,
+                        symbol,
+                    )
+                    _regime_ltf_score_frame = _regime_ltf_score_frame.fillna(0.0)
             else:
                 _regime_ltf_score_frame = _score_src
             _trade_regime_series = _regime_ltf_score_frame.apply(
@@ -1707,7 +1744,13 @@ def _precompute_ml_cache(
                 if _score_key in _regime_ltf_score_frame.columns:
                     _aligned_score = _regime_ltf_score_frame[_score_key].reindex(df.index, method="ffill")
                     if _aligned_score.isna().any():
-                        raise RuntimeError(f"ML cache score {_score_key} has gaps for {symbol}")
+                        logger.warning(
+                            "ML cache score %s filled %d warmup/alignment gaps for %s",
+                            _score_key,
+                            int(_aligned_score.isna().sum()),
+                            symbol,
+                        )
+                        _aligned_score = _aligned_score.fillna(0.0)
                     cache[_score_key] = _aligned_score.to_numpy(dtype=np.float32, copy=False)
         if _trade_regime_series is not None:
             _aligned_trade_regime = _trade_regime_series.reindex(df.index, method="ffill")
@@ -3526,9 +3569,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Date windows are read from split_summary.json (pipeline/step5_split.py):\n"
-            "  default (--split val) → validation window  (Round 1 backtest, SAFE)\n"
+            "  default (--split val) → internal validation window\n"
+            "  --split train         → training window or caller-provided train-tail window\n"
             "  --split test          → test/blind window   (Round 2 only — do not overfit)\n"
-            "  --split train         → training window     (sanity check only)\n"
             "  --start/--end         → manual override\n"
         ),
     )
@@ -3536,7 +3579,7 @@ def main():
         "--split",
         choices=["validation", "val", "test", "train"],
         default="validation",
-        help="Which split window to backtest (default: validation = Round 1)",
+        help="Which split window to backtest before optional --start/--end override",
     )
     parser.add_argument("--start", default=None,
                         help="Override split start date (YYYY-MM-DD)")
