@@ -25,9 +25,7 @@ OUTPUT_DIR = BASE / "processed_data"
 TRAINING_DIR = BASE / "training_data"
 
 PRIMARY = [
-    "AUDUSD", "EURGBP", "EURJPY", "EURUSD", "GBPJPY",
-    "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY",
-    "XAUUSD",
+    "XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD",
 ]
 ANCHOR  = "EURUSD"
 

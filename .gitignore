@@ -59,6 +59,8 @@ trading-system/processed_data/
 
 # ML training datasets (regenerated on Kaggle)
 trading-system/ml_training/datasets/
+trading-system/ml_training/simple_datasets/
+trading-system/ml_training/simple_metrics/
 
 # Model weights — tracked (single source of truth: trading-engine/weights/)
 # Backups are tracked so previous weight versions are recoverable from git history

@@ -27,11 +27,6 @@ lightgbm>=4.3.0
 xgboost>=2.0.3
 scikit-learn>=1.4.0
 
-# Vector similarity search (embedding index in VectorStore)
-# CPU wheel for Docker engine container.
-# On Kaggle T4 use faiss-gpu instead: conda install -c pytorch faiss-gpu
-faiss-cpu>=1.8.0
-
 # ML — Deep Learning (GRU-LSTM) — PyTorch CPU only (replaces tensorflow-cpu, ~700MB vs ~1.5GB)
 # Install via: pip install torch --index-url https://download.pytorch.org/whl/cpu
 # The Dockerfile handles the index-url so pip resolves the CPU wheel, not CUDA.

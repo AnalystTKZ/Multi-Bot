@@ -157,8 +157,7 @@ def _live_float_env(name: str) -> float:
 
 
 _ALL_SYMBOLS = [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD",
-    "USDCAD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY", "XAUUSD",
+    "XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD",
 ]
 
 # Single unified ML trader replaces all 5 ICT rule branches.
@@ -192,6 +191,11 @@ def _env_ml_enabled() -> bool:
     if v in ("0", "false", "no", "off"):
         return False
     return True
+
+
+def _env_simplified_ml_enabled() -> bool:
+    v = os.getenv("SIMPLIFIED_ML_ENABLED", "false").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def _backtest_requires_quality(window_label: str | None = None) -> bool:
@@ -1297,6 +1301,11 @@ def _run_bar_ml(ml_models: dict, df: pd.DataFrame, i: int, symbol: str = "",
     # Include 15M window itself so models can reference it as "15M"
     htf_slice["15M"] = window
 
+    unified = ml_models.get("unified_direction_regime")
+    if unified:
+        preds.update(unified.predict(window, symbol=symbol, df_htf=htf_slice))
+        return preds
+
     gru = ml_models.get("gru_lstm")
     if gru:
         r = gru.predict(window, symbol=symbol, df_htf=htf_slice)
@@ -1359,9 +1368,14 @@ def _precompute_ml_cache(
             return cache
 
     gru_model    = ml_models.get("gru_lstm")
+    unified_model = ml_models.get("unified_direction_regime")
     regime_4h    = ml_models.get("regime_htf") or ml_models.get("regime_4h") or ml_models.get("regime")
     regime_1h    = ml_models.get("regime_ltf") or ml_models.get("regime_1h")
     qs_model     = ml_models.get("quality")
+
+    if unified_model is not None and not (gru_model or regime_4h or regime_1h):
+        logger.info("Unified simplified model active; using per-bar inference cache path for %s", symbol)
+        return {}
 
     if not (gru_model or regime_4h or regime_1h):
         return {}
@@ -3118,33 +3132,41 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
     if ml_enabled:
         try:
             _ensure_mpl_config_dir()
-            from models.regime_classifier import RegimeClassifier
-            from models.gru_lstm_predictor import GRULSTMPredictor
-            r_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
-            if _model_ready(r_htf):
-                worker_ml_models["regime_htf"] = r_htf
-                worker_ml_models["regime_4h"] = r_htf
-                worker_ml_models["regime"] = r_htf
-            else:
-                raise RuntimeError("Worker HTF regime model is not ready")
-            r_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
-            if _model_ready(r_ltf):
-                worker_ml_models["regime_ltf"] = r_ltf
-                worker_ml_models["regime_1h"] = r_ltf
-            else:
-                raise RuntimeError("Worker LTF regime model is not ready")
-            if _backtest_requires_quality():
-                from models.quality_scorer import QualityScorer
-                q = QualityScorer()
-                if _model_ready(q):
-                    worker_ml_models["quality"] = q
+            if _env_simplified_ml_enabled():
+                from models.unified_direction_regime import UnifiedDirectionRegimePredictor
+                unified = UnifiedDirectionRegimePredictor()
+                if _model_ready(unified):
+                    worker_ml_models["unified_direction_regime"] = unified
                 else:
-                    raise RuntimeError("Worker QualityScorer is not ready")
-            g = GRULSTMPredictor()
-            if _model_ready(g):
-                worker_ml_models["gru_lstm"] = g
+                    raise RuntimeError("Worker unified simplified model is not ready")
             else:
-                raise RuntimeError("Worker GRU-LSTM model is not ready")
+                from models.regime_classifier import RegimeClassifier
+                from models.gru_lstm_predictor import GRULSTMPredictor
+                r_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
+                if _model_ready(r_htf):
+                    worker_ml_models["regime_htf"] = r_htf
+                    worker_ml_models["regime_4h"] = r_htf
+                    worker_ml_models["regime"] = r_htf
+                else:
+                    raise RuntimeError("Worker HTF regime model is not ready")
+                r_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
+                if _model_ready(r_ltf):
+                    worker_ml_models["regime_ltf"] = r_ltf
+                    worker_ml_models["regime_1h"] = r_ltf
+                else:
+                    raise RuntimeError("Worker LTF regime model is not ready")
+                if _backtest_requires_quality():
+                    from models.quality_scorer import QualityScorer
+                    q = QualityScorer()
+                    if _model_ready(q):
+                        worker_ml_models["quality"] = q
+                    else:
+                        raise RuntimeError("Worker QualityScorer is not ready")
+                g = GRULSTMPredictor()
+                if _model_ready(g):
+                    worker_ml_models["gru_lstm"] = g
+                else:
+                    raise RuntimeError("Worker GRU-LSTM model is not ready")
         except Exception as exc:
             logger.error("Worker ML model load failed: %s", exc)
             raise
@@ -3538,53 +3560,67 @@ def main():
         logger.info("ML_ENABLED=True — loading models for backtest inference...")
         _ensure_mpl_config_dir()
 
-        try:
-            from models.regime_classifier import RegimeClassifier
-            regime_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
-            if _model_ready(regime_htf):
-                ml_models["regime_htf"] = regime_htf
-                ml_models["regime_4h"] = regime_htf
-            else:
-                raise RuntimeError("RegimeClassifier[HTF] unavailable; train regime_htf.pkl before backtesting with ML")
-            regime_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
-            if _model_ready(regime_ltf):
-                ml_models["regime_ltf"] = regime_ltf
-                ml_models["regime_1h"] = regime_ltf
-            else:
-                raise RuntimeError("RegimeClassifier[LTF] unavailable; train regime_ltf.pkl before backtesting with ML")
-            if "regime_htf" in ml_models:
-                ml_models["regime"] = ml_models["regime_htf"]
-        except Exception as exc:
-            logger.error("RegimeClassifier load failed: %s", exc)
-            raise
-
-        if quality_required:
+        if _env_simplified_ml_enabled():
             try:
-                from models.quality_scorer import QualityScorer
-                qs = QualityScorer()
-                if _model_ready(qs):
-                    ml_models["quality"] = qs
+                from models.unified_direction_regime import UnifiedDirectionRegimePredictor
+                unified = UnifiedDirectionRegimePredictor()
+                if _model_ready(unified):
+                    ml_models["unified_direction_regime"] = unified
                 else:
-                    raise RuntimeError("QualityScorer unavailable; train quality_scorer.pkl before backtesting with ML")
+                    raise RuntimeError("Unified simplified model unavailable; run pipeline_simplified/step4_train_unified.py")
             except Exception as exc:
-                logger.error("QualityScorer load failed: %s", exc)
+                logger.error("Unified simplified model load failed: %s", exc)
                 raise
+            quality_required = False
+            logger.info("Simplified ML active — QualityScorer disabled for parity with simplified live mode")
         else:
-            logger.info(
-                "Quality/RL gate disabled for %s backtest — generating clean source journal from Regime + GRU only",
-                window_label,
-            )
+            try:
+                from models.regime_classifier import RegimeClassifier
+                regime_htf = RegimeClassifier(timeframe="4H", mode="htf_bias")
+                if _model_ready(regime_htf):
+                    ml_models["regime_htf"] = regime_htf
+                    ml_models["regime_4h"] = regime_htf
+                else:
+                    raise RuntimeError("RegimeClassifier[HTF] unavailable; train regime_htf.pkl before backtesting with ML")
+                regime_ltf = RegimeClassifier(timeframe="1H", mode="ltf_behaviour")
+                if _model_ready(regime_ltf):
+                    ml_models["regime_ltf"] = regime_ltf
+                    ml_models["regime_1h"] = regime_ltf
+                else:
+                    raise RuntimeError("RegimeClassifier[LTF] unavailable; train regime_ltf.pkl before backtesting with ML")
+                if "regime_htf" in ml_models:
+                    ml_models["regime"] = ml_models["regime_htf"]
+            except Exception as exc:
+                logger.error("RegimeClassifier load failed: %s", exc)
+                raise
 
-        try:
-            from models.gru_lstm_predictor import GRULSTMPredictor
-            gru = GRULSTMPredictor()
-            if _model_ready(gru):
-                ml_models["gru_lstm"] = gru
+            if quality_required:
+                try:
+                    from models.quality_scorer import QualityScorer
+                    qs = QualityScorer()
+                    if _model_ready(qs):
+                        ml_models["quality"] = qs
+                    else:
+                        raise RuntimeError("QualityScorer unavailable; train quality_scorer.pkl before backtesting with ML")
+                except Exception as exc:
+                    logger.error("QualityScorer load failed: %s", exc)
+                    raise
             else:
-                raise RuntimeError("GRU-LSTM unavailable; train gru_lstm/model.pt before backtesting with ML")
-        except Exception as exc:
-            logger.error("GRU-LSTM load failed: %s", exc)
-            raise
+                logger.info(
+                    "Quality/RL gate disabled for %s backtest — generating clean source journal from Regime + GRU only",
+                    window_label,
+                )
+
+            try:
+                from models.gru_lstm_predictor import GRULSTMPredictor
+                gru = GRULSTMPredictor()
+                if _model_ready(gru):
+                    ml_models["gru_lstm"] = gru
+                else:
+                    raise RuntimeError("GRU-LSTM unavailable; train gru_lstm/model.pt before backtesting with ML")
+            except Exception as exc:
+                logger.error("GRU-LSTM load failed: %s", exc)
+                raise
 
         if not ml_models:
             raise RuntimeError(

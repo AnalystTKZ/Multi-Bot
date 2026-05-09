@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Build essentials for LightGBM, XGBoost, pandas, faiss-cpu, etc.
+# Build essentials for LightGBM, XGBoost, pandas, and numeric dependencies.
 RUN apt-get update && apt-get install -y \
     build-essential \
     libgomp1 \

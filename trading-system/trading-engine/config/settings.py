@@ -18,9 +18,11 @@ class Settings(BaseSettings):
     PAPER_TRADING: bool = True
     ML_ENABLED: bool = True
     RL_ENABLED: bool = False     # RL is dormant; isolated behind this flag
+    SIMPLIFIED_ML_ENABLED: bool = False
+    SIMPLIFIED_USE_QUALITY: bool = False
 
     # ── Symbols ───────────────────────────────────────────────────────────────
-    TRADING_PAIRS: List[str] = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "XAUUSD"]
+    TRADING_PAIRS: List[str] = ["XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD"]
 
     # ── Capital / account ─────────────────────────────────────────────────────
     ACCOUNT_BALANCE: float = 10000.0
@@ -56,11 +58,6 @@ class Settings(BaseSettings):
     MAX_SPREAD_EURUSD: float = 2.0
     MAX_SPREAD_GBPUSD: float = 2.5
     MAX_SPREAD_USDJPY: float = 2.0
-    MAX_SPREAD_AUDUSD: float = 2.5
-    MAX_SPREAD_NZDUSD: float = 3.0
-    MAX_SPREAD_USDCAD: float = 2.5
-    MAX_SPREAD_USDCHF: float = 2.5
-    MAX_SPREAD_EURGBP: float = 2.0
     MAX_SPREAD_EURJPY: float = 2.5
     MAX_SPREAD_GBPJPY: float = 3.0
     MAX_SPREAD_XAUUSD: float = 30.0        # XAUUSD pips are 0.1; 30 pips = $3.0 spread

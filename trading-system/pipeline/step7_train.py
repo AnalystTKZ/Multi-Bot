@@ -81,13 +81,13 @@ def generate_synthetic_journal(n_trades: int = 200) -> None:
     split_hash = _split_summary_hash()
 
     traders = ["trader_1", "trader_2", "trader_3", "trader_4", "trader_5"]
-    symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "AUDUSD", "USDCAD"]
+    symbols = ["XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD"]
     trader_symbols = {
         "trader_1": ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"],
         "trader_2": ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"],
         "trader_3": ["EURUSD", "GBPUSD", "XAUUSD"],
         "trader_4": ["EURUSD", "GBPUSD", "XAUUSD"],
-        "trader_5": ["USDJPY", "EURUSD", "AUDUSD"],
+        "trader_5": ["USDJPY", "EURJPY", "GBPJPY"],
     }
 
     # Sample indices from training data

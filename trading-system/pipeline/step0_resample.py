@@ -11,14 +11,11 @@ Multi-timeframe outputs per symbol:
   1W  — weekly structure / major S&R
   1MN — monthly macro context
 
-Symbols processed (13 total):
+Symbols processed:
   Forex M1 from training_data/forex/*_m1_histdata.csv (2016-2026):
-    AUDUSD, EURGBP, EURJPY, EURUSD, GBPJPY, GBPUSD,
-    NZDUSD, USDCAD, USDCHF, USDJPY
+    EURJPY, EURUSD, GBPJPY, GBPUSD, USDJPY
   Gold M1 from training_data/_histdata_tmp/XAUUSD_m1_histdata.csv (2009-2026,
     semicolon-delimited). If missing, falls back to forex folder XAUUSD file.
-  NZDUSD supplement: training_data/_histdata_tmp/DAT_ASCII_NZDUSD_M1_2025.zip
-    is merged with the existing NZDUSD_m1_histdata.csv to extend coverage.
 
 Output layout:
   processed_data/histdata/{SYMBOL}_{TF}.parquet   (TF = 5M/15M/1H/4H/1D/1W/1MN)
@@ -43,6 +40,7 @@ OUT_DIR     = BASE / "processed_data" / "histdata"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 CHUNK_ROWS = 300_000   # ~25 MB per chunk — safe for 7.6 GB RAM machine
+ACTIVE_SYMBOLS = {"XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD"}
 
 # All timeframes to produce from each M1 source
 # (pandas resample rule, output suffix)
@@ -182,47 +180,15 @@ def resample_xauusd_m1(src: Path) -> dict[str, Path]:
     return produced
 
 
-# ── Tick volume extraction — DISABLED (uncomment to enable) ──────────────────
-# TODO: Re-enable when order-flow / volume-profile features are needed.
-# Processes 44M–545M rows per symbol streamed in CHUNK_ROWS chunks.
-# Adds ~30–90 min total runtime. Output: {SYM}_tick_vol.parquet per symbol.
-#
-# def extract_tick_volume(src: Path, symbol: str) -> Path | None:
-#     out = OUT_DIR / f"{symbol}_tick_vol.parquet"
-#     if out.exists():
-#         logger.info("SKIP tick volume %s", symbol)
-#         return out
-#     base_15m = OUT_DIR / f"{symbol}_15M.parquet"
-#     if not base_15m.exists():
-#         return None
-#     logger.info("Extracting tick volume: %s (%.1f GB)", symbol, src.stat().st_size / 1e9)
-#     buckets = []
-#     for chunk in pd.read_csv(src, header=None, names=["raw"],
-#                               chunksize=CHUNK_ROWS, low_memory=False):
-#         dt = pd.to_datetime(chunk["raw"].str[:15], format="%Y%m%d %H%M%S",
-#                             utc=True, errors="coerce").dropna()
-#         if dt.empty:
-#             del chunk, dt; gc.collect(); continue
-#         vol = pd.Series(1, index=dt).resample("15min").sum()
-#         buckets.append(vol)
-#         del chunk, dt, vol; gc.collect()
-#     if not buckets:
-#         return None
-#     result = pd.concat(buckets).groupby(level=0).sum().rename("tick_volume")
-#     idx_15m = pd.read_parquet(base_15m, columns=["close"]).index
-#     result = result.reindex(idx_15m, fill_value=0).to_frame()
-#     result.to_parquet(out, compression="snappy")
-#     logger.info("Tick volume %s: %d bars", symbol, len(result))
-#     del result, idx_15m, buckets; gc.collect()
-#     return out
-
-
 def main():
     all_produced: dict[str, dict] = {}
 
     # ── 1. Forex M1 (2016-2026) ───────────────────────────────────────────────
     for src in sorted(FOREX_M1.glob("*_m1_histdata.csv")):
         sym = src.stem.replace("_m1_histdata", "").upper()
+        if sym not in ACTIVE_SYMBOLS:
+            logger.info("SKIP %s — outside active symbol scope", sym)
+            continue
         produced = resample_standard_m1(src, sym)
         if produced:
             all_produced[sym] = {tf: str(p) for tf, p in produced.items()}
@@ -233,12 +199,6 @@ def main():
         produced = resample_xauusd_m1(xau_src)
         if produced:
             all_produced["XAUUSD"] = {tf: str(p) for tf, p in produced.items()}
-
-    # ── 3. Tick volume extraction — DISABLED ─────────────────────────────────
-    # Uncomment the block below and the extract_tick_volume function above to enable.
-    # for src in sorted(ENGINE_HIST.glob("*_tick_histdata.csv")):
-    #     sym = src.stem.replace("_tick_histdata", "").upper()
-    #     extract_tick_volume(src, sym)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     summary = {"symbols": all_produced, "total_symbols": len(all_produced),

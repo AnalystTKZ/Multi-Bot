@@ -145,10 +145,10 @@ _STEPS: dict[int, tuple[str, str, list[Path]]] = {
         "step2_clean",
         [
             BASE / "processed_data" / "clean" / "EURUSD_15M.parquet",
-            BASE / "processed_data" / "clean" / "EURGBP_15M.parquet",
             BASE / "processed_data" / "clean" / "EURJPY_15M.parquet",
             BASE / "processed_data" / "clean" / "GBPJPY_15M.parquet",
-            BASE / "processed_data" / "clean" / "USDCHF_15M.parquet",
+            BASE / "processed_data" / "clean" / "GBPUSD_15M.parquet",
+            BASE / "processed_data" / "clean" / "USDJPY_15M.parquet",
             BASE / "processed_data" / "clean" / "XAUUSD_15M.parquet",
         ],
     ),
@@ -260,7 +260,7 @@ def push_weights_to_github() -> bool:
     Commit all new/changed weight files and push to origin/main.
 
     Both locally and on Kaggle the repo root is BASE.parent (Multi-Bot/).
-    Stages only trading-engine/weights/ (vector_store/ is gitignored).
+    Stages only trading-engine/weights/.
     Safe to call from any environment — skips cleanly when:
       - not inside a git repo
       - no remote named 'origin' is configured

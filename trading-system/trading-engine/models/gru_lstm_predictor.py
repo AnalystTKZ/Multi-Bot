@@ -286,7 +286,7 @@ class GRULSTMPredictor(BaseModel):
         sequences : (N, SEQUENCE_LENGTH, N_FEATURES) float32 array
         Returns   : (N, 64) float32 array, or None if model not trained.
 
-        Used by the retrain pipeline to bulk-index training data into VectorStore.
+        Used by diagnostics and optional downstream embedding consumers.
         """
         if not self.is_trained or self._model is None:
             return None

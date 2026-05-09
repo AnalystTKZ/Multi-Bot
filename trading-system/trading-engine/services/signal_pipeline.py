@@ -208,6 +208,19 @@ class SignalPipeline:
             if hasattr(model, "reload_if_updated"):
                 model.reload_if_updated()
 
+        unified = self._ml.get("unified_direction_regime")
+        if unified:
+            try:
+                preds.update(unified.predict(df, symbol=symbol, df_htf=htf))
+                preds["spread_pips"] = 1.0
+                return preds
+            except RuntimeError as exc:
+                logger.error("UnifiedDirectionRegime not trained — ML signals disabled. %s", exc)
+                raise
+            except Exception as exc:
+                logger.error("UnifiedDirectionRegime inference error: %s", exc)
+                raise
+
         # GRU-LSTM: 15M base sequence + MTF cross-TF features from 5M/1H/4H/1D
         gru = self._ml.get("gru_lstm")
         if gru:

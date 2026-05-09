@@ -8,7 +8,6 @@ Usage:
     python retrain_incremental.py --model regime
     python retrain_incremental.py --model quality
     python retrain_incremental.py --model rl
-    python retrain_incremental.py --model sentiment  # no-op (pre-trained)
     python retrain_incremental.py --dry-run          # validate without saving
 """
 
@@ -106,8 +105,7 @@ GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "50"))
 # Overrideable via env var for memory-constrained runs.
 GRU_BATCH_SIZE = int(os.getenv("GRU_BATCH_SIZE", "1024"))
 MAJOR_SYMBOLS = [
-    "AUDUSD", "EURGBP", "EURJPY", "EURUSD", "GBPJPY",
-    "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY", "XAUUSD",
+    "XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD",
 ]
 # All training timeframes — derived from step0 pipeline outputs
 ALL_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D", "1W", "1MN"]
@@ -136,8 +134,7 @@ MACRO_KEYS = INDEX_KEYS
 
 _SYMBOL_TO_GROUP = {
     "EURUSD": "dollar", "GBPUSD": "dollar", "USDJPY": "dollar",
-    "USDCHF": "dollar", "USDCAD": "dollar", "AUDUSD": "dollar", "NZDUSD": "dollar",
-    "EURGBP": "cross",  "EURJPY": "cross",  "GBPJPY": "cross",
+    "EURJPY": "cross",  "GBPJPY": "cross",
     "XAUUSD": "gold",
 }
 
@@ -1409,173 +1406,6 @@ def retrain_rl(dry_run: bool = False) -> dict:
     return result
 
 
-def retrain_sentiment(dry_run: bool = False) -> dict:
-    """FinBERT is pre-trained — skip with log message."""
-    logger.info("=== SentimentModel: FinBERT pre-trained — skipping retrain ===")
-    return {"skipped": True, "reason": "FinBERT is pre-trained via HuggingFace"}
-
-
-def _index_embeddings_post_train(symbols: list[str], dry_run: bool = False) -> None:
-    """
-    Build VectorStore indices from trained weights after GRU + Regime training.
-
-    Three indices populated:
-      trade_patterns    (len(SEQUENCE_FEATURES)) — per-bar technical GRU snapshot, all training bars
-      market_structures (34-dim) — REGIME_4H_FEATURES subset, all training bars
-      regime_embeddings (64-dim) — GRU shared-layer encoding, sampled every 4 bars
-
-    Runs after training so it never slows down the training loop itself.
-    Saves to weights/vector_store/ for use by live trading and backtest.
-    """
-    if dry_run:
-        logger.info("VectorStore: skipping indexing in dry-run mode")
-        return
-
-    try:
-        import gc
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from models.vector_store import VectorStore
-        from models.gru_lstm_predictor import GRULSTMPredictor
-        from models.regime_classifier import RegimeClassifier as _RC
-        from services.feature_engine import FeatureEngine, SEQUENCE_FEATURES, REGIME_4H_FEATURES
-
-        import time as _time
-        _t0_vs = _time.perf_counter()
-        logger.info("=== VectorStore: building similarity indices (parallel feature build) ===")
-        store = VectorStore()
-        gru_model = GRULSTMPredictor()
-        fe = FeatureEngine()
-
-        MAX_BARS_PER_SYMBOL = 50_000
-        _n_workers = int(os.getenv("RETRAIN_CPU_WORKERS", "4"))
-
-        def _build_sym_vectors(sym: str):
-            """CPU-only: load data + build all three feature arrays for one symbol.
-            Returns (sym, tp_vecs, tp_metas, ms_vecs, ms_metas, emb_seqs, emb_metas_idx, df_index)
-            or raises on failure."""
-            df = _load_ohlcv(sym, "15M", split=RETRAIN_DATA_SPLIT)
-            if df is None or len(df) < 200:
-                return None
-
-            result = {"sym": sym, "df_index": df.index}
-            all_htf = {tf: _load_ohlcv(sym, tf, split="all")
-                       for tf in ("5M", "15M", "1H", "4H", "1D")}
-
-            # trade_patterns
-            try:
-                feat_df = fe._build_sequence_df(df, all_htf, symbol=sym)
-                sq = feat_df[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
-                sq = sq[~np.isnan(sq).any(axis=1)]
-                n = min(len(sq), MAX_BARS_PER_SYMBOL)
-                step = max(1, len(sq) // n)
-                vecs = sq[::step][:n]
-                metas = [{"symbol": sym, "timeframe": "15M",
-                          "ts": str(df.index[min(i * step, len(df) - 1)])}
-                         for i in range(len(vecs))]
-                result["tp"] = (vecs, metas)
-                del feat_df, sq
-            except Exception as exc:
-                logger.warning("VectorStore trade_patterns failed for %s: %s", sym, exc)
-
-            # market_structures
-            try:
-                X_htf = _RC._build_feature_matrix(
-                    df,
-                    all_htf,
-                    sym,
-                    feature_names=REGIME_4H_FEATURES,
-                )
-                step = max(1, len(df) // MAX_BARS_PER_SYMBOL)
-                idx = np.arange(50, len(df), step)
-                idx = idx[idx < len(X_htf)]
-                rvecs = X_htf[idx].astype("float32")
-                rmetas = [{"symbol": sym, "timeframe": "15M", "ts": str(df.index[i])} for i in idx]
-                result["ms"] = (rvecs, rmetas)
-                del X_htf
-            except Exception as exc:
-                logger.warning("VectorStore market_structures failed for %s: %s", sym, exc)
-
-            # regime_embeddings: build sequences (GPU call happens in main thread)
-            if gru_model.is_trained:
-                try:
-                    feat_df2 = fe._build_sequence_df(df, all_htf, symbol=sym)
-                    sq2 = feat_df2[SEQUENCE_FEATURES].to_numpy(dtype="float32", copy=False)
-                    sq2 = sq2[~np.isnan(sq2).any(axis=1)]
-                    n_seq = len(sq2) - 30
-                    if n_seq > 0:
-                        step4 = max(1, n_seq // (MAX_BARS_PER_SYMBOL // 4))
-                        indices = list(range(0, n_seq, step4))
-                        seqs = np.stack([sq2[i:i + 30] for i in indices], axis=0)
-                        result["emb_seqs"] = seqs
-                        result["emb_idx"] = indices
-                    del feat_df2, sq2
-                except Exception as exc:
-                    logger.warning("VectorStore regime_embeddings prep failed for %s: %s", sym, exc)
-
-            del df
-            return result
-
-        # Phase 1: parallel CPU feature build across all symbols
-        _t_p1 = _time.perf_counter()
-        sym_results = {}
-        with ThreadPoolExecutor(max_workers=_n_workers) as pool:
-            futures = {pool.submit(_build_sym_vectors, sym): sym for sym in symbols}
-            for fut in as_completed(futures):
-                sym = futures[fut]
-                try:
-                    r = fut.result()
-                    if r is not None:
-                        sym_results[sym] = r
-                except Exception as exc:
-                    logger.warning("VectorStore feature build failed for %s: %s", sym, exc)
-        logger.info("VectorStore phase 1 (parallel feature build, %d workers): %.1fs for %d symbols",
-                    _n_workers, _time.perf_counter() - _t_p1, len(sym_results))
-
-        # Phase 2: serial GPU add_batch (FAISS GPU index is not thread-safe)
-        _t_p2 = _time.perf_counter()
-        for sym in symbols:
-            r = sym_results.get(sym)
-            if r is None:
-                continue
-
-            if "tp" in r:
-                vecs, metas = r["tp"]
-                store.add_batch("trade_patterns", vecs, metas)
-                logger.info("VectorStore trade_patterns: +%d vectors for %s", len(vecs), sym)
-
-            if "ms" in r:
-                rvecs, rmetas = r["ms"]
-                store.add_batch("market_structures", rvecs, rmetas)
-                logger.info(
-                    "VectorStore market_structures: +%d vectors (%d-dim 4H) for %s",
-                    len(rvecs), len(REGIME_4H_FEATURES), sym,
-                )
-
-            if "emb_seqs" in r and gru_model.is_trained:
-                seqs = r["emb_seqs"]
-                indices = r["emb_idx"]
-                df_index = r["df_index"]
-                embs = gru_model.get_embedding_batch(seqs)
-                if embs is not None:
-                    emb_metas = [
-                        {"symbol": sym, "timeframe": "15M",
-                         "ts": str(df_index[min(i + 30, len(df_index) - 1)])}
-                        for i in indices
-                    ]
-                    store.add_batch("regime_embeddings", embs, emb_metas)
-                    logger.info("VectorStore regime_embeddings: +%d vectors for %s", len(embs), sym)
-
-            gc.collect()
-
-        logger.info("VectorStore phase 2 (serial GPU add): %.1fs", _time.perf_counter() - _t_p2)
-        store.save()
-        logger.info("VectorStore saved: %s | total indexing: %.1fs",
-                    store.sizes(), _time.perf_counter() - _t0_vs)
-
-    except Exception as exc:
-        logger.error("_index_embeddings_post_train failed (non-fatal): %s", exc)
-
-
 def validate_only() -> dict:
     """Check that all model files exist and imports work."""
     results = {}
@@ -1608,13 +1438,6 @@ def validate_only() -> dict:
         results["quality"] = {"is_trained": qs.is_trained}
     except Exception as exc:
         results["quality"] = {"error": str(exc)}
-
-    try:
-        from models.sentiment_model import SentimentModel
-        sm = SentimentModel()
-        results["sentiment"] = {"bert_available": sm._bert_available}
-    except Exception as exc:
-        results["sentiment"] = {"error": str(exc)}
 
     try:
         from models.rl_agent import RLAgent
@@ -1697,7 +1520,7 @@ def log_retrain(model_name: str, result: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Incremental model retraining")
-    parser.add_argument("--model", choices=["gru", "regime", "quality", "rl", "sentiment", "all"],
+    parser.add_argument("--model", choices=["gru", "regime", "quality", "rl", "all"],
                         default="all", help="Model to retrain")
     parser.add_argument("--dry-run", action="store_true", help="Validate without saving")
     args = parser.parse_args()
@@ -1728,12 +1551,6 @@ def main():
         else:
             _regime_trained = True
 
-    # Build VectorStore indices after GRU + Regime are trained.
-    # Runs even if only one of the two succeeded — partial indexing is still useful.
-    if _gru_trained or _regime_trained:
-        _index_symbols = _get_symbols("RETRAIN_SYMBOLS_GRU", MAJOR_SYMBOLS)
-        _index_embeddings_post_train(_index_symbols, dry_run=dry)
-
     if model in ("all", "quality"):
         result = retrain_quality(dry)
         log_retrain("quality_scorer", result)
@@ -1745,10 +1562,6 @@ def main():
         log_retrain("rl_agent", result)
         if result.get("error"):
             any_failure = True
-
-    if model in ("all", "sentiment"):
-        result = retrain_sentiment(dry)
-        log_retrain("sentiment_model", result)
 
     if dry:
         logger.info("=== DRY RUN COMPLETE — validation results ===")

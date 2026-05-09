@@ -26,9 +26,7 @@ OUTPUT_DIR  = BASE / "processed_data" / "clean"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 PRIMARY = [
-    "AUDUSD", "EURGBP", "EURJPY", "EURUSD", "GBPJPY",
-    "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY",
-    "XAUUSD",
+    "XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD",
 ]
 
 # Macro columns to pull from unified and merge onto M1 data

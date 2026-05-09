@@ -45,6 +45,7 @@ if settings.ML_ENABLED:
     from models.gru_lstm_predictor import GRULSTMPredictor
     from models.regime_classifier import RegimeClassifier
     from models.quality_scorer import QualityScorer
+    from models.unified_direction_regime import UnifiedDirectionRegimePredictor
     if settings.RL_ENABLED:
         from models.rl_agent import RLAgent
 
@@ -142,14 +143,23 @@ class ProductionTradingEngine:
             self._ml_models: dict = {}
             return
 
-        logger.info("ML_ENABLED=true — loading models (RL_ENABLED=%s)", settings.RL_ENABLED)
+        logger.info(
+            "ML_ENABLED=true — loading models (RL_ENABLED=%s simplified=%s)",
+            settings.RL_ENABLED,
+            settings.SIMPLIFIED_ML_ENABLED,
+        )
         _ensure_mpl_config_dir()
-        model_factories = [
-            ("regime_htf", lambda: RegimeClassifier(timeframe="4H", mode="htf_bias")),
-            ("regime_ltf", lambda: RegimeClassifier(timeframe="1H", mode="ltf_behaviour")),
-            ("quality", QualityScorer),
-            ("gru_lstm", GRULSTMPredictor),
-        ]
+        if settings.SIMPLIFIED_ML_ENABLED:
+            model_factories = [("unified_direction_regime", UnifiedDirectionRegimePredictor)]
+            if settings.SIMPLIFIED_USE_QUALITY:
+                model_factories.append(("quality", QualityScorer))
+        else:
+            model_factories = [
+                ("regime_htf", lambda: RegimeClassifier(timeframe="4H", mode="htf_bias")),
+                ("regime_ltf", lambda: RegimeClassifier(timeframe="1H", mode="ltf_behaviour")),
+                ("quality", QualityScorer),
+                ("gru_lstm", GRULSTMPredictor),
+            ]
         # RL is optional — only loaded when explicitly enabled
         if settings.RL_ENABLED:
             model_factories.append(("rl", RLAgent))
@@ -168,7 +178,13 @@ class ProductionTradingEngine:
                 logger.warning("Skipping %s: weights missing or load failed", model_id)
 
         # Publish model status to Redis (RL reported as dormant when disabled)
-        active_model_ids = ["regime_htf", "regime_ltf", "quality", "gru_lstm"]
+        active_model_ids = (
+            ["unified_direction_regime"]
+            if settings.SIMPLIFIED_ML_ENABLED
+            else ["regime_htf", "regime_ltf", "quality", "gru_lstm"]
+        )
+        if settings.SIMPLIFIED_ML_ENABLED and settings.SIMPLIFIED_USE_QUALITY:
+            active_model_ids.append("quality")
         for model_id in active_model_ids:
             model = self._ml_models.get(model_id)
             self._state_mgr.set_ml_model_status(model_id, {
