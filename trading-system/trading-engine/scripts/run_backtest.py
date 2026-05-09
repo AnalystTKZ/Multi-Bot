@@ -199,12 +199,11 @@ def _env_simplified_ml_enabled() -> bool:
 
 
 def _backtest_requires_quality(window_label: str | None = None) -> bool:
-    """Quality/RL are deferred for train-window label generation only."""
+    """QualityScorer is an opt-in hard gate for backtests."""
     explicit = os.getenv("BACKTEST_REQUIRE_QUALITY")
     if explicit is not None:
         return explicit.strip().lower() not in ("0", "false", "no", "off")
-    label = (window_label or os.getenv("BACKTEST_WINDOW_LABEL") or os.getenv("BT_WINDOW", "")).strip().lower()
-    return label not in {"train", "training"}
+    return False
 
 
 def _csv_columns(path: str) -> list[str]:

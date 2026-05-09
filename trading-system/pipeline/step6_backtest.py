@@ -217,16 +217,26 @@ def run_backtest(bt_start: str, bt_end: str, round_num: int) -> dict:
         # diagnostic line is visible in the notebook and persisted to disk.
         env = _build_env()
         quality_path = ENGINE_DIR / "weights" / "quality_scorer.pkl"
+        quality_gate_enabled = os.getenv(
+            "BACKTEST_ENABLE_QUALITY_GATE",
+            os.getenv("ENABLE_QUALITY_GATE", "0"),
+        ).strip().lower() in {"1", "true", "yes", "on"}
         if round_num == 0:
             env["BACKTEST_REQUIRE_QUALITY"] = "0"
-        elif quality_path.exists() and quality_path.stat().st_size > 0:
+        elif quality_gate_enabled and quality_path.exists() and quality_path.stat().st_size > 0:
             env["BACKTEST_REQUIRE_QUALITY"] = "1"
         else:
             env["BACKTEST_REQUIRE_QUALITY"] = "0"
-            logger.warning(
-                "Round %d — quality_scorer.pkl missing; running without QualityScorer gate",
-                round_num,
-            )
+            if quality_gate_enabled:
+                logger.warning(
+                    "Round %d — quality_scorer.pkl missing; running without QualityScorer gate",
+                    round_num,
+                )
+            else:
+                logger.info(
+                    "Round %d — QualityScorer hard gate disabled; set BACKTEST_ENABLE_QUALITY_GATE=1 to enable it",
+                    round_num,
+                )
         env["BACKTEST_WINDOW_LABEL"] = _source_split_for_round(round_num)
         result = subprocess.run(
             cmd,
@@ -295,6 +305,7 @@ def _summarise(result_path: Path) -> dict:
             "max_drawdown": round(pm.get("max_drawdown", 0.0), 4),
             "sharpe": round(pm.get("sharpe", 0.0), 3),
             "expectancy_r": round(pm.get("expectancy_r", 0.0), 4),
+            "gate_diagnostics": m.get("gate_diagnostics", {}),
         }
     return {
         "total_trades": total_trades,
@@ -573,6 +584,21 @@ def main():
             tid, m["trades"], m["win_rate"]*100, m["profit_factor"],
             m["total_return"]*100, m.get("expectancy_r", 0.0), m["max_drawdown"]*100, m["sharpe"],
         )
+        gd = m.get("gate_diagnostics") or {}
+        if gd:
+            logger.info(
+                "  %s gate_diagnostics: bars=%s no_signal=%s quality_block=%s session_skip=%s density=%s pm_reject=%s",
+                tid,
+                gd.get("total"),
+                gd.get("no_signal"),
+                gd.get("quality_block"),
+                gd.get("session"),
+                gd.get("density"),
+                gd.get("pm_reject"),
+            )
+            reasons = gd.get("no_signal_reasons") or {}
+            if reasons:
+                logger.info("  %s no_signal_reasons: %s", tid, reasons)
 
     try:
         _diag_script = ENGINE_DIR / "scripts" / "analyze_backtest.py"

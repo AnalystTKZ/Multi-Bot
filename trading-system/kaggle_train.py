@@ -335,10 +335,13 @@ run_step(
 )
 
 # ─── Clean Quality/RL labels from TRAIN split only ────────────────────────────
-# QualityScorer and RLAgent need executed trade outcomes, but validation/test
+# QualityScorer and RLAgent need executed trade outcomes, but train-tail/test
 # journals must remain evaluation evidence. Generate those outcomes from a
 # train-window backtest, train Quality/RL from source_split=train, archive the
-# train journal, then start Round 1 with a fresh evaluation journal.
+# train journal, then start Round 1 with a fresh evaluation journal. The
+# QualityScorer hard gate is opt-in during backtests; set
+# BACKTEST_ENABLE_QUALITY_GATE=1 only after the train-source labels are proven
+# useful.
 
 print("\n=== Clean Quality/RL source: Backtest on train window ===")
 run_step(
