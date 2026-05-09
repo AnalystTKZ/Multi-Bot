@@ -1,0 +1,53 @@
+{
+  "run_id": "bt_20260509_071448",
+  "created_at": "2026-05-09T07:16:47.095824+00:00",
+  "code_commit": "62f2c9fd4c5357b7be718395caf8b3926a4c476e",
+  "backtest_result": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260509_071448.json",
+    "sha256": "2e7055a95a07e11268f16050aa30b9230dc536a03514de7a6f64fa322f0069b6",
+    "split": "train",
+    "requested_split": "train",
+    "start": "2019-01-04",
+    "end": "2020-12-31"
+  },
+  "split_summary": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/ml_training/datasets/split_summary.json",
+    "sha256": "2bed42cec8e8bf155c32a0e6f63c3a17e233f72624da15e5e07f046546588e59",
+    "date_ranges": {
+      "train": {
+        "start": "2019-01-04 00:00:00+00:00",
+        "end": "2020-12-31 16:45:00+00:00"
+      },
+      "validation": {
+        "start": "2021-01-04 00:00:00+00:00",
+        "end": "2022-01-03 23:45:00+00:00"
+      },
+      "test": {
+        "start": "2023-08-07 00:00:00+00:00",
+        "end": "2025-08-05 05:00:00+00:00"
+      }
+    },
+    "rows": {
+      "train": 46636,
+      "validation": 23507,
+      "test": 46792
+    },
+    "leakage_check": "PASS",
+    "split_method": "fixed_calendar",
+    "selected_fold": "fold_001",
+    "fold_count": 2,
+    "blind_test_policy": "final_2_years_excluded_from_all_fixed_train_validation_folds"
+  },
+  "weight_artifact_hashes": {
+    "weights/gru_lstm/model.pt": "f96ce1e9f09e6004e4d9e72788c4d2a67d06a448c27350d6b1162f12bab51a0f",
+    "weights/gru_lstm/weights_manifest.json": "7bb3bfd5b4195a82f94b5fb5599edf31819c9ea398a4b097aa9e57e87cc304e4",
+    "weights/regime_htf.pkl": "60f8f390055fb505ac416a8cc0685bb958d91f19638b473afe837b3aba6c67b2",
+    "weights/regime_ltf.pkl": "19285027135d36013daf1cf34375ff376a11d478b3ee6ffd8b1ac78d077865b8"
+  },
+  "calibration_report": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/calibration_report.json",
+    "sha256": "c10f242c734b4acebf99c9797ffe0cacfd0a86524d8d7c12ea085945ae7f6a70"
+  },
+  "diagnostic_breakdowns": {},
+  "promotion_status": "candidate_pending_review"
+}

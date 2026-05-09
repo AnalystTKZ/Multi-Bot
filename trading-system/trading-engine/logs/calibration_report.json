@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-05-09T07:16:47.073381+00:00",
+  "traders": {
+    "all": {
+      "trader_id": "all",
+      "bins": [],
+      "monotonic": null,
+      "reliable": null,
+      "note": "No outcome data yet"
+    }
+  },
+  "run_id": "bt_20260509_071448",
+  "source_split": "train",
+  "bt_start": "2019-01-04",
+  "bt_end": "2020-12-31",
+  "split_summary_hash": "2bed42cec8e8bf155c32a0e6f63c3a17e233f72624da15e5e07f046546588e59"
+}

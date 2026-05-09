@@ -1,0 +1,150 @@
+{
+  "run_id": "bt_20260509_071448",
+  "run_at": "2026-05-09T07:14:48.197334+00:00",
+  "code_commit": "62f2c9fd4c5357b7be718395caf8b3926a4c476e",
+  "start": "2019-01-04",
+  "end": "2020-12-31",
+  "split": "train",
+  "requested_split": "train",
+  "manual_window": true,
+  "split_summary": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/ml_training/datasets/split_summary.json",
+    "sha256": "2bed42cec8e8bf155c32a0e6f63c3a17e233f72624da15e5e07f046546588e59",
+    "date_ranges": {
+      "train": {
+        "start": "2019-01-04 00:00:00+00:00",
+        "end": "2020-12-31 16:45:00+00:00"
+      },
+      "validation": {
+        "start": "2021-01-04 00:00:00+00:00",
+        "end": "2022-01-03 23:45:00+00:00"
+      },
+      "test": {
+        "start": "2023-08-07 00:00:00+00:00",
+        "end": "2025-08-05 05:00:00+00:00"
+      }
+    },
+    "rows": {
+      "train": 46636,
+      "validation": 23507,
+      "test": 46792
+    },
+    "leakage_check": "PASS",
+    "split_method": "fixed_calendar",
+    "selected_fold": "fold_001",
+    "fold_count": 2,
+    "blind_test_policy": "final_2_years_excluded_from_all_fixed_train_validation_folds"
+  },
+  "weight_artifact_hashes": {
+    "weights/gru_lstm/model.pt": "f96ce1e9f09e6004e4d9e72788c4d2a67d06a448c27350d6b1162f12bab51a0f",
+    "weights/gru_lstm/weights_manifest.json": "7bb3bfd5b4195a82f94b5fb5599edf31819c9ea398a4b097aa9e57e87cc304e4",
+    "weights/regime_htf.pkl": "60f8f390055fb505ac416a8cc0685bb958d91f19638b473afe837b3aba6c67b2",
+    "weights/regime_ltf.pkl": "19285027135d36013daf1cf34375ff376a11d478b3ee6ffd8b1ac78d077865b8"
+  },
+  "config": {
+    "trader": "ml_trader",
+    "initial_capital": 10000.0,
+    "risk_per_trade": 0.01,
+    "max_daily_loss_pct": 1.0,
+    "max_drawdown_halt": 1.0,
+    "enforce_daily_halt": false,
+    "compound_equity": false,
+    "portfolio_manager": "enabled"
+  },
+  "results": {
+    "ml_trader": {
+      "trades": 0,
+      "win_rate": 0.0,
+      "total_return": 0.0,
+      "profit_factor": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe": 0.0,
+      "primary_metric_basis": "fixed_risk_r_multiple",
+      "primary_metrics": {
+        "basis": "fixed_risk_r_multiple",
+        "risk_amount": 100.0,
+        "expectancy_r": 0.0,
+        "total_r": 0.0,
+        "net_pnl": 0.0,
+        "gross_profit": 0.0,
+        "gross_loss": 0.0,
+        "profit_factor": 0.0,
+        "win_rate": 0.0,
+        "total_return": 0.0,
+        "max_drawdown": 0.0,
+        "sharpe": 0.0,
+        "sortino": 0.0,
+        "calmar": 0.0,
+        "omega": 0.0,
+        "var_95": 0.0,
+        "cvar_95": 0.0,
+        "t_statistic": 0.0,
+        "t_pvalue": 1.0,
+        "sharpe_ci_95_lower": 0.0,
+        "sharpe_ci_95_upper": 0.0,
+        "information_coefficient": 0.0,
+        "longest_losing_streak": 0,
+        "rolling_expectancy_last20": 0.0,
+        "rolling_expectancy_first20": 0.0,
+        "edge_decay": 0.0,
+        "monthly_returns": {},
+        "best_month": 0.0,
+        "worst_month": 0.0,
+        "mc_median_final_equity": 10000.0,
+        "mc_p10_final_equity": 10000.0,
+        "mc_p90_final_equity": 10000.0,
+        "mc_p95_max_drawdown": 0.0,
+        "verdict": "FAIL",
+        "verdict_rules": {
+          "min_trades": false
+        }
+      },
+      "primary_profit_factor": 0.0,
+      "primary_total_return": 0.0,
+      "primary_max_drawdown": 0.0,
+      "primary_sharpe": 0.0,
+      "expectancy_r": 0.0,
+      "tp1_rate": 0.0,
+      "tp2_rate": 0.0,
+      "gate_diagnostics": {
+        "total": 279801,
+        "dd_halt": 0,
+        "daily": 0,
+        "session": 148437,
+        "cooldown": 0,
+        "density": 0,
+        "no_signal": 131364,
+        "pm_reject": 0,
+        "quality_block": 0,
+        "daily_halt_events": 0,
+        "no_signal_reasons": {
+          "high_uncertainty": 131364
+        },
+        "daily_halt_dates": [],
+        "drawdown_halt_timestamp": null,
+        "drawdown_halt_drawdown": 0.0,
+        "enforce_daily_halt": false,
+        "compound_equity": false
+      }
+    }
+  },
+  "trade_log": [],
+  "calibration": {
+    "timestamp": "2026-05-09T07:16:47.073381+00:00",
+    "traders": {
+      "all": {
+        "trader_id": "all",
+        "bins": [],
+        "monotonic": null,
+        "reliable": null,
+        "note": "No outcome data yet"
+      }
+    },
+    "run_id": "bt_20260509_071448",
+    "source_split": "train",
+    "bt_start": "2019-01-04",
+    "bt_end": "2020-12-31",
+    "split_summary_hash": "2bed42cec8e8bf155c32a0e6f63c3a17e233f72624da15e5e07f046546588e59"
+  },
+  "diagnostic_breakdowns": {}
+}
