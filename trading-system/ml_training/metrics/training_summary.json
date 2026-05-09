@@ -1,5 +1,5 @@
 {
-  "trained_at": "2026-05-03T08:00:01.324124+00:00",
+  "trained_at": "2026-05-09T02:54:56.370752+00:00",
   "models": {
     "regime": {
       "success": true,
@@ -21,7 +21,7 @@
       ]
     },
     "history": {
-      "records": 9
+      "records": 18
     }
   },
   "journal_path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/logs/trade_journal_detailed.jsonl"
