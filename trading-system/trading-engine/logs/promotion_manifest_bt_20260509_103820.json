@@ -1,14 +1,14 @@
 {
-  "run_id": "bt_20260509_105303",
-  "created_at": "2026-05-09T10:55:56.970633+00:00",
+  "run_id": "bt_20260509_103820",
+  "created_at": "2026-05-09T10:40:18.874355+00:00",
   "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
   "backtest_result": {
-    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260509_105303.json",
-    "sha256": "17d6b1b424c85d57985df05701d5687c50f601cba9e74ce5497404d894805005",
-    "split": "combined_eval",
-    "requested_split": "test",
-    "start": "2022-08-05",
-    "end": "2025-08-05"
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260509_103820.json",
+    "sha256": "aa1cd32eb0d37309930baf6e39e1d736f9e634b47ba56b873efea54b7a6809b7",
+    "split": "train_tail",
+    "requested_split": "train",
+    "start": "2021-08-05",
+    "end": "2023-08-04"
   },
   "split_summary": {
     "path": "/kaggle/working/Multi-Bot/trading-system/ml_training/datasets/split_summary.json",
@@ -44,16 +44,16 @@
     "blind_test_policy": "final_2_years_excluded_from_train_train_tail_and_internal_validation_folds"
   },
   "weight_artifact_hashes": {
-    "weights/gru_lstm/model.pt": "51f5a04e2dc0d0b133396b4188dfb4c572c107ae99f1508ce19f49f28edbd214",
-    "weights/gru_lstm/weights_manifest.json": "b0121efe65ddc3ef9e6c31da06ad179746c181c8ade6edd45b9ba2a35354db4c",
-    "weights/regime_htf.pkl": "a212edc1cb1e6605118eec5ffcc3260e47455a0bd71400c1b0040ea9ea1adcfc",
-    "weights/regime_ltf.pkl": "9ea3c5fb576567422307844f86df349cd59d7f649afb8aa5c6fd4ca025c41a85",
+    "weights/gru_lstm/model.pt": "8006ca80e667ff66ce7c2c4c1515d57dddac2098d742a17384919a8df86ea3c3",
+    "weights/gru_lstm/weights_manifest.json": "7a2fd038333cc0e17ec850db520f71710a2804c25c88ad03395267555df39880",
+    "weights/regime_htf.pkl": "dbe2768accf932861dbfadac55c102242ff0811f81584bd5734ef846fe86f94d",
+    "weights/regime_ltf.pkl": "8239ad0a3f387e921ae4f962b18e41a1479244f6f9bece1197dd664958eaad3c",
     "weights/quality_scorer.pkl": "436da06eab4b1162ab3b197d3042d1ceb16e1d13fb73bafe36eef1a185064b8d",
     "weights/rl_ppo/model.zip": "5ab911702b9b2fd710de398d467f403c95879140292240f49a3277c08e3e2e6c"
   },
   "calibration_report": {
     "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/calibration_report.json",
-    "sha256": "e621c04aed7b0336a0a56d561ec7508aaf22f9d0298895e13a76de0d0871d7fe"
+    "sha256": "39eac28d0a94cc79a7301f964b50673b892a369ace0d9aecfcceed629af902cf"
   },
   "diagnostic_breakdowns": {},
   "promotion_status": "candidate_pending_review"

@@ -534,5 +534,273 @@
     "trained": true,
     "segments": 6,
     "samples": 901665
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-09T10:20:11.839022+00:00",
+    "model": "regime_classifier_htf",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "",
+    "artifact_hashes": {},
+    "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
+    "accuracy": 0.8499,
+    "balanced_accuracy": 0.9219,
+    "n_train": 68826,
+    "n_val": 8737,
+    "val_loss": 0.423094,
+    "per_class_accuracy": {
+      "BIAS_UP": 0.968,
+      "BIAS_DOWN": 0.954,
+      "BIAS_NEUTRAL": 0.844
+    },
+    "per_class_precision": {
+      "BIAS_UP": 0.25,
+      "BIAS_DOWN": 0.227,
+      "BIAS_NEUTRAL": 0.998
+    },
+    "per_class_f1": {
+      "BIAS_UP": 0.398,
+      "BIAS_DOWN": 0.367,
+      "BIAS_NEUTRAL": 0.915
+    },
+    "confusion_matrix": [
+      [
+        268,
+        0,
+        9
+      ],
+      [
+        0,
+        145,
+        7
+      ],
+      [
+        802,
+        493,
+        7013
+      ]
+    ],
+    "score_mae": {
+      "bias_up_score": 0.1769,
+      "bias_down_score": 0.1183
+    },
+    "score_outputs": [
+      "bias_up_score",
+      "bias_down_score"
+    ],
+    "decision_threshold": 0.85,
+    "decision_margin": 0.0,
+    "timeframe": "4H",
+    "warnings": [
+      "Regime HTF directional score validation below acceptance floor: precision={'BIAS_UP': 0.25, 'BIAS_DOWN': 0.227, 'BIAS_NEUTRAL': 0.998} min_precision=0.300 recall={'BIAS_UP': 0.968, 'BIAS_DOWN': 0.954, 'BIAS_NEUTRAL': 0.844} min_recall=0.100 f1={'BIAS_UP': 0.398, 'BIAS_DOWN': 0.367, 'BIAS_NEUTRAL': 0.915} min_f1=0.150 min_neutral_recall=0.500 weak_precision=['BIAS_UP', 'BIAS_DOWN'] weak_recall=[] weak_f1=[] weak_neutral=False."
+    ],
+    "status": "complete",
+    "fold_id": "train_all"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-09T10:20:46.197952+00:00",
+    "model": "regime_classifier_ltf",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "",
+    "artifact_hashes": {},
+    "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
+    "accuracy": 0.9764,
+    "n_train": 262644,
+    "n_val": 30352,
+    "val_loss": 0.001046,
+    "score_mae": {
+      "trend_score": 0.0206,
+      "range_score": 0.0355,
+      "chop_score": 0.0232,
+      "volatility_percentile": 0.0158,
+      "consolidation_score": 0.0229
+    },
+    "score_mse": {
+      "trend_score": 0.00071,
+      "range_score": 0.00206,
+      "chop_score": 0.00088,
+      "volatility_percentile": 0.00044,
+      "consolidation_score": 0.00114
+    },
+    "score_corr": {
+      "trend_score": 0.9928,
+      "range_score": 0.9489,
+      "chop_score": 0.9882,
+      "volatility_percentile": 0.9954,
+      "consolidation_score": 0.988
+    },
+    "score_outputs": [
+      "trend_score",
+      "range_score",
+      "chop_score",
+      "volatility_percentile",
+      "consolidation_score"
+    ],
+    "timeframe": "1H",
+    "warnings": [],
+    "status": "complete",
+    "fold_id": "train_all"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-09T10:20:46.202189+00:00",
+    "model": "regime_classifier",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "",
+    "artifact_hashes": {
+      "regime_htf.pkl": "dbe2768accf932861dbfadac55c102242ff0811f81584bd5734ef846fe86f94d",
+      "regime_ltf.pkl": "8239ad0a3f387e921ae4f962b18e41a1479244f6f9bece1197dd664958eaad3c"
+    },
+    "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
+    "trained": true,
+    "samples": 370559,
+    "folds": [
+      null
+    ],
+    "results": {
+      "train_all": {
+        "HTF": {
+          "accuracy": 0.8499,
+          "balanced_accuracy": 0.9219,
+          "n_train": 68826,
+          "n_val": 8737,
+          "val_loss": 0.423094,
+          "per_class_accuracy": {
+            "BIAS_UP": 0.968,
+            "BIAS_DOWN": 0.954,
+            "BIAS_NEUTRAL": 0.844
+          },
+          "per_class_precision": {
+            "BIAS_UP": 0.25,
+            "BIAS_DOWN": 0.227,
+            "BIAS_NEUTRAL": 0.998
+          },
+          "per_class_f1": {
+            "BIAS_UP": 0.398,
+            "BIAS_DOWN": 0.367,
+            "BIAS_NEUTRAL": 0.915
+          },
+          "confusion_matrix": [
+            [
+              268,
+              0,
+              9
+            ],
+            [
+              0,
+              145,
+              7
+            ],
+            [
+              802,
+              493,
+              7013
+            ]
+          ],
+          "score_mae": {
+            "bias_up_score": 0.1769,
+            "bias_down_score": 0.1183
+          },
+          "score_outputs": [
+            "bias_up_score",
+            "bias_down_score"
+          ],
+          "decision_threshold": 0.85,
+          "decision_margin": 0.0,
+          "timeframe": "4H",
+          "warnings": [
+            "Regime HTF directional score validation below acceptance floor: precision={'BIAS_UP': 0.25, 'BIAS_DOWN': 0.227, 'BIAS_NEUTRAL': 0.998} min_precision=0.300 recall={'BIAS_UP': 0.968, 'BIAS_DOWN': 0.954, 'BIAS_NEUTRAL': 0.844} min_recall=0.100 f1={'BIAS_UP': 0.398, 'BIAS_DOWN': 0.367, 'BIAS_NEUTRAL': 0.915} min_f1=0.150 min_neutral_recall=0.500 weak_precision=['BIAS_UP', 'BIAS_DOWN'] weak_recall=[] weak_f1=[] weak_neutral=False."
+          ],
+          "status": "complete_with_warnings"
+        },
+        "LTF": {
+          "accuracy": 0.9764,
+          "n_train": 262644,
+          "n_val": 30352,
+          "val_loss": 0.001046,
+          "score_mae": {
+            "trend_score": 0.0206,
+            "range_score": 0.0355,
+            "chop_score": 0.0232,
+            "volatility_percentile": 0.0158,
+            "consolidation_score": 0.0229
+          },
+          "score_mse": {
+            "trend_score": 0.00071,
+            "range_score": 0.00206,
+            "chop_score": 0.00088,
+            "volatility_percentile": 0.00044,
+            "consolidation_score": 0.00114
+          },
+          "score_corr": {
+            "trend_score": 0.9928,
+            "range_score": 0.9489,
+            "chop_score": 0.9882,
+            "volatility_percentile": 0.9954,
+            "consolidation_score": 0.988
+          },
+          "score_outputs": [
+            "trend_score",
+            "range_score",
+            "chop_score",
+            "volatility_percentile",
+            "consolidation_score"
+          ],
+          "timeframe": "1H",
+          "warnings": [],
+          "status": "complete"
+        }
+      }
+    }
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-09T10:30:37.729005+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "8006ca80e667ff66ce7c2c4c1515d57dddac2098d742a17384919a8df86ea3c3",
+      "gru_lstm/weights_manifest.json": "7a2fd038333cc0e17ec850db520f71710a2804c25c88ad03395267555df39880"
+    },
+    "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
+    "status": "complete",
+    "mode": "multi_symbol",
+    "segments": 6,
+    "samples": 1021133,
+    "groups_trained": 1,
+    "val_loss_points": 42,
+    "best_val_direction_accuracy": 0.6312894785086915
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-09T10:30:37.737311+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "8006ca80e667ff66ce7c2c4c1515d57dddac2098d742a17384919a8df86ea3c3",
+      "gru_lstm/weights_manifest.json": "7a2fd038333cc0e17ec850db520f71710a2804c25c88ad03395267555df39880"
+    },
+    "code_commit": "1f3c16eeaba9b7cd1e7a50a4ba2da51e12f9453a",
+    "trained": true,
+    "segments": 6,
+    "samples": 1021133
   }
 ]
