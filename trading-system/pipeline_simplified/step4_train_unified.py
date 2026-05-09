@@ -19,7 +19,7 @@ from models.unified_direction_regime import UnifiedDirectionRegimePredictor
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("simple_step4_train_unified")
 
-DATASET_DIR = BASE / "ml_training" / "simple_datasets"
+DATASET_DIR = BASE / "ml_training" / "datasets" / "simple_datasets"
 METRICS_DIR = BASE / "ml_training" / "simple_metrics"
 
 

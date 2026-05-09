@@ -13,7 +13,7 @@ Outputs:
 
 - `processed_data/simple/ohlcv/`
 - `processed_data/simple/features.parquet`
-- `ml_training/simple_datasets/`
+- `ml_training/datasets/simple_datasets/`
 - `trading-engine/weights/unified_direction_regime/model.pt`
 
 The live engine can opt into the simplified model with:

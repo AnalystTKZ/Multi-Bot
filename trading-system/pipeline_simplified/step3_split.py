@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("simple_step3_split")
 
 INPUT = BASE / "processed_data" / "simple" / "features.parquet"
-OUTPUT_DIR = BASE / "ml_training" / "simple_datasets"
+OUTPUT_DIR = BASE / "ml_training" / "datasets" / "simple_datasets"
 
 
 def _write(df: pd.DataFrame, name: str) -> dict:

@@ -17,7 +17,7 @@ Outputs:
 
 - `processed_data/simple/ohlcv/`
 - `processed_data/simple/features.parquet`
-- `ml_training/simple_datasets/{train,validation,test}.parquet`
+- `ml_training/datasets/simple_datasets/{train,validation,test}.parquet`
 - `ml_training/simple_metrics/unified_training_summary.json`
 - `trading-engine/weights/unified_direction_regime/model.pt`
 

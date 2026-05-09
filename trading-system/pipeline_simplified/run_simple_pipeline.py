@@ -20,7 +20,7 @@ logger = logging.getLogger("run_simple_pipeline")
 STEPS = {
     1: ("Data Prep", "step1_data_prep", [BASE / "processed_data" / "simple" / "ohlcv_manifest.json"]),
     2: ("Feature Engineering", "step2_features", [BASE / "processed_data" / "simple" / "features.parquet"]),
-    3: ("Split", "step3_split", [BASE / "ml_training" / "simple_datasets" / "split_summary.json"]),
+    3: ("Split", "step3_split", [BASE / "ml_training" / "datasets" / "simple_datasets" / "split_summary.json"]),
     4: ("Unified Model Training", "step4_train_unified", [BASE / "trading-engine" / "weights" / "unified_direction_regime" / "model.pt"]),
 }
 
