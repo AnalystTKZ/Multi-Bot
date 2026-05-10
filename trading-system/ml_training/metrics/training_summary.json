@@ -1,5 +1,5 @@
 {
-  "trained_at": "2026-05-10T11:09:47.090348+00:00",
+  "trained_at": "2026-05-10T14:24:13.056532+00:00",
   "models": {
     "gru": {
       "success": true,
@@ -20,7 +20,7 @@
       "missing_deferred": []
     },
     "history": {
-      "records": 22
+      "records": 34
     }
   },
   "journal_path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/logs/trade_journal_detailed.jsonl"
