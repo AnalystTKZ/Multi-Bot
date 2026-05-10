@@ -1317,7 +1317,10 @@ def retrain_regime(dry_run: bool = False) -> dict:
                 )
                 _regime_diagnostics(model_htf, group_gmms_htf, symbols, "4H", fold_id=fold_id)
                 fold_results["HTF"] = res_4h
-                log_retrain("regime_classifier_htf", {**res_4h, "status": "complete", "fold_id": fold_key})
+                log_retrain(
+                    "regime_classifier_htf",
+                    {**res_4h, "status": res_4h.get("status", "complete"), "fold_id": fold_key},
+                )
             if not _htf_regime_artifact_exists():
                 raise RuntimeError("Regime HTF weights were not created at regime_htf.pkl")
 

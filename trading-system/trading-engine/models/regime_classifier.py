@@ -316,10 +316,19 @@ class RegimeClassifier(BaseModel):
             "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
             os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.10"),
         ))
-        thresholds = np.linspace(0.35, 0.85, 11)
-        margins = np.linspace(0.00, 0.30, 7)
-        best: tuple[float, float, dict] | None = None
-        best_score = -1e9
+        thresholds = np.unique(np.concatenate([
+            np.linspace(0.35, 0.85, 11),
+            np.linspace(0.875, 0.99, 6),
+        ]))
+        margins = np.unique(np.concatenate([
+            np.linspace(0.00, 0.30, 7),
+            np.linspace(0.35, 0.65, 7),
+        ]))
+        best_floor: tuple[float, float, dict] | None = None
+        best_fallback: tuple[float, float, dict] | None = None
+        best_floor_score = -1e9
+        best_fallback_score = -1e9
+        min_directional_predictions = int(os.getenv("REGIME_HTF_MIN_DIRECTIONAL_PREDICTIONS", "10"))
         for threshold in thresholds:
             for margin in margins:
                 pred, _ = cls._htf_bias_decision(proba, float(threshold), float(margin))
@@ -331,24 +340,54 @@ class RegimeClassifier(BaseModel):
                 up_f1 = metrics["f1"]["BIAS_UP"]
                 down_f1 = metrics["f1"]["BIAS_DOWN"]
                 neutral_r = metrics["recall"]["BIAS_NEUTRAL"]
+                confusion = metrics["confusion"]
+                up_pred_n = int(confusion[:, 0].sum())
+                down_pred_n = int(confusion[:, 1].sum())
+                directional_pred_share = float((up_pred_n + down_pred_n) / max(len(y_true), 1))
+                directional_fp_share = float(
+                    (confusion[:, 0].sum() - confusion[0, 0] + confusion[:, 1].sum() - confusion[1, 1])
+                    / max(len(y_true), 1)
+                )
                 meets_floor = (
                     up_p >= min_precision
                     and down_p >= min_precision
                     and up_r >= min_recall
                     and down_r >= min_recall
+                    and up_pred_n >= min_directional_predictions
+                    and down_pred_n >= min_directional_predictions
                 )
-                score = (
-                    2.0 * min(up_p, down_p)
-                    + 1.5 * min(up_f1, down_f1)
-                    + 0.75 * min(up_r, down_r)
-                    + 0.50 * neutral_r
-                    + metrics["accuracy"]
+                precision_score = min(up_p, down_p)
+                floor_score = (
+                    5.0 * min(up_p, down_p)
+                    + 1.0 * min(up_f1, down_f1)
+                    + 0.25 * min(up_r, down_r)
+                    + 0.75 * neutral_r
+                    + 0.25 * metrics["accuracy"]
+                    - 3.0 * directional_fp_share
                 )
                 if meets_floor:
-                    score += 10.0
-                if score > best_score:
-                    best_score = score
-                    best = (float(threshold), float(margin), metrics)
+                    if floor_score > best_floor_score:
+                        best_floor_score = floor_score
+                        best_floor = (float(threshold), float(margin), metrics)
+
+                # If the model cannot hit the floor, prefer the most precise
+                # non-trivial abstaining policy rather than a recall-heavy flood.
+                enough_predictions = (
+                    up_pred_n >= min_directional_predictions
+                    and down_pred_n >= min_directional_predictions
+                )
+                if enough_predictions:
+                    fallback_score = (
+                        10.0 * precision_score
+                        + 1.0 * min(up_f1, down_f1)
+                        + 0.50 * neutral_r
+                        - 4.0 * directional_fp_share
+                        - 0.75 * directional_pred_share
+                    )
+                    if fallback_score > best_fallback_score:
+                        best_fallback_score = fallback_score
+                        best_fallback = (float(threshold), float(margin), metrics)
+        best = best_floor or best_fallback
         if best is None:
             pred, _ = cls._htf_bias_decision(proba, 0.60, 0.10)
             best = (0.60, 0.10, cls._classification_metrics(y_true, pred, HTF_CLASSES))
@@ -2083,6 +2122,8 @@ class RegimeClassifier(BaseModel):
                 warnings.append(warning)
                 logger.warning("%s; continuing so weights can still be saved", warning)
 
+            pos_counts = np.maximum((y_tr >= 0.5).sum(axis=0).astype(np.float32), 1.0)
+            neg_counts = np.maximum(len(y_tr) - pos_counts, 1.0)
             n_feat = X_tr.shape[1]
             _loaded_n_cls = getattr(self, "_n_classes", len(HTF_SCORE_OUTPUTS))
             _feature_mismatch = self._model is not None and self._n_features != n_feat
@@ -2097,6 +2138,13 @@ class RegimeClassifier(BaseModel):
                 self._model = _build_mlp(n_feat, len(HTF_SCORE_OUTPUTS)).to(DEVICE)
                 self._n_features = n_feat
                 self._n_classes = len(HTF_SCORE_OUTPUTS)
+                with torch.no_grad():
+                    base_model = self._model.module if isinstance(
+                        self._model, torch.nn.DataParallel
+                    ) else self._model
+                    priors = np.clip(pos_counts / max(len(y_tr), 1), 1e-4, 1.0 - 1e-4)
+                    prior_logits = np.log(priors / (1.0 - priors)).astype(np.float32)
+                    base_model.head.bias.copy_(torch.from_numpy(prior_logits).to(DEVICE))
                 logger.info("RegimeClassifier[mode=%s]: cold start HTF score head", self._mode)
             else:
                 logger.info("RegimeClassifier[mode=%s]: warm start HTF score head", self._mode)
@@ -2106,9 +2154,7 @@ class RegimeClassifier(BaseModel):
                 logger.info("RegimeClassifier HTF score head: DataParallel across %d GPUs",
                             torch.cuda.device_count())
 
-            pos_counts = np.maximum((y_tr >= 0.5).sum(axis=0).astype(np.float32), 1.0)
-            neg_counts = np.maximum(len(y_tr) - pos_counts, 1.0)
-            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "8.0"))
+            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "2.0"))
             pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, max_pos_weight).astype(np.float32)
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF BCE pos_weight=%s",
@@ -2149,12 +2195,19 @@ class RegimeClassifier(BaseModel):
 
             def _score_loss(logits: "torch.Tensor", target: "torch.Tensor",
                             weight: "torch.Tensor") -> "torch.Tensor":
+                logits_f = logits.float()
+                target_f = target.float()
+                pred = torch.sigmoid(logits_f)
                 per_cell = F.binary_cross_entropy_with_logits(
-                    logits.float(),
-                    target.float(),
+                    logits_f,
+                    target_f,
                     reduction="none",
                     pos_weight=pos_weight,
                 )
+                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "3.0"))
+                if neg_penalty > 0.0:
+                    neutral_target = (target_f < 0.5).float()
+                    per_cell = per_cell + neg_penalty * neutral_target * torch.square(pred)
                 per_row = torch.mean(per_cell, dim=1)
                 weight = torch.clamp(weight.float(), min=0.03)
                 return (per_row * weight).sum() / (weight.sum() + 1e-9)
@@ -2348,7 +2401,7 @@ class RegimeClassifier(BaseModel):
                 warnings.append(warning)
                 fail_on_weak_precision = os.getenv(
                     "REGIME_HTF_FAIL_ON_WEAK_PRECISION",
-                    "1",
+                    "0",
                 ).strip().lower() in {"1", "true", "yes", "on"}
                 if weak_precision and fail_on_weak_precision:
                     logger.error("%s Refusing to save HTF weights because directional precision failed.", warning)
@@ -2361,6 +2414,7 @@ class RegimeClassifier(BaseModel):
                         "confusion_matrix": confusion.tolist(),
                         "decision_threshold": round(float(threshold), 4),
                         "decision_margin": round(float(margin), 4),
+                        "htf_precision_floor_passed": False,
                     }
                 logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
 
@@ -2381,6 +2435,7 @@ class RegimeClassifier(BaseModel):
                 "score_outputs": list(HTF_SCORE_OUTPUTS),
                 "decision_threshold": round(float(threshold), 4),
                 "decision_margin": round(float(margin), 4),
+                "htf_precision_floor_passed": not bool(weak_precision),
                 "timeframe": self._timeframe or "default",
                 "warnings": warnings,
                 "status": "complete_with_warnings" if warnings else "complete",

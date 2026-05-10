@@ -404,7 +404,10 @@ def main():
     metrics = {}
     failures = []
 
-    for model_name in ["regime", "gru"]:
+    # GRU is independent of regime weights and is the main execution model.
+    # Train it first so a weak HTF regime run cannot prevent R-label diagnostics
+    # and GRU artifacts from being produced.
+    for model_name in ["gru", "regime"]:
         logger.info("--- Training %s ---", model_name)
         result = run_retrain(model_name)
         metrics[model_name] = result

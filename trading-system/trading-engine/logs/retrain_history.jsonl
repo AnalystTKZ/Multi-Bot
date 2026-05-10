@@ -1,0 +1,5 @@
+{"timestamp": "2026-05-10T02:59:25.865499+00:00", "model": "gru_lstm", "error": "No GRU symbol/timeframe produced trained weights"}
+{"timestamp": "2026-05-10T02:59:25.973208+00:00", "model": "regime_classifier", "error": "No regime symbol/timeframe produced trained weights"}
+{"timestamp": "2026-05-10T02:59:25.976453+00:00", "model": "quality_scorer", "error": "Journal not found: logs/trade_journal_detailed.jsonl"}
+{"timestamp": "2026-05-10T02:59:25.979922+00:00", "model": "rl_agent", "error": "Journal not found: logs/trade_journal_detailed.jsonl"}
+{"timestamp": "2026-05-10T02:59:25.980036+00:00", "model": "sentiment_model", "skipped": true, "reason": "FinBERT is pre-trained via HuggingFace"}
