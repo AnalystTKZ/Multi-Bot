@@ -138,9 +138,17 @@ print("\nAll scripts and inputs verified.")
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _base_env() -> dict:
+    default_symbols = os.getenv(
+        "TRADING_SYMBOLS",
+        "XAUUSD,EURUSD,USDJPY,EURJPY,GBPJPY,GBPUSD",
+    )
     return {
         **os.environ,
         "PYTHONPATH": f"{env['base']}:{env['base'] / 'trading-engine'}",
+        "TRADING_SYMBOLS": default_symbols,
+        "BACKTEST_SYMBOLS": os.getenv("BACKTEST_SYMBOLS", default_symbols),
+        "RETRAIN_SYMBOLS_GRU": os.getenv("RETRAIN_SYMBOLS_GRU", default_symbols),
+        "RETRAIN_SYMBOLS_REGIME": os.getenv("RETRAIN_SYMBOLS_REGIME", default_symbols),
     }
 
 
@@ -506,12 +514,14 @@ for rnd, fname in [("Round 1 (train-tail window)", "round1_summary.json"),
         print(f"  {rnd:<28}  (no result file)")
 print()
 
-# Mark the overall pipeline done (latest_summary.json checked by run_pipeline.py)
+# Mark the overall pipeline done (latest_summary.json checked by run_pipeline.py).
+# Use Round 2 blind-test evidence as canonical latest; Round 3 overlaps
+# train-tail and is supplemental only.
 import shutil
-r3 = env["base"] / "backtesting" / "results" / "round3_summary.json"
+r2 = env["base"] / "backtesting" / "results" / "round2_summary.json"
 latest = env["base"] / "backtesting" / "results" / "latest_summary.json"
-if r3.exists():
-    shutil.copy2(r3, latest)
+if r2.exists():
+    shutil.copy2(r2, latest)
 
 # ── Step 8: Push training outputs to GitHub ───────────────────────────────────
 push_script = env["base"] / "step8_push_to_github.py"

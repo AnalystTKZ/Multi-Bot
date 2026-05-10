@@ -342,11 +342,23 @@ class SignalPipeline:
         else:
             return None
 
+        _gru_expected_r = ml_preds.get("expected_r_gru")
+        if _gru_expected_r is not None:
+            _gru_expected_r = float(_gru_expected_r)
+            if np.isfinite(_gru_expected_r):
+                _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.0"))
+                if _gru_expected_r < _min_gru_r:
+                    logger.debug(
+                        "Signal rejected %s — GRU expected_R=%.3f < min=%.3f",
+                        symbol, _gru_expected_r, _min_gru_r,
+                    )
+                    return None
+
         # Gate 4: Directional tradeability — replaces old HTF bias + LTF routing
         # TRADEABLE_UP → buy only; TRADEABLE_DOWN → sell only; NO_TRADE_* → block
         _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
         _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
-        _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.55"))
+        _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.70"))
         _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
 
         _tradeability = classify_tradeability_directional(_ltf_trade_regime, _htf_bias)
@@ -450,7 +462,7 @@ class SignalPipeline:
         # E[R] = P(win) × RR − P(loss) × 1.0
         p_win = p_bull if side == "buy" else p_bear
         expected_r = p_win * actual_rr - (1.0 - p_win) * 1.0
-        _min_er = float(getattr(self._settings, "MIN_EXPECTED_R", 1.30))
+        _min_er = float(getattr(self._settings, "MIN_EXPECTED_R", 1.20))
         if expected_r < _min_er:
             logger.debug(
                 "Signal rejected %s %s — expected_R=%.3f < min_expected_R=%.2f "
@@ -476,6 +488,7 @@ class SignalPipeline:
                 "expected_variance": _uncertainty,
                 "p_bull":            p_bull,
                 "p_bear":            p_bear,
+                "expected_r_gru":    float(ml_preds.get("expected_r_gru", float("nan"))),
                 "atr":               atr,
                 "atr_at_entry":      atr,
                 "expected_r":        float(expected_r),

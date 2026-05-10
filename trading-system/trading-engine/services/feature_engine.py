@@ -875,6 +875,24 @@ class FeatureEngine:
         extra["bos_bull_strength"]  = bos_bull_str
         extra["bos_bear_strength"]  = bos_bear_str
 
+        # ── MSS / CHoCH + external structure ─────────────────────────────────
+        # compute_market_structure_scores may have already run early in this
+        # method (lines ~658-681) to populate out; reuse those columns when
+        # present so we don't recompute the swing arrays a second time.
+        _mss_feature_cols = (
+            "mss_bull_flag", "mss_bear_flag",
+            "mss_bull_bars_ago", "mss_bear_bars_ago",
+            "external_structure_score", "position_in_external_range",
+            "dist_to_external_high_atr", "dist_to_external_low_atr",
+        )
+        if all(c in out.columns for c in _mss_feature_cols):
+            _mss_src = out
+        else:
+            from indicators.market_structure import compute_market_structure_scores as _mss_scores_fn
+            _mss_src = _mss_scores_fn(out)
+        for _mc in _mss_feature_cols:
+            extra[_mc] = _mss_src[_mc].to_numpy(dtype=np.float32)
+
         # ── FVG distance + fill ratio ─────────────────────────────────────────
         # fvg_bull_top/bottom carry the FVG boundaries at the bar it formed; forward-fill
         # to get the most recent open FVG levels. Reset when fvg_bear forms (directional flip).

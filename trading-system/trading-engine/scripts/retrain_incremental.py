@@ -104,9 +104,22 @@ GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "50"))
 # 1024 per GPU × 2 GPUs (DataParallel) = 2048 effective batch; grad_accum×4 = 8192 logical.
 # Overrideable via env var for memory-constrained runs.
 GRU_BATCH_SIZE = int(os.getenv("GRU_BATCH_SIZE", "1024"))
-MAJOR_SYMBOLS = [
+SUPPORTED_SYMBOLS = [
     "XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD",
 ]
+MAJOR_SYMBOLS = [
+    s.strip().upper()
+    for s in os.getenv(
+        "TRADING_SYMBOLS",
+        "XAUUSD,EURUSD,USDJPY,EURJPY,GBPJPY,GBPUSD",
+    ).split(",")
+    if s.strip()
+]
+_unknown_default_symbols = [s for s in MAJOR_SYMBOLS if s not in SUPPORTED_SYMBOLS]
+if _unknown_default_symbols:
+    raise ValueError(f"Unsupported TRADING_SYMBOLS values: {_unknown_default_symbols}")
+if not MAJOR_SYMBOLS:
+    MAJOR_SYMBOLS = list(SUPPORTED_SYMBOLS)
 # All training timeframes — derived from step0 pipeline outputs
 ALL_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D", "1W", "1MN"]
 # GRU is a 15M execution model. Regime and higher-timeframe context are combined
@@ -186,7 +199,11 @@ def _get_symbols(env_name: str, default: list[str]) -> list[str]:
     raw = os.getenv(env_name, "")
     if not raw.strip():
         return default
-    return [s.strip().upper() for s in raw.split(",") if s.strip()]
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    unknown = [s for s in symbols if s not in SUPPORTED_SYMBOLS]
+    if unknown:
+        raise ValueError(f"Unsupported {env_name} values: {unknown}")
+    return symbols
 
 
 
@@ -646,6 +663,8 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         "groups_trained": history.get("groups_trained", 0),
         "val_loss_points": len(history.get("val_loss", [])),
         "best_val_direction_accuracy": history.get("best_val_direction_accuracy"),
+        "best_val_r_mae": history.get("best_val_r_mae"),
+        "best_val_positive_r_accuracy": history.get("best_val_positive_r_accuracy"),
     })
     return {"trained": True, "segments": len(segments), "samples": samples_total}
 
@@ -780,6 +799,8 @@ def retrain_gru(dry_run: bool = False) -> dict:
                 "samples": len(df_train),
                 "val_loss_points": len(history.get("val_loss", [])),
                 "best_val_direction_accuracy": history.get("best_val_direction_accuracy"),
+                "best_val_r_mae": history.get("best_val_r_mae"),
+                "best_val_positive_r_accuracy": history.get("best_val_positive_r_accuracy"),
             })
             trained += 1
             samples_total += len(df_train)

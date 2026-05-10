@@ -310,7 +310,7 @@ class RegimeClassifier(BaseModel):
     def _select_htf_bias_policy(cls, proba: np.ndarray, y_true: np.ndarray) -> tuple[float, float, dict]:
         min_precision = float(os.getenv(
             "REGIME_HTF_MIN_DIRECTIONAL_PRECISION",
-            os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"),
+            os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.50"),
         ))
         min_recall = float(os.getenv(
             "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
@@ -2108,7 +2108,8 @@ class RegimeClassifier(BaseModel):
 
             pos_counts = np.maximum((y_tr >= 0.5).sum(axis=0).astype(np.float32), 1.0)
             neg_counts = np.maximum(len(y_tr) - pos_counts, 1.0)
-            pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, 20.0).astype(np.float32)
+            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "8.0"))
+            pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, max_pos_weight).astype(np.float32)
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF BCE pos_weight=%s",
                 self._mode,
@@ -2310,7 +2311,7 @@ class RegimeClassifier(BaseModel):
 
             min_directional_precision = float(os.getenv(
                 "REGIME_HTF_MIN_DIRECTIONAL_PRECISION",
-                os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"),
+                os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.50"),
             ))
             min_directional_recall = float(os.getenv(
                 "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
@@ -2345,6 +2346,22 @@ class RegimeClassifier(BaseModel):
                     f"weak_f1={weak_f1} weak_neutral={weak_neutral}."
                 )
                 warnings.append(warning)
+                fail_on_weak_precision = os.getenv(
+                    "REGIME_HTF_FAIL_ON_WEAK_PRECISION",
+                    "1",
+                ).strip().lower() in {"1", "true", "yes", "on"}
+                if weak_precision and fail_on_weak_precision:
+                    logger.error("%s Refusing to save HTF weights because directional precision failed.", warning)
+                    return {
+                        "error": warning,
+                        "status": "failed_htf_precision_floor",
+                        "per_class_precision": per_class_precision,
+                        "per_class_accuracy": per_class_accuracy,
+                        "per_class_f1": per_class_f1,
+                        "confusion_matrix": confusion.tolist(),
+                        "decision_threshold": round(float(threshold), 4),
+                        "decision_margin": round(float(margin), 4),
+                    }
                 logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
 
             self.save(self.weight_path)
@@ -2610,6 +2627,120 @@ class RegimeClassifier(BaseModel):
                 target_std_map,
             )
 
+            group_diagnostics: dict = {}
+            if "symbol_group_code" in self._feature_names:
+                try:
+                    from services.regime_scores import classify_trade_regime
+
+                    group_idx = self._feature_names.index("symbol_group_code")
+                    trade_states = [
+                        "TRADEABLE_TREND",
+                        "TRADEABLE_TREND_HIGH_VOL",
+                        "RANGE",
+                        "CONSOLIDATION",
+                        "NO_TRADE_CHOP",
+                        "NO_TRADE_EXTREME_VOL",
+                        "NO_TRADE_UNCERTAIN",
+                    ]
+                    trade_state_to_id = {name: i for i, name in enumerate(trade_states)}
+
+                    def _group_name(code: float) -> str:
+                        if code >= 0.90:
+                            return "gold"
+                        if code >= 0.625:
+                            return "jpy"
+                        if code >= 0.375:
+                            return "cross"
+                        if code >= 0.125:
+                            return "dollar"
+                        return "unknown"
+
+                    def _score_state_ids(scores: np.ndarray) -> np.ndarray:
+                        out = np.empty(len(scores), dtype=np.int64)
+                        for row_i, row in enumerate(scores):
+                            payload = {name: float(row[col_i]) for col_i, name in enumerate(LTF_SCORE_OUTPUTS)}
+                            payload["volatility_score"] = payload.get("volatility_percentile", 0.0)
+                            payload["atr_percentile_500"] = payload.get("volatility_percentile", 0.0)
+                            payload["efficiency_ratio_20"] = max(payload.get("trend_score", 0.0), 0.0)
+                            out[row_i] = trade_state_to_id.get(
+                                classify_trade_regime(payload),
+                                trade_state_to_id["NO_TRADE_UNCERTAIN"],
+                            )
+                        return out
+
+                    def _predict_sample(X_src: np.ndarray, limit: int = 50_000) -> tuple[np.ndarray, np.ndarray]:
+                        if len(X_src) > limit:
+                            idx = np.linspace(0, len(X_src) - 1, limit, dtype=np.int64)
+                        else:
+                            idx = np.arange(len(X_src), dtype=np.int64)
+                        preds = []
+                        with torch.no_grad():
+                            for start in range(0, len(idx), batch_size * 2):
+                                xb = torch.from_numpy(
+                                    X_src[idx[start:start + batch_size * 2]].astype(np.float32, copy=False)
+                                ).to(DEVICE)
+                                with torch.amp.autocast("cuda", enabled=use_amp):
+                                    logits_b = self._model(xb)
+                                preds.append(torch.sigmoid(logits_b.float()).cpu().numpy())
+                        return idx, np.concatenate(preds, axis=0)
+
+                    def _group_report(name: str, X_src: np.ndarray, y_src: np.ndarray,
+                                      pred_src: Optional[np.ndarray] = None) -> dict:
+                        if pred_src is None:
+                            idx, pred_src = _predict_sample(X_src)
+                            y_sample = y_src[idx]
+                            groups = X_src[idx, group_idx]
+                        else:
+                            y_sample = y_src
+                            groups = X_src[:, group_idx]
+                        true_states = _score_state_ids(y_sample)
+                        pred_states = _score_state_ids(pred_src)
+                        report = {}
+                        for group in sorted({_group_name(float(v)) for v in groups}):
+                            mask = np.array([_group_name(float(v)) == group for v in groups], dtype=bool)
+                            if not mask.any():
+                                continue
+                            confusion = np.zeros((len(trade_states), len(trade_states)), dtype=np.int64)
+                            for t_id, p_id in zip(true_states[mask], pred_states[mask]):
+                                confusion[int(t_id), int(p_id)] += 1
+                            mae_g = np.mean(np.abs(pred_src[mask] - y_sample[mask]), axis=0)
+                            report[group] = {
+                                "n": int(mask.sum()),
+                                "score_mae": {
+                                    score_name: round(float(mae_g[i]), 4)
+                                    for i, score_name in enumerate(LTF_SCORE_OUTPUTS)
+                                },
+                                "target_score_mean": {
+                                    score_name: round(float(np.mean(y_sample[mask, i])), 4)
+                                    for i, score_name in enumerate(LTF_SCORE_OUTPUTS)
+                                },
+                                "pred_score_mean": {
+                                    score_name: round(float(np.mean(pred_src[mask, i])), 4)
+                                    for i, score_name in enumerate(LTF_SCORE_OUTPUTS)
+                                },
+                                "trade_states": trade_states,
+                                "confusion": confusion.tolist(),
+                            }
+                        logger.info("RegimeClassifier[mode=%s] %s group diagnostics=%s",
+                                    self._mode, name, report)
+                        return report
+
+                    group_diagnostics = {
+                        "train": _group_report("train", X_tr, y_tr),
+                        "validation": _group_report("validation", X_va, y_va, val_pred),
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "RegimeClassifier[mode=%s] group diagnostics failed: %s",
+                        self._mode,
+                        exc,
+                    )
+            else:
+                logger.warning(
+                    "RegimeClassifier[mode=%s] cannot verify symbol_group_code; feature is absent",
+                    self._mode,
+                )
+
             del X_tr_gpu, y_tr_gpu, sw_tr_gpu, X_va_gpu, y_va_gpu
             if DEVICE.type == "cuda":
                 torch.cuda.empty_cache()
@@ -2642,6 +2773,7 @@ class RegimeClassifier(BaseModel):
                 "score_mae": score_mae,
                 "score_mse": score_mse,
                 "score_corr": score_corr,
+                "group_diagnostics": group_diagnostics,
                 "score_outputs": list(LTF_SCORE_OUTPUTS),
                 "timeframe": self._timeframe or "default",
                 "warnings": warnings,
@@ -3128,7 +3260,7 @@ class RegimeClassifier(BaseModel):
                 if (y_va == _classes.index(name)).sum() > 0 and float(acc) < min_class_accuracy
             ]
             if self._mode == "htf_bias":
-                min_directional_precision = float(os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.30"))
+                min_directional_precision = float(os.getenv("REGIME_MIN_DIRECTIONAL_PRECISION", "0.50"))
                 min_directional_f1 = float(os.getenv("REGIME_MIN_DIRECTIONAL_F1", "0.30"))
                 directional_names = ("BIAS_UP", "BIAS_DOWN")
                 weak_precision = [

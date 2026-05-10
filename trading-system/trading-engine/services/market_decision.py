@@ -152,6 +152,14 @@ def combined_market_decision(
     if htf == "BIAS_DOWN" and side != "sell":
         return False, "htf_bias_conflict"
 
+    # MSS-against-bias: structure just broke in the direction OPPOSITE to HTF bias.
+    # A bearish MSS during BIAS_UP means sell-side structure is now controlling —
+    # trust the reversal signal over the stale bias label.
+    if htf == "BIAS_UP" and mss_bear:
+        return False, "mss_against_bias"
+    if htf == "BIAS_DOWN" and mss_bull:
+        return False, "mss_against_bias"
+
     if htf == "BIAS_NEUTRAL":
         if conf < neutral_threshold:
             return False, "neutral_bias_weak_conf"

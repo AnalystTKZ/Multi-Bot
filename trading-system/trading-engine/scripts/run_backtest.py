@@ -156,9 +156,23 @@ def _live_float_env(name: str) -> float:
     return float(os.getenv(name, str(_LIVE_SIGNAL_DEFAULTS[name])))
 
 
-_ALL_SYMBOLS = [
+_SUPPORTED_SYMBOLS = [
     "XAUUSD", "EURUSD", "USDJPY", "EURJPY", "GBPJPY", "GBPUSD",
 ]
+
+
+def _symbol_universe_from_env() -> list[str]:
+    raw = os.getenv("BACKTEST_SYMBOLS") or os.getenv("TRADING_SYMBOLS")
+    if raw is None or not raw.strip():
+        return list(_SUPPORTED_SYMBOLS)
+    requested = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    unknown = [s for s in requested if s not in _SUPPORTED_SYMBOLS]
+    if unknown:
+        raise ValueError(f"Unsupported BACKTEST_SYMBOLS/TRADING_SYMBOLS values: {unknown}")
+    return requested or list(_SUPPORTED_SYMBOLS)
+
+
+_ALL_SYMBOLS = _symbol_universe_from_env()
 
 # Single unified ML trader replaces all 5 ICT rule branches.
 # ICT conditions are encoded as numeric features; the GRU/EV stack decides trades.
@@ -394,6 +408,10 @@ def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
             expected_move = float(cache["expected_move"][idx])
             if not np.isnan(expected_move):
                 out["expected_move"] = expected_move
+        if "expected_r_gru" in cache:
+            expected_r_gru = float(cache["expected_r_gru"][idx])
+            if not np.isnan(expected_r_gru):
+                out["expected_r_gru"] = expected_r_gru
         if "entry_depth" in cache:
             entry_depth = float(cache["entry_depth"][idx])
             if not np.isnan(entry_depth):
@@ -1628,6 +1646,7 @@ def _precompute_ml_cache(
             "p_bull": np.full(n, np.nan, dtype=np.float32),
             "p_bear": np.full(n, np.nan, dtype=np.float32),
             "expected_move": np.full(n, np.nan, dtype=np.float32),
+            "expected_r_gru": np.full(n, np.nan, dtype=np.float32),
             "entry_depth": np.full(n, np.nan, dtype=np.float32),
             "expected_volatility": np.full(n, np.nan, dtype=np.float32),
             "expected_variance": np.full(n, np.nan, dtype=np.float32),
@@ -1680,7 +1699,7 @@ def _precompute_ml_cache(
                             with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
                                 dl, mp, lv = m(xb)
                             all_p_bull[b_start:b_end]  = torch.sigmoid(dl / _T).cpu().numpy()
-                            all_mag[b_start:b_end]     = torch.relu(mp).cpu().numpy()
+                            all_mag[b_start:b_end]     = mp.cpu().numpy()
                             all_log_var[b_start:b_end] = lv.cpu().numpy()
                             del xb, dl, mp, lv, batch_raw
 
@@ -1690,7 +1709,13 @@ def _precompute_ml_cache(
                         1e-4,
                         MAX_INFERENCE_VARIANCE,
                     ).astype(np.float32, copy=False)
-                    expected_move = np.clip(all_mag, 0.0, 1.0).astype(np.float32, copy=False)
+                    expected_r_gru = np.clip(all_mag, -1.0, 5.0).astype(np.float32, copy=False)
+                    expected_move = np.clip(
+                        np.maximum(expected_r_gru, 0.0)
+                        / max(float(os.getenv("GRU_LABEL_TARGET_R", "1.666667")), 1e-6),
+                        0.0,
+                        1.0,
+                    ).astype(np.float32, copy=False)
                     entry_depth = expected_move
                     vol_arr     = np.sqrt(var_vals)
 
@@ -1708,10 +1733,11 @@ def _precompute_ml_cache(
                     cache["p_bull"][bar_indices] = all_p_bull
                     cache["p_bear"][bar_indices] = p_bear_arr
                     cache["expected_move"][bar_indices] = expected_move
+                    cache["expected_r_gru"][bar_indices] = expected_r_gru
                     cache["entry_depth"][bar_indices] = entry_depth
                     cache["expected_volatility"][bar_indices] = vol_arr.astype(np.float32, copy=False)
                     cache["expected_variance"][bar_indices] = var_vals.astype(np.float32, copy=False)
-                    del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, expected_move, entry_depth, vol_arr
+                    del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, expected_r_gru, expected_move, entry_depth, vol_arr
             except Exception as exc:
                 logger.error("ML cache: GRU batch failed for %s: %s", symbol, exc)
                 del seq_arr
@@ -1857,13 +1883,22 @@ def _compute_backtest_signal(
         _reject("weak_gru_direction")
         return None
 
+    _gru_expected_r = ml_preds.get("expected_r_gru")
+    if _gru_expected_r is not None:
+        _gru_expected_r = float(_gru_expected_r)
+        if np.isfinite(_gru_expected_r):
+            _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.0"))
+            if _gru_expected_r < _min_gru_r:
+                _reject("gru_expected_r_below_threshold")
+                return None
+
     # ── Gate 4: Directional tradeability ─────────────────────────────────────
     # classify_tradeability_directional maps (ltf_trade_regime, htf_bias) →
     # TRADEABLE_UP / TRADEABLE_DOWN / NO_TRADE_*.
     # This replaces the old BIAS_UP/DOWN + TRENDING/RANGING routing.
     _htf_bias = str(ml_preds.get("regime", "BIAS_NEUTRAL"))
     _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
-    _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.55"))
+    _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.70"))
     _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
 
     _tradeability = classify_tradeability_directional(_ltf_trade_regime, _htf_bias)
@@ -1981,6 +2016,7 @@ def _compute_backtest_signal(
             "expected_variance": _uncertainty,
             "p_bull":            p_bull,
             "p_bear":            p_bear,
+            "expected_r_gru":    float(ml_preds.get("expected_r_gru", float("nan"))),
             "atr_at_entry":      atr,
             "range_width_atr":   _range_width,
             "pullback_valid":    _pullback_valid,
@@ -3261,16 +3297,22 @@ def _load_split_window(split: str) -> tuple[str, str]:
     if "_ENV" in globals() and _ENV is not None:
         _candidates.insert(0, _ENV.get("ml_training", Path()) / "datasets" / "split_summary.json")
 
+    split_errors: list[str] = []
     for _p in _candidates:
         try:
             _p = Path(_p).resolve()
             if _p.exists():
                 with open(_p) as _f:
                     _summary = json.load(_f)
+                _validate_required_split_summary(_summary, _p)
                 _dr = _summary["date_ranges"][split]
                 return _dr["start"][:10], _dr["end"][:10]
-        except Exception:
+        except Exception as exc:
+            split_errors.append(str(exc))
             continue
+
+    if split_errors:
+        raise RuntimeError("; ".join(split_errors))
 
     # Fallback: rolling 2-year window ending today
     _today = datetime.now(timezone.utc)
@@ -3278,6 +3320,20 @@ def _load_split_window(split: str) -> tuple[str, str]:
         _today.replace(year=_today.year - 2).strftime("%Y-%m-%d"),
         _today.strftime("%Y-%m-%d"),
     )
+
+
+def _validate_required_split_summary(summary: dict, path: Path) -> None:
+    if summary.get("split_method") != "expanding_calendar":
+        raise RuntimeError(
+            f"Stale/incompatible split_summary at {path}: "
+            f"split_method={summary.get('split_method')!r}; run pipeline/step5_split.py"
+        )
+    ranges = summary.get("date_ranges") or {}
+    missing = [name for name in ("train", "train_tail", "validation", "test") if name not in ranges]
+    if missing:
+        raise RuntimeError(
+            f"split_summary at {path} missing required ranges {missing}; run pipeline/step5_split.py"
+        )
 
 
 def _split_summary_metadata() -> dict:
@@ -3301,6 +3357,7 @@ def _split_summary_metadata() -> dict:
             }
             try:
                 summary = json.loads(payload.decode("utf-8"))
+                _validate_required_split_summary(summary, path)
                 for key in (
                     "date_ranges",
                     "rows",
@@ -3310,6 +3367,7 @@ def _split_summary_metadata() -> dict:
                     "selected_fold",
                     "fold_count",
                     "blind_test_policy",
+                    "train_tail_years",
                 ):
                     if key in summary:
                         meta[key] = summary[key]
@@ -3806,6 +3864,11 @@ def main():
     with open(outpath, "w") as f:
         json.dump(output, f, indent=2, default=str)
 
+    promotion_eligible = (
+        window_label == "test"
+        and _split_key == "test"
+        and not manual_window
+    )
     manifest = {
         "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -3825,13 +3888,27 @@ def main():
             "sha256": _sha256_file(Path(_ENGINE_DIR) / "logs" / "calibration_report.json"),
         },
         "diagnostic_breakdowns": diagnostic_breakdowns,
-        "promotion_status": "candidate_pending_review",
+        "promotion_eligible": promotion_eligible,
+        "promotion_status": (
+            "candidate_pending_review"
+            if promotion_eligible
+            else "not_promotion_eligible_use_round2_blind_test_only"
+        ),
     }
     manifest_path = Path(_ENGINE_DIR) / "logs" / f"promotion_manifest_{run_id}.json"
     latest_manifest_path = Path(_ENGINE_DIR) / "logs" / "promotion_manifest_latest.json"
-    for path in (manifest_path, latest_manifest_path):
-        with open(path, "w") as f:
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2, default=str)
+    if promotion_eligible:
+        with open(latest_manifest_path, "w") as f:
             json.dump(manifest, f, indent=2, default=str)
+    else:
+        logger.info(
+            "Promotion latest manifest not updated: split=%s requested_split=%s manual_window=%s",
+            window_label,
+            _split_key,
+            manual_window,
+        )
 
     logger.info("Backtest complete → %s", outpath)
     print(f"\nBacktest results → {outpath}")

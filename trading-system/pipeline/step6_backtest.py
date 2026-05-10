@@ -100,6 +100,7 @@ def _build_env() -> dict:
     env.setdefault("MAX_CONCURRENT_POSITIONS", "25")
     env.setdefault("PM_MIN_CONFIDENCE", "0.50")
     env.setdefault("ML_DIRECTION_THRESHOLD", "0.62")
+    env.setdefault("HTF_MIN_REGIME_CONFIDENCE", "0.70")
     env.setdefault("MAX_UNCERTAINTY", "1.0")
     env.setdefault("NEUTRAL_BIAS_THRESHOLD", "0.60")
     env.setdefault("VOLATILE_ENTRY_THRESHOLD", "0.70")
@@ -116,7 +117,24 @@ def _load_split_summary() -> dict:
             "split_summary.json not found at %s — run step5_split.py first", split_path
         )
         sys.exit(1)
-    return json.loads(split_path.read_text())
+    summary = json.loads(split_path.read_text())
+    if summary.get("split_method") != "expanding_calendar":
+        logger.error(
+            "Stale/incompatible split_summary at %s: split_method=%r — run step5_split.py",
+            split_path,
+            summary.get("split_method"),
+        )
+        sys.exit(1)
+    ranges = summary.get("date_ranges") or {}
+    missing = [name for name in ("train", "train_tail", "validation", "test") if name not in ranges]
+    if missing:
+        logger.error(
+            "split_summary at %s missing required ranges %s — run step5_split.py",
+            split_path,
+            missing,
+        )
+        sys.exit(1)
+    return summary
 
 
 def _split_summary_hash() -> str:

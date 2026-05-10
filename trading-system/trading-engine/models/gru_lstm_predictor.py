@@ -29,6 +29,10 @@ _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # tra
 WEIGHT_DIR  = os.path.join(_MODEL_ROOT, "weights", "gru_lstm") + os.sep
 WEIGHT_FILE = os.path.join(_MODEL_ROOT, "weights", "gru_lstm", "model.pt")
 MAX_INFERENCE_VARIANCE = float(os.getenv("GRU_MAX_INFERENCE_VARIANCE", "1.0"))
+GRU_LABEL_TARGET_R = float(os.getenv("GRU_LABEL_TARGET_ATR", "2.5")) / max(
+    float(os.getenv("GRU_LABEL_STOP_ATR", "1.5")),
+    1e-6,
+)
 
 
 def _calibrated_variance(log_variance_pred):
@@ -228,7 +232,8 @@ class GRULSTMPredictor(BaseModel):
             with torch.no_grad():
                 dir_logits, mag_pred, log_variance_pred = self._model(x)
                 p_bull_raw = float(torch.sigmoid(dir_logits[0] / self._temperature).item())
-                expected_move = float(np.clip(torch.relu(mag_pred)[0].item(), 0.0, 1.0))
+                expected_r_gru = float(np.clip(mag_pred[0].item(), -1.0, GRU_LABEL_TARGET_R))
+                expected_move = float(np.clip(max(expected_r_gru, 0.0) / max(GRU_LABEL_TARGET_R, 1e-6), 0.0, 1.0))
                 expected_variance = float(_calibrated_variance(log_variance_pred)[0].item())
                 expected_volatility = float(np.sqrt(expected_variance))
                 entry_depth = expected_move
@@ -244,6 +249,7 @@ class GRULSTMPredictor(BaseModel):
                 "p_bear": float(np.clip(1.0 - p_bull, 0.0, 1.0)),
                 "entry_depth": entry_depth,
                 "expected_move": expected_move,
+                "expected_r_gru": expected_r_gru,
                 "expected_volatility": expected_volatility,
                 "expected_variance": expected_variance,
             }
@@ -464,7 +470,7 @@ class GRULSTMPredictor(BaseModel):
             avg_move = float(np.mean(targets[:, 1]))
             avg_vol = float(np.mean(targets[:, 2]))
             logger.info(
-                "GRU targets samples=%d pos_rate=%.4f avg_move=%.6f avg_vol=%.6f",
+                "GRU targets samples=%d long_side_rate=%.4f avg_realized_r=%.6f avg_vol=%.6f",
                 n_seq, pos_rate, avg_move, avg_vol,
             )
 
@@ -508,6 +514,8 @@ class GRULSTMPredictor(BaseModel):
 
             best_val = float("inf")
             best_dir_acc = 0.0
+            best_val_r_mae = float("inf")
+            best_positive_r_acc = 0.0
             patience, no_improve = 5, 0
             history = {"train_loss": [], "val_loss": [], "val_direction_accuracy": []}
 
@@ -530,10 +538,10 @@ class GRULSTMPredictor(BaseModel):
                 else:
                     loss_dir = torch.tensor(0.0, device=dir_logits.device)
 
-                # Magnitude: Huber loss on non-NaN bars
+                # Outcome: Huber loss on signed realized R-multiple.
                 mag_mask = ~torch.isnan(y_mag)
                 if mag_mask.sum() > 0:
-                    loss_mag = criterion_mag(torch.relu(mag_pred[mag_mask]), y_mag[mag_mask])
+                    loss_mag = criterion_mag(mag_pred[mag_mask], y_mag[mag_mask])
                 else:
                     loss_mag = torch.tensor(0.0, device=mag_pred.device)
 
@@ -573,6 +581,10 @@ class GRULSTMPredictor(BaseModel):
                 val_loss = 0.0
                 val_dir_correct = 0
                 val_dir_total = 0
+                val_r_abs = 0.0
+                val_r_total = 0
+                val_positive_r_correct = 0
+                val_positive_r_total = 0
                 with torch.no_grad():
                     for xb, yb in val_dl:
                         xb, yb = xb.to(DEVICE), yb.to(DEVICE)
@@ -590,20 +602,35 @@ class GRULSTMPredictor(BaseModel):
                             true_up = yb[:, 0][dir_mask] > 0.5
                             val_dir_correct += int((pred_up == true_up).sum().item())
                             val_dir_total += int(dir_mask.sum().item())
+                        r_mask = ~torch.isnan(yb[:, 1])
+                        if r_mask.sum() > 0:
+                            pred_r = mag_pred[r_mask]
+                            true_r = yb[:, 1][r_mask]
+                            val_r_abs += float(torch.abs(pred_r - true_r).sum().item())
+                            val_r_total += int(r_mask.sum().item())
+                            val_positive_r_correct += int(((pred_r > 0.0) == (true_r > 0.0)).sum().item())
+                            val_positive_r_total += int(r_mask.sum().item())
                 val_loss /= max(1, len(val_ds))
                 val_dir_acc = float(val_dir_correct / max(val_dir_total, 1))
+                val_r_mae = float(val_r_abs / max(val_r_total, 1))
+                val_positive_r_acc = float(val_positive_r_correct / max(val_positive_r_total, 1))
 
                 history["train_loss"].append(train_loss)
                 history["val_loss"].append(val_loss)
                 history["val_direction_accuracy"].append(val_dir_acc)
+                history.setdefault("val_r_mae", []).append(val_r_mae)
+                history.setdefault("val_positive_r_accuracy", []).append(val_positive_r_acc)
                 logger.info(
-                    "GRU epoch %d/%d — train=%.4f val=%.4f dir_acc=%.3f dir_n=%d",
-                    epoch + 1, epochs, train_loss, val_loss, val_dir_acc, val_dir_total,
+                    "GRU epoch %d/%d — train=%.4f val=%.4f r_mae=%.3f pos_r_acc=%.3f side_acc=%.3f r_n=%d",
+                    epoch + 1, epochs, train_loss, val_loss, val_r_mae,
+                    val_positive_r_acc, val_dir_acc, val_r_total,
                 )
 
                 if val_loss < best_val:
                     best_val = val_loss
                     best_dir_acc = val_dir_acc
+                    best_val_r_mae = val_r_mae
+                    best_positive_r_acc = val_positive_r_acc
                     no_improve = 0
                     self.save(WEIGHT_DIR)
                 else:
@@ -612,16 +639,18 @@ class GRULSTMPredictor(BaseModel):
                         logger.info("GRU early stop at epoch %d", epoch + 1)
                         break
 
-            min_dir_acc = float(os.getenv("GRU_MIN_VAL_DIRECTION_ACCURACY", "0.52"))
-            if best_dir_acc < min_dir_acc:
+            max_r_mae = float(os.getenv("GRU_MAX_VAL_R_MAE", "0.75"))
+            if best_val_r_mae > max_r_mae:
                 warning = (
-                    f"GRU validation direction accuracy below floor: "
-                    f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
+                    f"GRU validation R-MAE above floor: "
+                    f"best_val_r_mae={best_val_r_mae:.3f} max={max_r_mae:.3f}"
                 )
                 logger.warning("%s. Keeping saved best weights so the pipeline can progress.", warning)
                 history.setdefault("warnings", []).append(warning)
                 history["status"] = "complete_with_warnings"
             history["best_val_direction_accuracy"] = best_dir_acc
+            history["best_val_r_mae"] = best_val_r_mae
+            history["best_val_positive_r_accuracy"] = best_positive_r_acc
             return history
         except Exception as exc:
             logger.error("GRULSTMPredictor.train failed: %s", exc)
@@ -902,7 +931,7 @@ class GRULSTMPredictor(BaseModel):
                     dir_mask = ~torch.isnan(y_dir)
                     loss_dir = criterion_dir(dl[dir_mask], y_dir[dir_mask]).mean() if dir_mask.sum() > 0 else dl.sum() * 0
                     mag_mask = ~torch.isnan(y_mag)
-                    loss_mag = criterion_mag(torch.relu(mp[mag_mask]), y_mag[mag_mask]) if mag_mask.sum() > 0 else mp.sum() * 0
+                    loss_mag = criterion_mag(mp[mag_mask], y_mag[mag_mask]) if mag_mask.sum() > 0 else mp.sum() * 0
                     vol_mask = ~torch.isnan(y_vol)
                     if vol_mask.sum() > 0:
                         # Clamp variance in [1e-4, 1.0] — prevents NLL going negative.
@@ -920,6 +949,8 @@ class GRULSTMPredictor(BaseModel):
 
                 best_val = float("inf")
                 best_dir_acc = 0.0
+                best_val_r_mae = float("inf")
+                best_positive_r_acc = 0.0
                 patience, no_improve = _patience, 0
 
                 # Move val set to GPU once — it's small enough (~600K × 30 × F ≈ 600MB)
@@ -964,6 +995,10 @@ class GRULSTMPredictor(BaseModel):
                     val_loss = 0.0
                     val_dir_correct = 0
                     val_dir_total = 0
+                    val_r_abs = 0.0
+                    val_r_total = 0
+                    val_positive_r_correct = 0
+                    val_positive_r_total = 0
                     with torch.no_grad():
                         val_bs = batch_size * 2   # larger batches during eval (no backward pass)
                         for v_start in range(0, n_val, val_bs):
@@ -980,20 +1015,35 @@ class GRULSTMPredictor(BaseModel):
                                 true_up = yb[:, 0][dir_mask] > 0.5
                                 val_dir_correct += int((pred_up == true_up).sum().item())
                                 val_dir_total += int(dir_mask.sum().item())
+                            r_mask = ~torch.isnan(yb[:, 1])
+                            if r_mask.sum() > 0:
+                                pred_r = mp[r_mask]
+                                true_r = yb[:, 1][r_mask]
+                                val_r_abs += float(torch.abs(pred_r - true_r).sum().item())
+                                val_r_total += int(r_mask.sum().item())
+                                val_positive_r_correct += int(((pred_r > 0.0) == (true_r > 0.0)).sum().item())
+                                val_positive_r_total += int(r_mask.sum().item())
                     val_loss /= max(1, n_val)
                     val_dir_acc = float(val_dir_correct / max(val_dir_total, 1))
+                    val_r_mae = float(val_r_abs / max(val_r_total, 1))
+                    val_positive_r_acc = float(val_positive_r_correct / max(val_positive_r_total, 1))
 
                     combined_history["train_loss"].append(train_loss)
                     combined_history["val_loss"].append(val_loss)
                     combined_history.setdefault("val_direction_accuracy", []).append(val_dir_acc)
+                    combined_history.setdefault("val_r_mae", []).append(val_r_mae)
+                    combined_history.setdefault("val_positive_r_accuracy", []).append(val_positive_r_acc)
                     logger.info(
-                        "train_multi TF=%s epoch %d/%d train=%.4f val=%.4f dir_acc=%.3f dir_n=%d",
-                        tf, epoch + 1, epochs, train_loss, val_loss, val_dir_acc, val_dir_total,
+                        "train_multi TF=%s epoch %d/%d train=%.4f val=%.4f r_mae=%.3f pos_r_acc=%.3f side_acc=%.3f r_n=%d",
+                        tf, epoch + 1, epochs, train_loss, val_loss, val_r_mae,
+                        val_positive_r_acc, val_dir_acc, val_r_total,
                     )
 
                     if val_loss < best_val:
                         best_val = val_loss
                         best_dir_acc = val_dir_acc
+                        best_val_r_mae = val_r_mae
+                        best_positive_r_acc = val_positive_r_acc
                         no_improve = 0
                         self.save(WEIGHT_DIR)
                         logger.info("train_multi TF=%s: new best val=%.4f — saved", tf, best_val)
@@ -1009,16 +1059,18 @@ class GRULSTMPredictor(BaseModel):
                 import gc; gc.collect()
                 if DEVICE.type == "cuda":
                     torch.cuda.empty_cache()
-                min_dir_acc = float(os.getenv("GRU_MIN_VAL_DIRECTION_ACCURACY", "0.52"))
-                if best_dir_acc < min_dir_acc:
+                max_r_mae = float(os.getenv("GRU_MAX_VAL_R_MAE", "0.75"))
+                if best_val_r_mae > max_r_mae:
                     warning = (
-                        f"GRU validation direction accuracy below floor for TF={tf}: "
-                        f"best_dir_acc={best_dir_acc:.3f} min={min_dir_acc:.3f}"
+                        f"GRU validation R-MAE above floor for TF={tf}: "
+                        f"best_val_r_mae={best_val_r_mae:.3f} max={max_r_mae:.3f}"
                     )
                     logger.warning("%s. Keeping saved best weights so the pipeline can progress.", warning)
                     combined_history.setdefault("warnings", []).append(warning)
                     combined_history["status"] = "complete_with_warnings"
                 combined_history["best_val_direction_accuracy"] = best_dir_acc
+                combined_history["best_val_r_mae"] = best_val_r_mae
+                combined_history["best_val_positive_r_accuracy"] = best_positive_r_acc
 
             return combined_history
         except Exception as exc:
@@ -1033,18 +1085,19 @@ class GRULSTMPredictor(BaseModel):
         volatility_window: Optional[int] = None,
     ) -> pd.DataFrame:
         """
-        Institutional-grade multi-head labels — predict actionable structure.
+        Institutional-grade multi-head labels — predict actionable trade outcome.
 
         horizon_bars=12 on 15M ≈ 3 hours ahead (enough signal, not 1-bar noise).
 
         direction_up:
-            Dead-zone filtered by ATR threshold — only label bars where the
-            k-step move exceeds 0.3× ATR. Labels outside the dead zone are
-            smoothed (0.05) to prevent overconfidence. Dead-zone bars = NaN,
-            excluded from BCE loss via masking in the training loop.
+            By default, derived from forward trade geometry rather than close-to-
+            close direction. For each bar we simulate long and short stop/target
+            outcomes over the horizon, choose the better side, and
+            leave non-actionable bars as NaN so the BCE loss ignores them.
 
         move_magnitude:
-            log1p(|k-step log return|) — Huber-robust regression target.
+            Signed best realized R-multiple. This keeps the regression head
+            aligned with the backtest objective instead of raw direction size.
 
         volatility_target:
             Rolling std of forward 1-step log-returns — model learns when NOT
@@ -1089,6 +1142,132 @@ class GRULSTMPredictor(BaseModel):
         up_exc_atr = ((f_high - close) / (atr + 1e-9)).clip(lower=0.0)
         down_exc_atr = ((close - f_low) / (atr + 1e-9)).clip(lower=0.0)
         terminal_atr = (future_close - close) / (atr + 1e-9)
+
+        label_mode = os.getenv("GRU_LABEL_MODE", "trade_r").strip().lower()
+        if label_mode in {"trade_r", "r_multiple", "trade_outcome"}:
+            stop_atr = max(float(os.getenv("GRU_LABEL_STOP_ATR", "1.5")), 1e-6)
+            target_atr = max(float(os.getenv("GRU_LABEL_TARGET_ATR", "2.5")), 1e-6)
+            target_r = target_atr / stop_atr
+            min_side_edge_r = float(os.getenv("GRU_LABEL_MIN_SIDE_EDGE_R", "0.10"))
+
+            close_arr = close.to_numpy(dtype=np.float64, copy=False)
+            high_arr = df["high"].astype(float).to_numpy(dtype=np.float64, copy=False)
+            low_arr = df["low"].astype(float).to_numpy(dtype=np.float64, copy=False)
+            atr_arr = atr.to_numpy(dtype=np.float64, copy=False)
+            n_rows = len(df)
+
+            long_tp = close_arr + target_atr * atr_arr
+            long_sl = close_arr - stop_atr * atr_arr
+            short_tp = close_arr - target_atr * atr_arr
+            short_sl = close_arr + stop_atr * atr_arr
+            long_r = np.full(n_rows, np.nan, dtype=np.float32)
+            short_r = np.full(n_rows, np.nan, dtype=np.float32)
+            long_done = np.zeros(n_rows, dtype=bool)
+            short_done = np.zeros(n_rows, dtype=bool)
+            valid_base = (
+                np.isfinite(close_arr)
+                & np.isfinite(atr_arr)
+                & (atr_arr > 0.0)
+                & (np.arange(n_rows) < (n_rows - horizon_bars))
+            )
+
+            for step_i in range(1, horizon_bars + 1):
+                future_high = np.empty_like(high_arr)
+                future_low = np.empty_like(low_arr)
+                future_high[:-step_i] = high_arr[step_i:]
+                future_high[-step_i:] = np.nan
+                future_low[:-step_i] = low_arr[step_i:]
+                future_low[-step_i:] = np.nan
+                valid_step = valid_base & np.isfinite(future_high) & np.isfinite(future_low)
+
+                long_stop_hit = valid_step & (future_low <= long_sl)
+                long_target_hit = valid_step & (future_high >= long_tp)
+                long_resolve = (~long_done) & (long_stop_hit | long_target_hit)
+                # Conservative same-bar policy: if both TP and SL print inside
+                # one candle, count the stop first because tick order is unknown.
+                long_r[long_resolve & long_stop_hit] = -1.0
+                long_r[long_resolve & ~long_stop_hit & long_target_hit] = target_r
+                long_done |= long_resolve
+
+                short_stop_hit = valid_step & (future_high >= short_sl)
+                short_target_hit = valid_step & (future_low <= short_tp)
+                short_resolve = (~short_done) & (short_stop_hit | short_target_hit)
+                short_r[short_resolve & short_stop_hit] = -1.0
+                short_r[short_resolve & ~short_stop_hit & short_target_hit] = target_r
+                short_done |= short_resolve
+
+            future_close_arr = future_close.to_numpy(dtype=np.float64, copy=False)
+            unresolved = valid_base & np.isfinite(future_close_arr)
+            terminal_long_r = np.clip((future_close_arr - close_arr) / (stop_atr * atr_arr + 1e-9), -1.0, target_r)
+            terminal_short_r = np.clip((close_arr - future_close_arr) / (stop_atr * atr_arr + 1e-9), -1.0, target_r)
+            long_r[unresolved & ~long_done] = terminal_long_r[unresolved & ~long_done]
+            short_r[unresolved & ~short_done] = terminal_short_r[unresolved & ~short_done]
+
+            smoothing = 0.05
+            side_labelable = valid_base & np.isfinite(long_r) & np.isfinite(short_r)
+            best_long = (
+                side_labelable
+                & ((long_r - short_r) >= min_side_edge_r)
+            )
+            best_short = (
+                side_labelable
+                & ((short_r - long_r) >= min_side_edge_r)
+            )
+            if not bool(np.any(best_long | best_short)):
+                best_long = (
+                    side_labelable
+                    & (long_r >= short_r)
+                )
+                best_short = (
+                    side_labelable
+                    & (short_r > long_r)
+                )
+            direction_up = pd.Series(np.nan, index=df.index, dtype=np.float32)
+            direction_up.iloc[np.where(best_long)[0]] = 1.0 - smoothing
+            direction_up.iloc[np.where(best_short)[0]] = 0.0 + smoothing
+
+            best_r_arr = np.where(long_r >= short_r, long_r, short_r).astype(np.float32)
+            move_magnitude = pd.Series(
+                np.clip(best_r_arr, -1.0, target_r),
+                index=df.index,
+                dtype=np.float32,
+            )
+            move_magnitude[~side_labelable] = np.nan
+
+            positive_r_score = pd.Series(
+                np.clip(np.maximum(best_r_arr, 0.0) / max(target_r, 1e-6), 0.0, 1.0),
+                index=df.index,
+                dtype=np.float32,
+            )
+            positive_r_score[~side_labelable] = np.nan
+
+            abs_moves = np.abs(close.diff()).rolling(horizon_bars, min_periods=horizon_bars).sum().shift(-horizon_bars)
+            net_move = np.abs(close.shift(-horizon_bars) - close)
+            eff_ratio = (net_move / (abs_moves + 1e-9)).clip(0, 1).astype(np.float32)
+
+            forward_range_atr = ((f_high - f_low) / (atr + 1e-9)).clip(lower=0.0)
+            vol_target = (
+                0.5 * vol_target.fillna(0.0).clip(lower=0.0) * 100.0
+                + 0.5 * (forward_range_atr / 4.0)
+            ).clip(0.0, 1.0).astype(np.float32)
+            entry_depth = positive_r_score.clip(0.0, 1.0)
+
+            label_df = pd.DataFrame(
+                {
+                    "direction_up": direction_up,
+                    "future_return": log_ret_k.astype(np.float32),
+                    "move_magnitude": move_magnitude,
+                    "volatility_target": vol_target,
+                    "efficiency_ratio": eff_ratio,
+                    "entry_depth": entry_depth.astype(np.float32),
+                    "realized_r_long": pd.Series(long_r, index=df.index, dtype=np.float32),
+                    "realized_r_short": pd.Series(short_r, index=df.index, dtype=np.float32),
+                    "realized_r_best": pd.Series(best_r_arr, index=df.index, dtype=np.float32),
+                },
+                index=df.index,
+            )
+            label_df.iloc[-horizon_bars:, :] = np.nan
+            return label_df
 
         close_arr = close.to_numpy(dtype=np.float64, copy=False)
         high_arr = df["high"].astype(float).to_numpy(dtype=np.float64, copy=False)
