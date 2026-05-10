@@ -352,7 +352,7 @@ class SignalPipeline:
         if _gru_expected_r is not None:
             _gru_expected_r = float(_gru_expected_r)
             if np.isfinite(_gru_expected_r):
-                _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.30"))
+                _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.50"))  # raised 0.30→0.50: low R predictions were not filtering enough bad trades
                 if _gru_expected_r < _min_gru_r:
                     logger.debug(
                         "Signal rejected %s %s — GRU side_R=%.3f < min=%.3f",

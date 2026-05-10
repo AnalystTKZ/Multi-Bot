@@ -669,7 +669,7 @@ class RegimeClassifier(BaseModel):
     # 15M/default: 14 bars ≈ 3.5 hours. Using 14 everywhere collapses all
     # 4H distributions to nearly identical centroids → poor GMM separation.
     _TF_NBAR: dict = {"4H": 50, "1H": 24, "15M": 14, "5M": 10}
-    _TF_LABEL_HORIZON: dict = {"4H": 24, "1H": 12, "15M": 16, "5M": 24}  # 4H: 12→24 (2d→4d)
+    _TF_LABEL_HORIZON: dict = {"4H": 12, "1H": 12, "15M": 16, "5M": 24}  # 4H reverted 24→12 (4d→2d): 24-bar horizon labels were too ambiguous, hurting precision
     _DEFAULT_NBAR = 14
 
     @staticmethod

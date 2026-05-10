@@ -100,7 +100,7 @@ if RETRAIN_DATA_SPLIT != "train" and not _ALLOW_NONTRAIN_RETRAIN:
 logger.info("Retrain data split: %s", RETRAIN_DATA_SPLIT)
 RETRAIN_ROLLING_FOLD = os.getenv("RETRAIN_ROLLING_FOLD", "latest").strip().lower()
 logger.info("Retrain rolling fold selector: %s", RETRAIN_ROLLING_FOLD)
-GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "50"))
+GRU_EPOCHS = int(os.getenv("GRU_EPOCHS", "100"))  # raised from 50 — cold-start was still improving at epoch 50
 # 1024 per GPU × 2 GPUs (DataParallel) = 2048 effective batch; grad_accum×4 = 8192 logical.
 # Overrideable via env var for memory-constrained runs.
 GRU_BATCH_SIZE = int(os.getenv("GRU_BATCH_SIZE", "1024"))
