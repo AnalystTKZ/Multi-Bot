@@ -91,7 +91,7 @@ _FIELDNAMES = [
     "range_age_bars",
     "fakeout_prob",
     # Model scores
-    "p_win",           # quality_score at candidate time
+    "p_win",                 # quality_score at candidate time
     "p_bull",
     "p_bear",
     "sentiment_score",
@@ -99,6 +99,10 @@ _FIELDNAMES = [
     "ev",
     "rr_ratio",
     "confidence",
+    # GRU expected-R fields — required for calibration and per-symbol threshold tuning
+    "expected_r_long",       # GRU head_r_long prediction (always populated)
+    "expected_r_short",      # GRU head_r_short prediction (always populated)
+    "selected_expected_r",   # side-specific R: expected_r_long for buys, expected_r_short for sells
     "rejection_reason",
     "pm_open_positions_seen",
     "hypothetical_pnl",

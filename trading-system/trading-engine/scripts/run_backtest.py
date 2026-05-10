@@ -1224,6 +1224,16 @@ def _candidate_feature_row(
         "ev": float(ml_preds.get("ev", 0.0) or 0.0),
         "rr_ratio": raw_signal.get("rr_ratio", ""),
         "confidence": float(raw_signal.get("confidence", 0.0) or 0.0),
+        # GRU side-conditioned expected R — key for calibration and per-symbol threshold analysis.
+        # expected_r_long/short always populated from GRU; selected_expected_r is the side used
+        # to make the trade decision (long→buy gate, short→sell gate).
+        "expected_r_long": float(ml_preds.get("expected_r_long", float("nan"))),
+        "expected_r_short": float(ml_preds.get("expected_r_short", float("nan"))),
+        "selected_expected_r": float(
+            ml_preds.get("expected_r_long", float("nan"))
+            if str(raw_signal.get("side", "")).lower() == "buy"
+            else ml_preds.get("expected_r_short", float("nan"))
+        ),
         "rejection_reason": rejection_reason,
         "pm_open_positions_seen": pm_open_positions_seen,
     }

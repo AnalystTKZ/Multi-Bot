@@ -993,11 +993,32 @@ class GRULSTMPredictor(BaseModel):
                 use_amp = DEVICE.type == "cuda"
                 scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
+                _rank_lambda = float(os.getenv("GRU_RANKING_LAMBDA", "0.20"))
+
+                def _listnet_rank_loss(pred: "torch.Tensor", true: "torch.Tensor") -> "torch.Tensor":
+                    """
+                    ListNet ranking loss: penalizes predicted R that mis-orders
+                    the realized-R ranking within the batch.
+                    High predicted R should correlate with high realized R.
+                    Temperature=0.5 sharpens the softmax so the top/bottom
+                    deciles drive most of the gradient (not the noisy middle).
+                    """
+                    if len(pred) < 4:
+                        return pred.sum() * 0
+                    scale = true.abs().mean().clamp(min=0.1).detach()
+                    p_dist = torch.softmax(pred / (0.5 * scale), dim=0)
+                    t_dist = torch.softmax(true.detach() / (0.5 * scale), dim=0)
+                    return torch.nn.functional.kl_div(
+                        torch.log(p_dist.clamp(min=1e-8)),
+                        t_dist.clamp(min=1e-8),
+                        reduction="sum",
+                    )
+
                 def _loss_tm(dl, rl, rs, lv, yb):
                     """
                     yb[:, 0] = direction_up, yb[:, 1] = realized_r_long,
                     yb[:, 2] = realized_r_short, yb[:, 3] = volatility_target.
-                    λ: dir=2.0 (was 1.0), r_long=0.5, r_short=0.5, vol=0.3.
+                    λ: dir=2.0, r_long=0.5, r_short=0.5, vol=0.3, rank=GRU_RANKING_LAMBDA(0.20).
                     """
                     y_dir, y_r_long, y_r_short, y_vol = yb[:, 0], yb[:, 1], yb[:, 2], yb[:, 3]
                     dir_mask = ~torch.isnan(y_dir)
@@ -1010,6 +1031,13 @@ class GRULSTMPredictor(BaseModel):
                     short_mask = ~torch.isnan(y_r_short)
                     loss_r_short = criterion_mag(rs[short_mask], y_r_short[short_mask]) if short_mask.sum() > 0 else rs.sum() * 0
 
+                    # Ranking loss: predicted R should order setups by realized R within
+                    # the batch. Huber regression minimizes mean error but is indifferent
+                    # to ordering — a setup predicted at 0.6R ranking above one at 0.1R
+                    # matters more than hitting the exact values.
+                    loss_rank_long  = _listnet_rank_loss(rl[long_mask],  y_r_long[long_mask])  if long_mask.sum()  >= 4 else rl.sum() * 0
+                    loss_rank_short = _listnet_rank_loss(rs[short_mask], y_r_short[short_mask]) if short_mask.sum() >= 4 else rs.sum() * 0
+
                     vol_mask = ~torch.isnan(y_vol)
                     if vol_mask.sum() > 0:
                         # Clamp variance in [1e-4, 1.0] — prevents NLL going negative.
@@ -1020,7 +1048,12 @@ class GRULSTMPredictor(BaseModel):
                             min=0.0)
                     else:
                         loss_vol = lv.sum() * 0
-                    return 2.0 * loss_dir + 0.5 * loss_r_long + 0.5 * loss_r_short + 0.3 * loss_vol
+                    return (
+                        2.0 * loss_dir
+                        + 0.5 * loss_r_long + 0.5 * loss_r_short
+                        + _rank_lambda * (loss_rank_long + loss_rank_short)
+                        + 0.3 * loss_vol
+                    )
 
                 best_val = float("inf")
                 best_dir_acc = 0.0

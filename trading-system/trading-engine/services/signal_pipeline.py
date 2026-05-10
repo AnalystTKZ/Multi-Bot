@@ -70,6 +70,27 @@ class SignalPipeline:
         self._ohlcv: Dict[str, Dict[str, pd.DataFrame]] = {}
         self._bar_count = 0
 
+        # Per-symbol/side GRU R thresholds calibrated from training label distributions.
+        # Shape: {symbol: {side: {q25, q50, n}}}. Loaded once at init; falls back to the
+        # global GRU_MIN_EXPECTED_R_MULTIPLE env var when a symbol/side is not present.
+        self._sym_r_thresholds: dict = {}
+        _thresh_candidates = [
+            os.path.join(os.path.dirname(__file__), "..", "weights", "gru_lstm", "symbol_r_thresholds.json"),
+            os.path.join(os.path.dirname(__file__), "..", "..", "weights", "gru_lstm", "symbol_r_thresholds.json"),
+        ]
+        import json as _init_json
+        for _tp in _thresh_candidates:
+            _tp = os.path.normpath(_tp)
+            if os.path.exists(_tp):
+                try:
+                    with open(_tp) as _tf_in:
+                        self._sym_r_thresholds = _init_json.load(_tf_in)
+                    logger.info("Loaded per-symbol GRU R thresholds from %s (%d symbols)",
+                                _tp, len(self._sym_r_thresholds))
+                except Exception as _te:
+                    logger.warning("Failed to load GRU R thresholds from %s: %s", _tp, _te)
+                break
+
     def update_ohlcv(self, symbol: str, timeframe: str, df: pd.DataFrame) -> None:
         self._ohlcv.setdefault(symbol, {})[timeframe] = df
 
@@ -343,8 +364,9 @@ class SignalPipeline:
             return None
 
         # GRU side-conditioned expected R gate — uses the head for the predicted side.
-        # Default 0.30 means the model must predict the entry side will yield ≥0.30R.
-        # Pre-fix this was 0.0 (disabled). Raise GRU_MIN_EXPECTED_R_MULTIPLE to tighten.
+        # Per-symbol/side thresholds loaded from weights/gru_lstm/symbol_r_thresholds.json
+        # (calibrated from training label Q25 per symbol × side after each GRU training run).
+        # Falls back to global GRU_MIN_EXPECTED_R_MULTIPLE when no per-symbol data exists.
         _side_r_key = "expected_r_long" if side == "buy" else "expected_r_short"
         _gru_expected_r = ml_preds.get(_side_r_key)
         if _gru_expected_r is None:
@@ -352,11 +374,20 @@ class SignalPipeline:
         if _gru_expected_r is not None:
             _gru_expected_r = float(_gru_expected_r)
             if np.isfinite(_gru_expected_r):
-                _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.50"))  # raised 0.30→0.50: low R predictions were not filtering enough bad trades
+                _global_min_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.50"))
+                # Look up per-symbol/side threshold from calibrated JSON; use Q25 as gate.
+                _sym_side_data = self._sym_r_thresholds.get(symbol, {}).get(side, {})
+                if _sym_side_data:
+                    _min_gru_r = float(_sym_side_data.get("q25", _global_min_r))
+                    # Don't allow per-symbol threshold to go below a hard floor of 0.20
+                    # (prevents degenerate symbols from disabling the gate entirely).
+                    _min_gru_r = max(_min_gru_r, 0.20)
+                else:
+                    _min_gru_r = _global_min_r
                 if _gru_expected_r < _min_gru_r:
                     logger.debug(
-                        "Signal rejected %s %s — GRU side_R=%.3f < min=%.3f",
-                        symbol, side, _gru_expected_r, _min_gru_r,
+                        "Signal rejected %s %s — GRU side_R=%.3f < min=%.3f (per_sym=%s)",
+                        symbol, side, _gru_expected_r, _min_gru_r, bool(_sym_side_data),
                     )
                     return None
 

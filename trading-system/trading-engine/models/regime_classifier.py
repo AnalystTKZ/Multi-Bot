@@ -2292,10 +2292,22 @@ class RegimeClassifier(BaseModel):
                 self._model.eval()
                 va_loss, va_pred = _val_stats()
                 threshold, margin, metrics = self._select_htf_bias_policy(va_pred, y_va_labels)
+                # Precision-dominated checkpoint selection: the deployment bottleneck
+                # is false-positive directional calls, not recall. Balanced accuracy
+                # alone as tie-breaker produced Round 3 regression (better recall,
+                # worse precision, worse trading). Precision now weighs 3×.
+                _ep_min_prec = min(
+                    float(metrics["precision"].get("BIAS_UP", 0.0)),
+                    float(metrics["precision"].get("BIAS_DOWN", 0.0)),
+                )
+                _ep_min_f1 = min(
+                    float(metrics["f1"].get("BIAS_UP", 0.0)),
+                    float(metrics["f1"].get("BIAS_DOWN", 0.0)),
+                )
                 score = (
-                    metrics["balanced_accuracy"]
-                    + min(metrics["f1"]["BIAS_UP"], metrics["f1"]["BIAS_DOWN"])
-                    + 0.25 * min(metrics["precision"]["BIAS_UP"], metrics["precision"]["BIAS_DOWN"])
+                    3.0 * _ep_min_prec
+                    + _ep_min_f1
+                    + 0.3 * float(metrics["balanced_accuracy"])
                 )
                 if epoch == 0 or (epoch + 1) % 5 == 0:
                     logger.info(
@@ -2450,9 +2462,39 @@ class RegimeClassifier(BaseModel):
                     }
                 logger.warning("%s Saving weights anyway so the pipeline can progress.", warning)
 
-            self.save(self.weight_path)
-            logger.info("RegimeClassifier[%s] HTF score head saved to %s",
-                        self._timeframe or "default", self.weight_path)
+            # Don't-regress gate: only overwrite previous weights when new min-precision
+            # is not worse than what was there before. Round 3 showed that a retrain
+            # with better recall but lower precision degraded trading performance.
+            # Precision stored in a JSON sidecar next to the weight file.
+            import json as _json
+            from pathlib import Path as _Path
+            _prec_sidecar = _Path(self.weight_path).with_suffix(".precision.json")
+            _new_min_prec = min(
+                float(final_metrics["precision"].get("BIAS_UP", 0.0)),
+                float(final_metrics["precision"].get("BIAS_DOWN", 0.0)),
+            )
+            _old_min_prec = 0.0
+            if _prec_sidecar.exists():
+                try:
+                    _old_min_prec = float(_json.loads(_prec_sidecar.read_text()).get("min_precision", 0.0))
+                except Exception:
+                    pass
+            _prec_regressed = _old_min_prec > 0.05 and _new_min_prec < _old_min_prec - 0.01
+            if _prec_regressed:
+                _regress_msg = (
+                    f"HTF precision regressed {_old_min_prec:.3f} → {_new_min_prec:.3f} "
+                    f"(>{0.01:.3f} drop); keeping previous weights to avoid trading degradation."
+                )
+                warnings.append(_regress_msg)
+                logger.warning(_regress_msg)
+            else:
+                self.save(self.weight_path)
+                logger.info("RegimeClassifier[%s] HTF score head saved to %s",
+                            self._timeframe or "default", self.weight_path)
+                try:
+                    _prec_sidecar.write_text(_json.dumps({"min_precision": float(_new_min_prec)}))
+                except Exception:
+                    pass
             return {
                 "accuracy": round(float(final_metrics["accuracy"]), 4),
                 "balanced_accuracy": round(float(final_metrics["balanced_accuracy"]), 4),

@@ -655,6 +655,52 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
     if history.get("error"):
         return {"error": history["error"]}
 
+    # Per-symbol/side R thresholds: calibrate the GRU expected-R gate from training
+    # label distributions. A single global threshold (GRU_MIN_EXPECTED_R_MULTIPLE=0.50)
+    # is too blunt — XAUUSD buys and USDJPY sells have very different R distributions.
+    # We compute Q25 of realized_r_long (for buys) and realized_r_short (for sells)
+    # per symbol from training labels, then use these as per-symbol minimum thresholds.
+    # Signal pipeline loads this file and applies it; falls back to global threshold
+    # when a symbol is not present.
+    import json as _json
+    _sym_r_thresholds: dict = {}
+    for seg in segments:
+        sym = seg["symbol"]
+        tf = seg["timeframe"]
+        if tf != "15M":
+            continue
+        lbl = seg["labels"]
+        # realized_r_long: R if you went long; realized_r_short: R if you went short.
+        # Q25 = the bottom quartile threshold — we only want top-75% quality setups.
+        for side, col in (("buy", "realized_r_long"), ("sell", "realized_r_short")):
+            if col in lbl.columns:
+                vals = lbl[col].dropna().values
+                if len(vals) >= 20:
+                    q25 = float(np.nanpercentile(vals, 25))
+                    q50 = float(np.nanpercentile(vals, 50))
+                    if sym not in _sym_r_thresholds:
+                        _sym_r_thresholds[sym] = {}
+                    _sym_r_thresholds[sym][side] = {
+                        "q25": round(q25, 4),
+                        "q50": round(q50, 4),
+                        "n": int(len(vals)),
+                    }
+                    logger.info(
+                        "GRU R threshold %s/%s: q25=%.3f q50=%.3f (n=%d)",
+                        sym, side, q25, q50, len(vals),
+                    )
+
+    _threshold_path = str(_ENV["weights"] / "gru_lstm" / "symbol_r_thresholds.json")
+    try:
+        import os as _os
+        _os.makedirs(str(_ENV["weights"] / "gru_lstm"), exist_ok=True)
+        with open(_threshold_path, "w") as _tf_out:
+            _json.dump(_sym_r_thresholds, _tf_out, indent=2)
+        logger.info("GRU per-symbol R thresholds saved to %s (%d symbols)",
+                    _threshold_path, len(_sym_r_thresholds))
+    except Exception as _te:
+        logger.warning("Failed to save GRU R thresholds: %s", _te)
+
     log_retrain("gru_lstm", {
         "status": "complete",
         "mode": "multi_symbol",
@@ -665,6 +711,7 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         "best_val_direction_accuracy": history.get("best_val_direction_accuracy"),
         "best_val_r_mae": history.get("best_val_r_mae"),
         "best_val_positive_r_accuracy": history.get("best_val_positive_r_accuracy"),
+        "symbol_r_thresholds": _sym_r_thresholds,
     })
     return {"trained": True, "segments": len(segments), "samples": samples_total}
 
