@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-05-10T14:31:51.508344+00:00",
+  "timestamp": "2026-05-10T23:31:10.654775+00:00",
   "step": "7b",
-  "journal_entries": 396,
-  "allowed_journal_entries": 396,
+  "journal_entries": 343,
+  "allowed_journal_entries": 343,
   "allowed_splits": [
     "live",
     "paper",

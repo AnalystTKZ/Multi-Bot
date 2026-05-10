@@ -1,0 +1,66 @@
+{
+  "run_id": "bt_20260510_234007",
+  "created_at": "2026-05-10T23:42:57.040022+00:00",
+  "code_commit": "572c9d46b0a44b74f7331539fc5fdc7ed1b9ba52",
+  "backtest_result": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../backtest_results/backtest_20260510_234007.json",
+    "sha256": "90a496626fefc439a3b0f1a0468507cd276725d260d34dc1ea6e57a2727f0905",
+    "split": "combined_eval",
+    "requested_split": "test",
+    "start": "2022-08-05",
+    "end": "2025-08-05"
+  },
+  "split_summary": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/ml_training/datasets/split_summary.json",
+    "sha256": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "date_ranges": {
+      "train": {
+        "start": "2016-01-04 00:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "validation": {
+        "start": "2022-08-05 05:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "train_tail": {
+        "start": "2021-08-05 05:00:00+00:00",
+        "end": "2023-08-04 16:45:00+00:00"
+      },
+      "test": {
+        "start": "2023-08-07 00:00:00+00:00",
+        "end": "2025-08-05 05:00:00+00:00"
+      }
+    },
+    "rows": {
+      "train": 174951,
+      "validation": 20412,
+      "train_tail": 44000,
+      "test": 46792
+    },
+    "leakage_check": "PASS",
+    "split_method": "expanding_calendar",
+    "selected_fold": "fold_005",
+    "fold_count": 6,
+    "blind_test_policy": "final_2_years_excluded_from_train_train_tail_and_internal_validation_folds",
+    "train_tail_years": 2
+  },
+  "weight_artifact_hashes": {
+    "weights/gru_lstm/model.pt": "66edfd836efd748c5376ac8083ae0cf87d976b916eac25cb3b642413a8331c11",
+    "weights/gru_lstm/weights_manifest.json": "d68e731b348a967390a47d90a6c08b243271443035f7f6e5e9d6f2615adbdcbf",
+    "weights/regime_htf.pkl": "59132f0ce9405b449db11c031898a67c075f7ba98470ebaca1342b0a0f290d01",
+    "weights/regime_ltf.pkl": "cb18cfadbefae07f3aa881e96db83a28ba2c13f7732b3df0337525bac4b96fae",
+    "weights/quality_scorer.pkl": "3a9c237b28ef18cca87782759a818b6c1c95c64b633cbc56487ab5831463cab4",
+    "weights/rl_ppo/model.zip": "9e6d98c15eb0fb24963595fefbf18b12760a03dc2278599d540ae57311798c57"
+  },
+  "calibration_report": {
+    "path": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/calibration_report.json",
+    "sha256": "24e20236ebb1379e09cdd7e01e0092bf454bee541c65c8192f260f7a2721b8f0"
+  },
+  "diagnostic_breakdowns": {
+    "detail_csv": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/backtest_trade_breakdown_bt_20260510_234007.csv",
+    "summary_csv": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/backtest_diagnostic_breakdown_bt_20260510_234007.csv",
+    "summary_json": "/kaggle/working/Multi-Bot/trading-system/trading-engine/scripts/../logs/backtest_diagnostic_breakdown_bt_20260510_234007.json"
+  },
+  "promotion_eligible": false,
+  "promotion_status": "not_promotion_eligible_use_round2_blind_test_only"
+}

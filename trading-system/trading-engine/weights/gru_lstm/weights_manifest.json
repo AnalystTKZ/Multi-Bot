@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-05-10T09:52:20.716883+00:00",
+  "saved_at": "2026-05-10T23:35:49.542462+00:00",
   "gru": {
     "n_features": 71,
     "feature_hash": "8d906b756d4d6309",
@@ -80,8 +80,8 @@
     "num_layers": 2
   },
   "regime_4h": {
-    "n_features": 24,
-    "feature_hash": "fdbbf70a67d51062",
+    "n_features": 25,
+    "feature_hash": "ec62724bf7415d5f",
     "feature_names": [
       "adx_14_base",
       "ema_stack_score",
@@ -106,7 +106,8 @@
       "bars_since_mss",
       "mss_bull_bars_ago",
       "mss_bear_bars_ago",
-      "symbol_group_code"
+      "symbol_group_code",
+      "macro_vix_level"
     ]
   },
   "regime_1h": {
