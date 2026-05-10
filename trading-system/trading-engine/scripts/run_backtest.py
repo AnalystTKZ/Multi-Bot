@@ -412,6 +412,14 @@ def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
             expected_r_gru = float(cache["expected_r_gru"][idx])
             if not np.isnan(expected_r_gru):
                 out["expected_r_gru"] = expected_r_gru
+        if "expected_r_long" in cache:
+            expected_r_long = float(cache["expected_r_long"][idx])
+            if not np.isnan(expected_r_long):
+                out["expected_r_long"] = expected_r_long
+        if "expected_r_short" in cache:
+            expected_r_short = float(cache["expected_r_short"][idx])
+            if not np.isnan(expected_r_short):
+                out["expected_r_short"] = expected_r_short
         if "entry_depth" in cache:
             entry_depth = float(cache["entry_depth"][idx])
             if not np.isnan(entry_depth):
@@ -1647,6 +1655,8 @@ def _precompute_ml_cache(
             "p_bear": np.full(n, np.nan, dtype=np.float32),
             "expected_move": np.full(n, np.nan, dtype=np.float32),
             "expected_r_gru": np.full(n, np.nan, dtype=np.float32),
+            "expected_r_long": np.full(n, np.nan, dtype=np.float32),
+            "expected_r_short": np.full(n, np.nan, dtype=np.float32),
             "entry_depth": np.full(n, np.nan, dtype=np.float32),
             "expected_volatility": np.full(n, np.nan, dtype=np.float32),
             "expected_variance": np.full(n, np.nan, dtype=np.float32),
@@ -1668,8 +1678,11 @@ def _precompute_ml_cache(
             try:
                 from models.gru_lstm_predictor import (
                     DEVICE,
+                    GRU_LABEL_TARGET_R,
                     MAX_INFERENCE_VARIANCE,
+                    N_GROUPS,
                     SEQUENCE_LENGTH as SEQ_LEN,
+                    SYMBOL_GROUPS,
                 )
                 import torch
 
@@ -1680,8 +1693,10 @@ def _precompute_ml_cache(
                     m = gru_model._model.module if hasattr(gru_model._model, "module") else gru_model._model
                     m.eval()
                     all_p_bull  = np.empty(n_valid, dtype=np.float32)
-                    all_mag     = np.empty(n_valid, dtype=np.float32)
+                    all_r_long  = np.empty(n_valid, dtype=np.float32)
+                    all_r_short = np.empty(n_valid, dtype=np.float32)
                     all_log_var = np.empty(n_valid, dtype=np.float32)
+                    group_id = int(SYMBOL_GROUPS.get(symbol, N_GROUPS))
 
                     # Stream batches directly from seq_arr — no full (N,SEQ,F) tensor.
                     # sliding_window_view of the whole array would be ~1 GB per symbol;
@@ -1696,12 +1711,19 @@ def _precompute_ml_cache(
                                 seq_arr[b_start: b_end + SEQ_LEN - 1], (SEQ_LEN, n_feat)
                             ).reshape(b_end - b_start, SEQ_LEN, n_feat)
                             xb = torch.from_numpy(batch_raw.copy()).to(DEVICE)
+                            gb = torch.full(
+                                (b_end - b_start,),
+                                group_id,
+                                dtype=torch.long,
+                                device=DEVICE,
+                            )
                             with torch.amp.autocast("cuda", enabled=(DEVICE.type == "cuda")):
-                                dl, mp, lv = m(xb)
+                                dl, rl, rs, lv = m(xb, gb)
                             all_p_bull[b_start:b_end]  = torch.sigmoid(dl / _T).cpu().numpy()
-                            all_mag[b_start:b_end]     = mp.cpu().numpy()
+                            all_r_long[b_start:b_end]  = rl.cpu().numpy()
+                            all_r_short[b_start:b_end] = rs.cpu().numpy()
                             all_log_var[b_start:b_end] = lv.cpu().numpy()
-                            del xb, dl, mp, lv, batch_raw
+                            del xb, gb, dl, rl, rs, lv, batch_raw
 
                     # Vectorised post-processing
                     var_vals = np.clip(
@@ -1709,10 +1731,17 @@ def _precompute_ml_cache(
                         1e-4,
                         MAX_INFERENCE_VARIANCE,
                     ).astype(np.float32, copy=False)
-                    expected_r_gru = np.clip(all_mag, -1.0, 5.0).astype(np.float32, copy=False)
+                    _target_r = max(float(GRU_LABEL_TARGET_R), 1e-6)
+                    expected_r_long = np.clip(all_r_long, -1.0, _target_r).astype(np.float32, copy=False)
+                    expected_r_short = np.clip(all_r_short, -1.0, _target_r).astype(np.float32, copy=False)
+                    expected_r_gru = np.where(
+                        all_p_bull >= 0.5,
+                        expected_r_long,
+                        expected_r_short,
+                    ).astype(np.float32, copy=False)
                     expected_move = np.clip(
                         np.maximum(expected_r_gru, 0.0)
-                        / max(float(os.getenv("GRU_LABEL_TARGET_R", "1.666667")), 1e-6),
+                        / _target_r,
                         0.0,
                         1.0,
                     ).astype(np.float32, copy=False)
@@ -1734,10 +1763,13 @@ def _precompute_ml_cache(
                     cache["p_bear"][bar_indices] = p_bear_arr
                     cache["expected_move"][bar_indices] = expected_move
                     cache["expected_r_gru"][bar_indices] = expected_r_gru
+                    cache["expected_r_long"][bar_indices] = expected_r_long
+                    cache["expected_r_short"][bar_indices] = expected_r_short
                     cache["entry_depth"][bar_indices] = entry_depth
                     cache["expected_volatility"][bar_indices] = vol_arr.astype(np.float32, copy=False)
                     cache["expected_variance"][bar_indices] = var_vals.astype(np.float32, copy=False)
-                    del all_p_bull, all_mag, all_log_var, var_vals, p_bear_arr, expected_r_gru, expected_move, entry_depth, vol_arr
+                    del all_p_bull, all_r_long, all_r_short, all_log_var, var_vals, p_bear_arr
+                    del expected_r_long, expected_r_short, expected_r_gru, expected_move, entry_depth, vol_arr
             except Exception as exc:
                 logger.error("ML cache: GRU batch failed for %s: %s", symbol, exc)
                 del seq_arr
@@ -1883,11 +1915,14 @@ def _compute_backtest_signal(
         _reject("weak_gru_direction")
         return None
 
-    _gru_expected_r = ml_preds.get("expected_r_gru")
+    _side_r_key = "expected_r_long" if side == "buy" else "expected_r_short"
+    _gru_expected_r = ml_preds.get(_side_r_key)
+    if _gru_expected_r is None:
+        _gru_expected_r = ml_preds.get("expected_r_gru")
     if _gru_expected_r is not None:
         _gru_expected_r = float(_gru_expected_r)
         if np.isfinite(_gru_expected_r):
-            _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.0"))
+            _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.30"))
             if _gru_expected_r < _min_gru_r:
                 _reject("gru_expected_r_below_threshold")
                 return None
@@ -2017,6 +2052,8 @@ def _compute_backtest_signal(
             "p_bull":            p_bull,
             "p_bear":            p_bear,
             "expected_r_gru":    float(ml_preds.get("expected_r_gru", float("nan"))),
+            "expected_r_long":   float(ml_preds.get("expected_r_long", float("nan"))),
+            "expected_r_short":  float(ml_preds.get("expected_r_short", float("nan"))),
             "atr_at_entry":      atr,
             "range_width_atr":   _range_width,
             "pullback_valid":    _pullback_valid,

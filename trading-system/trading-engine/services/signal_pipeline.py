@@ -342,15 +342,21 @@ class SignalPipeline:
         else:
             return None
 
-        _gru_expected_r = ml_preds.get("expected_r_gru")
+        # GRU side-conditioned expected R gate — uses the head for the predicted side.
+        # Default 0.30 means the model must predict the entry side will yield ≥0.30R.
+        # Pre-fix this was 0.0 (disabled). Raise GRU_MIN_EXPECTED_R_MULTIPLE to tighten.
+        _side_r_key = "expected_r_long" if side == "buy" else "expected_r_short"
+        _gru_expected_r = ml_preds.get(_side_r_key)
+        if _gru_expected_r is None:
+            _gru_expected_r = ml_preds.get("expected_r_gru")
         if _gru_expected_r is not None:
             _gru_expected_r = float(_gru_expected_r)
             if np.isfinite(_gru_expected_r):
-                _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.0"))
+                _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.30"))
                 if _gru_expected_r < _min_gru_r:
                     logger.debug(
-                        "Signal rejected %s — GRU expected_R=%.3f < min=%.3f",
-                        symbol, _gru_expected_r, _min_gru_r,
+                        "Signal rejected %s %s — GRU side_R=%.3f < min=%.3f",
+                        symbol, side, _gru_expected_r, _min_gru_r,
                     )
                     return None
 

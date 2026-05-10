@@ -34,6 +34,15 @@ GRU_LABEL_TARGET_R = float(os.getenv("GRU_LABEL_TARGET_ATR", "2.5")) / max(
     1e-6,
 )
 
+# Symbol group IDs for per-group specialisation: 0=gold, 1=dollar-pairs, 2=JPY-pairs, 3=unknown
+SYMBOL_GROUPS: dict = {
+    "XAUUSD": 0,
+    "EURUSD": 1, "GBPUSD": 1, "AUDUSD": 1, "USDCAD": 1, "USDCHF": 1, "NZDUSD": 1,
+    "USDJPY": 2, "GBPJPY": 2, "EURJPY": 2, "CADJPY": 2, "AUDJPY": 2, "CHFJPY": 2,
+}
+N_GROUPS = 3          # gold / dollar / JPY
+GROUP_EMBED_DIM = 8   # learned per-group bias concatenated to shared representation
+
 
 def _calibrated_variance(log_variance_pred):
     """Match inference variance scale to the clamped training objective."""
@@ -95,11 +104,16 @@ def _build_torch_model():
     class _MultiHeadGRULSTM(nn.Module):
         """
         GRU(64,2) → LSTM(128,2) → MultiHeadAttention(128,4) → mean-pool → shared(64)
-        → [direction logit, magnitude regression, log-variance].
+        → group_embed(8) → concat(72)
+        → [direction logit, r_long regression, r_short regression, log-variance].
 
-        Attention over all 30 timesteps (not just the last hidden state) lets the
-        model learn which bars in the window are most predictive — e.g. the BOS bar
-        5 bars ago matters more than the most recent consolidation bar.
+        Side-conditioned R heads: head_r_long is trained on realized long-side R,
+        head_r_short on realized short-side R. At inference the selected side's
+        head is used as the signal-quality gate.
+
+        Group embedding (gold / dollar / JPY): 8-dim learnable bias concatenated
+        to the 64-dim shared repr gives each symbol group its own head calibration
+        without sacrificing shared GRU weights.
         """
         def __init__(self):
             super().__init__()
@@ -118,7 +132,7 @@ def _build_torch_model():
                 batch_first=True,
                 dropout=0.3,
             )
-            # Self-attention over the full 30-bar LSTM output sequence.
+            # Self-attention over the full sequence.
             # 4 heads × 32 dims each = 128 total embed_dim.
             self.attn  = nn.MultiheadAttention(
                 embed_dim=128, num_heads=4, dropout=0.1, batch_first=True
@@ -129,24 +143,37 @@ def _build_torch_model():
                 nn.ReLU(),
                 nn.Dropout(0.3),
             )
-            self.head_dir = nn.Linear(64, 1)
-            self.head_mag = nn.Linear(64, 1)
-            self.head_var = nn.Linear(64, 1)
+            # Symbol-group embedding: N_GROUPS+1 rows (last = unknown/default)
+            self.group_embed = nn.Embedding(N_GROUPS + 1, GROUP_EMBED_DIM)
+            nn.init.zeros_(self.group_embed.weight)  # start as no-op; learn offsets
 
-        def forward(self, x):
+            _h = 64 + GROUP_EMBED_DIM  # 72
+            self.head_dir     = nn.Linear(_h, 1)
+            self.head_r_long  = nn.Linear(_h, 1)   # long-side realized R
+            self.head_r_short = nn.Linear(_h, 1)   # short-side realized R
+            self.head_var     = nn.Linear(_h, 1)
+
+        def forward(self, x, group_id=None):
             out, _ = self.gru(x)                       # (B, T, 64)
             out    = self.drop1(out)
             out, _ = self.lstm(out)                    # (B, T, 128)
             attn_out, _ = self.attn(out, out, out)     # (B, T, 128)
             out    = self.drop2(attn_out.mean(dim=1))  # (B, 128) — mean-pool timesteps
-            shared = self.shared(out)
-            dir_logits   = self.head_dir(shared).squeeze(-1)
-            mag          = self.head_mag(shared).squeeze(-1)
-            log_variance = self.head_var(shared).squeeze(-1)
-            return dir_logits, mag, log_variance
+            shared = self.shared(out)                  # (B, 64)
+
+            if group_id is None:
+                group_id = shared.new_zeros(shared.shape[0], dtype=torch.long) + N_GROUPS
+            emb = self.group_embed(group_id)           # (B, 8)
+            h   = torch.cat([shared, emb], dim=-1)     # (B, 72)
+
+            dir_logits   = self.head_dir(h).squeeze(-1)
+            r_long       = self.head_r_long(h).squeeze(-1)
+            r_short      = self.head_r_short(h).squeeze(-1)
+            log_variance = self.head_var(h).squeeze(-1)
+            return dir_logits, r_long, r_short, log_variance
 
         def encode(self, x):
-            """Return the 64-dim shared embedding without running the output heads."""
+            """Return the 64-dim shared embedding (no group offset) for similarity search."""
             out, _ = self.gru(x)
             out    = self.drop1(out)
             out, _ = self.lstm(out)
@@ -228,11 +255,17 @@ class GRULSTMPredictor(BaseModel):
             seq = fe.get_sequence(df, length=SEQUENCE_LENGTH, df_htf=df_htf, symbol=symbol)  # (30, N)
             x = torch.tensor(seq[np.newaxis, ...], dtype=torch.float32).to(DEVICE)  # (1, 30, N_FEATURES)
 
+            group_id = SYMBOL_GROUPS.get(symbol, N_GROUPS)
+            group_id_t = torch.tensor([group_id], dtype=torch.long).to(DEVICE)
+
             self._model.eval()
             with torch.no_grad():
-                dir_logits, mag_pred, log_variance_pred = self._model(x)
+                dir_logits, r_long_pred, r_short_pred, log_variance_pred = self._model(x, group_id_t)
                 p_bull_raw = float(torch.sigmoid(dir_logits[0] / self._temperature).item())
-                expected_r_gru = float(np.clip(mag_pred[0].item(), -1.0, GRU_LABEL_TARGET_R))
+                expected_r_long  = float(np.clip(r_long_pred[0].item(),  -1.0, GRU_LABEL_TARGET_R))
+                expected_r_short = float(np.clip(r_short_pred[0].item(), -1.0, GRU_LABEL_TARGET_R))
+                # Side-conditioned R: use the head that matches the predicted direction
+                expected_r_gru = expected_r_long if p_bull_raw >= 0.5 else expected_r_short
                 expected_move = float(np.clip(max(expected_r_gru, 0.0) / max(GRU_LABEL_TARGET_R, 1e-6), 0.0, 1.0))
                 expected_variance = float(_calibrated_variance(log_variance_pred)[0].item())
                 expected_volatility = float(np.sqrt(expected_variance))
@@ -250,6 +283,8 @@ class GRULSTMPredictor(BaseModel):
                 "entry_depth": entry_depth,
                 "expected_move": expected_move,
                 "expected_r_gru": expected_r_gru,
+                "expected_r_long": expected_r_long,
+                "expected_r_short": expected_r_short,
                 "expected_volatility": expected_volatility,
                 "expected_variance": expected_variance,
             }
@@ -453,10 +488,11 @@ class GRULSTMPredictor(BaseModel):
                 return {"error": "Not enough rows for sequence training"}
 
             label_cols = labels.iloc[SEQUENCE_LENGTH:]
-            y_dir = label_cols.get("direction_up", pd.Series(0.5, index=label_cols.index)).values.astype(np.float32)
-            y_mag = label_cols.get("move_magnitude", pd.Series(0.0, index=label_cols.index)).values.astype(np.float32)
-            y_vol = label_cols.get("volatility_target", pd.Series(0.0, index=label_cols.index)).values.astype(np.float32)
-            targets = np.column_stack([y_dir, y_mag, y_vol]).astype(np.float32)
+            y_dir     = label_cols.get("direction_up",      pd.Series(np.nan, index=label_cols.index)).values.astype(np.float32)
+            y_r_long  = label_cols.get("realized_r_long",   pd.Series(np.nan, index=label_cols.index)).values.astype(np.float32)
+            y_r_short = label_cols.get("realized_r_short",  pd.Series(np.nan, index=label_cols.index)).values.astype(np.float32)
+            y_vol     = label_cols.get("volatility_target", pd.Series(0.0,    index=label_cols.index)).values.astype(np.float32)
+            targets   = np.column_stack([y_dir, y_r_long, y_r_short, y_vol]).astype(np.float32)
 
             if len(targets) != n_seq:
                 n_seq = min(n_seq, len(targets))
@@ -466,20 +502,24 @@ class GRULSTMPredictor(BaseModel):
             if split <= 0 or split >= n_seq:
                 return {"error": "Not enough sequences after validation split"}
 
-            pos_rate = float(np.mean(targets[:, 0]))
-            avg_move = float(np.mean(targets[:, 1]))
-            avg_vol = float(np.mean(targets[:, 2]))
+            pos_rate = float(np.nanmean(targets[:, 0]))
+            avg_r_long = float(np.nanmean(targets[:, 1]))
+            avg_r_short = float(np.nanmean(targets[:, 2]))
+            avg_vol = float(np.nanmean(targets[:, 3]))
             logger.info(
-                "GRU targets samples=%d long_side_rate=%.4f avg_realized_r=%.6f avg_vol=%.6f",
-                n_seq, pos_rate, avg_move, avg_vol,
+                "GRU targets samples=%d long_side_rate=%.4f avg_r_long=%.4f avg_r_short=%.4f avg_vol=%.6f",
+                n_seq, pos_rate, avg_r_long, avg_r_short, avg_vol,
             )
 
+            group_id_value = int(SYMBOL_GROUPS.get(symbol, N_GROUPS))
+
             class _SequenceDataset(torch.utils.data.Dataset):
-                def __init__(self, features: np.ndarray, labels_arr: np.ndarray, start: int, end: int):
+                def __init__(self, features: np.ndarray, labels_arr: np.ndarray, start: int, end: int, group_id: int):
                     self._features = features
                     self._labels = labels_arr
                     self._start = start
                     self._end = end
+                    self._group_id = int(group_id)
 
                 def __len__(self) -> int:
                     return max(0, self._end - self._start)
@@ -488,10 +528,10 @@ class GRULSTMPredictor(BaseModel):
                     i = self._start + idx
                     x = self._features[i:i + SEQUENCE_LENGTH]
                     y_item = self._labels[i]
-                    return torch.from_numpy(x), torch.from_numpy(y_item)
+                    return torch.from_numpy(x), torch.from_numpy(y_item), torch.tensor(self._group_id, dtype=torch.long)
 
-            train_ds = _SequenceDataset(feat_arr, targets, 0, split)
-            val_ds = _SequenceDataset(feat_arr, targets, split, n_seq)
+            train_ds = _SequenceDataset(feat_arr, targets, 0, split, group_id_value)
+            val_ds = _SequenceDataset(feat_arr, targets, split, n_seq, group_id_value)
             _pin = DEVICE.type == "cuda"
             _workers = 4 if DEVICE.type == "cuda" else 0
             train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=_workers, pin_memory=_pin, persistent_workers=(_workers > 0))
@@ -519,17 +559,19 @@ class GRULSTMPredictor(BaseModel):
             patience, no_improve = 5, 0
             history = {"train_loss": [], "val_loss": [], "val_direction_accuracy": []}
 
-            def _compute_loss(dir_logits, mag_pred, log_variance_pred, yb):
+            def _compute_loss(dir_logits, r_long_pred, r_short_pred, log_variance_pred, yb):
                 """
                 Multi-head loss with dead-zone masking on direction.
-                yb[:, 0] = direction (NaN in dead zone → excluded from BCE).
-                yb[:, 1] = move_magnitude (always valid after NaN drop).
-                yb[:, 2] = volatility_target.
-                λ: dir=1.0, mag=0.5, vol=0.3.
+                yb[:, 0] = direction_up (NaN in dead zone → excluded from BCE).
+                yb[:, 1] = realized_r_long  (NaN where not labeled long).
+                yb[:, 2] = realized_r_short (NaN where not labeled short).
+                yb[:, 3] = volatility_target.
+                λ: dir=2.0, r_long=0.5, r_short=0.5, vol=0.3.
                 """
-                y_dir = yb[:, 0]
-                y_mag = yb[:, 1]
-                y_vol = yb[:, 2]
+                y_dir     = yb[:, 0]
+                y_r_long  = yb[:, 1]
+                y_r_short = yb[:, 2]
+                y_vol     = yb[:, 3]
 
                 # Direction: mask NaN dead-zone bars (smoothed labels are 0.05/0.95)
                 dir_mask = ~torch.isnan(y_dir)
@@ -538,14 +580,22 @@ class GRULSTMPredictor(BaseModel):
                 else:
                     loss_dir = torch.tensor(0.0, device=dir_logits.device)
 
-                # Outcome: Huber loss on signed realized R-multiple.
-                mag_mask = ~torch.isnan(y_mag)
-                if mag_mask.sum() > 0:
-                    loss_mag = criterion_mag(mag_pred[mag_mask], y_mag[mag_mask])
+                # Side-conditioned R: each head learns that side's realized R on
+                # every valid bar, including losing/unchosen sides. This makes the
+                # inference gate answer "what happens if I buy/sell here?"
+                long_mask = ~torch.isnan(y_r_long)
+                if long_mask.sum() > 0:
+                    loss_r_long = criterion_mag(r_long_pred[long_mask], y_r_long[long_mask])
                 else:
-                    loss_mag = torch.tensor(0.0, device=mag_pred.device)
+                    loss_r_long = torch.tensor(0.0, device=r_long_pred.device)
 
-                # Volatility: Gaussian NLL (heteroscedastic) — clamped to [0, ∞)
+                short_mask = ~torch.isnan(y_r_short)
+                if short_mask.sum() > 0:
+                    loss_r_short = criterion_mag(r_short_pred[short_mask], y_r_short[short_mask])
+                else:
+                    loss_r_short = torch.tensor(0.0, device=r_short_pred.device)
+
+                # Volatility: Gaussian NLL (heteroscedastic)
                 vol_mask = ~torch.isnan(y_vol)
                 if vol_mask.sum() > 0:
                     pv = torch.clamp(torch.nn.functional.softplus(log_variance_pred[vol_mask]) + 1e-6,
@@ -555,20 +605,21 @@ class GRULSTMPredictor(BaseModel):
                 else:
                     loss_vol = torch.tensor(0.0, device=log_variance_pred.device)
 
-                return loss_dir + 0.5 * loss_mag + 0.3 * loss_vol
+                return 2.0 * loss_dir + 0.5 * loss_r_long + 0.5 * loss_r_short + 0.3 * loss_vol
 
             for epoch in range(epochs):
                 self._model.train()
                 train_loss = 0.0
                 optimiser.zero_grad()
-                for step, (xb, yb) in enumerate(train_dl):
-                    xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+                for step, (xb, yb, gb) in enumerate(train_dl):
+                    xb, yb, gb = xb.to(DEVICE), yb.to(DEVICE), gb.to(DEVICE)
                     with torch.amp.autocast("cuda", enabled=use_amp):
-                        dir_logits, mag_pred, log_variance_pred = self._model(xb)
+                        dir_logits, r_long_pred, r_short_pred, log_variance_pred = self._model(xb, gb)
                     dir_logits = dir_logits.float()
-                    mag_pred = mag_pred.float()
+                    r_long_pred = r_long_pred.float()
+                    r_short_pred = r_short_pred.float()
                     log_variance_pred = log_variance_pred.float()
-                    loss = _compute_loss(dir_logits, mag_pred, log_variance_pred, yb) / grad_accum_steps
+                    loss = _compute_loss(dir_logits, r_long_pred, r_short_pred, log_variance_pred, yb) / grad_accum_steps
                     scaler.scale(loss).backward()
                     if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(train_dl):
                         scaler.step(optimiser)
@@ -583,17 +634,18 @@ class GRULSTMPredictor(BaseModel):
                 val_dir_total = 0
                 val_r_abs = 0.0
                 val_r_total = 0
-                val_positive_r_correct = 0
-                val_positive_r_total = 0
+                val_side_r_sign_correct = 0
+                val_side_r_sign_total = 0
                 with torch.no_grad():
-                    for xb, yb in val_dl:
-                        xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+                    for xb, yb, gb in val_dl:
+                        xb, yb, gb = xb.to(DEVICE), yb.to(DEVICE), gb.to(DEVICE)
                         with torch.amp.autocast("cuda", enabled=use_amp):
-                            dir_logits, mag_pred, log_variance_pred = self._model(xb)
+                            dir_logits, r_long_pred, r_short_pred, log_variance_pred = self._model(xb, gb)
                         dir_logits = dir_logits.float()
-                        mag_pred = mag_pred.float()
+                        r_long_pred = r_long_pred.float()
+                        r_short_pred = r_short_pred.float()
                         log_variance_pred = log_variance_pred.float()
-                        batch_loss = _compute_loss(dir_logits, mag_pred, log_variance_pred, yb)
+                        batch_loss = _compute_loss(dir_logits, r_long_pred, r_short_pred, log_variance_pred, yb)
                         val_loss += batch_loss.item() * len(xb)
                         dir_mask = ~torch.isnan(yb[:, 0])
                         if dir_mask.sum() > 0:
@@ -602,18 +654,23 @@ class GRULSTMPredictor(BaseModel):
                             true_up = yb[:, 0][dir_mask] > 0.5
                             val_dir_correct += int((pred_up == true_up).sum().item())
                             val_dir_total += int(dir_mask.sum().item())
-                        r_mask = ~torch.isnan(yb[:, 1])
-                        if r_mask.sum() > 0:
-                            pred_r = mag_pred[r_mask]
-                            true_r = yb[:, 1][r_mask]
-                            val_r_abs += float(torch.abs(pred_r - true_r).sum().item())
-                            val_r_total += int(r_mask.sum().item())
-                            val_positive_r_correct += int(((pred_r > 0.0) == (true_r > 0.0)).sum().item())
-                            val_positive_r_total += int(r_mask.sum().item())
+                        # Side-conditioned R MAE/sign accuracy across both entry sides.
+                        long_mask = ~torch.isnan(yb[:, 1])
+                        short_mask = ~torch.isnan(yb[:, 2])
+                        if long_mask.sum() > 0:
+                            val_r_abs += float(torch.abs(r_long_pred[long_mask] - yb[:, 1][long_mask]).sum().item())
+                            val_r_total += int(long_mask.sum().item())
+                            val_side_r_sign_correct += int(((r_long_pred[long_mask] > 0) == (yb[:, 1][long_mask] > 0)).sum().item())
+                            val_side_r_sign_total += int(long_mask.sum().item())
+                        if short_mask.sum() > 0:
+                            val_r_abs += float(torch.abs(r_short_pred[short_mask] - yb[:, 2][short_mask]).sum().item())
+                            val_r_total += int(short_mask.sum().item())
+                            val_side_r_sign_correct += int(((r_short_pred[short_mask] > 0) == (yb[:, 2][short_mask] > 0)).sum().item())
+                            val_side_r_sign_total += int(short_mask.sum().item())
                 val_loss /= max(1, len(val_ds))
                 val_dir_acc = float(val_dir_correct / max(val_dir_total, 1))
                 val_r_mae = float(val_r_abs / max(val_r_total, 1))
-                val_positive_r_acc = float(val_positive_r_correct / max(val_positive_r_total, 1))
+                val_positive_r_acc = float(val_side_r_sign_correct / max(val_side_r_sign_total, 1))
 
                 history["train_loss"].append(train_loss)
                 history["val_loss"].append(val_loss)
@@ -708,9 +765,10 @@ class GRULSTMPredictor(BaseModel):
             for tf, group in tf_items:
                 logger.info("train_multi: building combined dataset for TF=%s (%d segments)", tf, len(group))
 
-                # Build per-segment (feat_arr, tgt_arr) serially.
-                seg_feats: list = []
-                seg_tgts: list  = []
+                # Build per-segment (feat_arr, tgt_arr, group_id) serially.
+                seg_feats: list  = []
+                seg_tgts: list   = []
+                seg_groups: list = []   # symbol group ID per segment
                 segment_errors: list[str] = []
 
                 for seg in group:
@@ -726,13 +784,15 @@ class GRULSTMPredictor(BaseModel):
                         if n_seq <= 0:
                             segment_errors.append(f"{seg.get('symbol')}/{seg.get('timeframe')}: no complete sequences")
                             continue
-                        y_dir = lbl.get("direction_up",      pd.Series(0.5, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
-                        y_mag = lbl.get("move_magnitude",    pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
-                        y_vol = lbl.get("volatility_target", pd.Series(0.0, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
-                        tgt   = np.column_stack([y_dir, y_mag, y_vol]).astype(np.float32)
+                        y_dir     = lbl.get("direction_up",      pd.Series(np.nan, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                        y_r_long  = lbl.get("realized_r_long",   pd.Series(np.nan, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                        y_r_short = lbl.get("realized_r_short",  pd.Series(np.nan, index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                        y_vol     = lbl.get("volatility_target", pd.Series(0.0,    index=lbl.index)).values.astype(np.float32)[SEQUENCE_LENGTH:]
+                        tgt       = np.column_stack([y_dir, y_r_long, y_r_short, y_vol]).astype(np.float32)
                         n_seq = min(n_seq, len(tgt))
                         seg_feats.append(feat_arr[:n_seq + SEQUENCE_LENGTH].copy())
                         seg_tgts.append(tgt[:n_seq].copy())
+                        seg_groups.append(SYMBOL_GROUPS.get(seg.get("symbol"), N_GROUPS))
                         del feat_arr, tgt
                     except Exception as exc:
                         segment_errors.append(f"{seg.get('symbol')}/{seg.get('timeframe')}: {exc}")
@@ -802,21 +862,23 @@ class GRULSTMPredictor(BaseModel):
 
                 # Pre-allocate output arrays — one-shot, no intermediate copies
                 X_train = np.empty((n_train, SEQUENCE_LENGTH, n_feat), dtype=np.float32)
-                Y_train = np.empty((n_train, 3), dtype=np.float32)
+                Y_train = np.empty((n_train, 4), dtype=np.float32)
+                G_train = np.empty((n_train,),   dtype=np.int64)   # symbol group IDs
                 X_val   = np.empty((n_val,   SEQUENCE_LENGTH, n_feat), dtype=np.float32)
-                Y_val   = np.empty((n_val,   3), dtype=np.float32)
+                Y_val   = np.empty((n_val,   4), dtype=np.float32)
+                G_val   = np.empty((n_val,),     dtype=np.int64)
 
                 tr_off, va_off = 0, 0
-                for sf, st in zip(seg_feats, seg_tgts):
+                for sf, st, grp in zip(seg_feats, seg_tgts, seg_groups):
                     if tr_off >= n_train and va_off >= n_val:
                         break   # budget exhausted
                     n = len(st)
                     sp = int(n * (1 - validation_split))
                     if sp <= 0 or sp >= n:
                         continue
-                    for start_idx, end_idx, X_out, Y_out, is_train in [
-                        (0,  sp, X_train, Y_train, True),
-                        (sp, n,  X_val,   Y_val,   False),
+                    for start_idx, end_idx, X_out, Y_out, G_out, is_train in [
+                        (0,  sp, X_train, Y_train, G_train, True),
+                        (sp, n,  X_val,   Y_val,   G_val,   False),
                     ]:
                         seg_n = end_idx - start_idx
                         if seg_n <= 0:
@@ -832,6 +894,7 @@ class GRULSTMPredictor(BaseModel):
                         ).reshape(seg_n, SEQUENCE_LENGTH, n_feat)
                         X_out[off: off + seg_n] = raw
                         Y_out[off: off + seg_n] = st[start_idx: start_idx + seg_n]
+                        G_out[off: off + seg_n] = grp   # same group for every row in segment
                         if is_train:
                             tr_off += seg_n
                         else:
@@ -841,11 +904,13 @@ class GRULSTMPredictor(BaseModel):
                 # Trim pre-alloc arrays to actually filled rows (budget may have been generous)
                 X_train = X_train[:tr_off]
                 Y_train = Y_train[:tr_off]
+                G_train = G_train[:tr_off]
                 X_val   = X_val[:va_off]
                 Y_val   = Y_val[:va_off]
+                G_val   = G_val[:va_off]
                 n_train, n_val = tr_off, va_off
 
-                del seg_feats, seg_tgts
+                del seg_feats, seg_tgts, seg_groups
                 _gc.collect()
 
                 logger.info("train_multi TF=%s: train=%d val=%d (%.0f MB tensors)",
@@ -855,9 +920,11 @@ class GRULSTMPredictor(BaseModel):
                 # Pin to page-locked memory for fast H→D transfers
                 X_train_t = torch.from_numpy(X_train).pin_memory()
                 Y_train_t = torch.from_numpy(Y_train).pin_memory()
+                G_train_t = torch.from_numpy(G_train).pin_memory()
                 X_val_t   = torch.from_numpy(X_val).pin_memory()
                 Y_val_t   = torch.from_numpy(Y_val).pin_memory()
-                del X_train, Y_train, X_val, Y_val
+                G_val_t   = torch.from_numpy(G_val).pin_memory()
+                del X_train, Y_train, G_train, X_val, Y_val, G_val
                 _gc.collect()
 
                 # Pre-shuffle index array (re-shuffled each epoch) — no DataLoader needed
@@ -899,8 +966,8 @@ class GRULSTMPredictor(BaseModel):
                     # 0.5, which makes validation/test backtests reject every bar at
                     # the direction gate.
                     _train_lr = 3e-4
-                    _patience = 18
-                    _min_epochs_before_stop = max(15, int(epochs * 0.45))
+                    _patience = 25   # was 18 — model needs more epochs to converge
+                    _min_epochs_before_stop = max(22, int(epochs * 0.45))
                     optimiser = torch.optim.AdamW(
                         self._model.parameters(), lr=_train_lr, weight_decay=1e-3
                     )
@@ -926,26 +993,34 @@ class GRULSTMPredictor(BaseModel):
                 use_amp = DEVICE.type == "cuda"
                 scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
-                def _loss_tm(dl, mp, lv, yb):
-                    y_dir, y_mag, y_vol = yb[:, 0], yb[:, 1], yb[:, 2]
+                def _loss_tm(dl, rl, rs, lv, yb):
+                    """
+                    yb[:, 0] = direction_up, yb[:, 1] = realized_r_long,
+                    yb[:, 2] = realized_r_short, yb[:, 3] = volatility_target.
+                    λ: dir=2.0 (was 1.0), r_long=0.5, r_short=0.5, vol=0.3.
+                    """
+                    y_dir, y_r_long, y_r_short, y_vol = yb[:, 0], yb[:, 1], yb[:, 2], yb[:, 3]
                     dir_mask = ~torch.isnan(y_dir)
                     loss_dir = criterion_dir(dl[dir_mask], y_dir[dir_mask]).mean() if dir_mask.sum() > 0 else dl.sum() * 0
-                    mag_mask = ~torch.isnan(y_mag)
-                    loss_mag = criterion_mag(mp[mag_mask], y_mag[mag_mask]) if mag_mask.sum() > 0 else mp.sum() * 0
+
+                    # Side-conditioned: each head learns that side's realized R
+                    # across all valid bars, not only bars where the side won.
+                    long_mask = ~torch.isnan(y_r_long)
+                    loss_r_long = criterion_mag(rl[long_mask], y_r_long[long_mask]) if long_mask.sum() > 0 else rl.sum() * 0
+                    short_mask = ~torch.isnan(y_r_short)
+                    loss_r_short = criterion_mag(rs[short_mask], y_r_short[short_mask]) if short_mask.sum() > 0 else rs.sum() * 0
+
                     vol_mask = ~torch.isnan(y_vol)
                     if vol_mask.sum() > 0:
                         # Clamp variance in [1e-4, 1.0] — prevents NLL going negative.
-                        # NLL = (se/pv) + log(pv). When pv→0, log(pv)→-∞ which makes the
-                        # loss unboundedly negative and causes the optimizer to collapse
-                        # the variance head to near-zero, corrupting expected_variance.
                         pv = torch.clamp(torch.nn.functional.softplus(lv[vol_mask]) + 1e-6,
                                          min=1e-4, max=1.0)
                         loss_vol = torch.clamp(
                             torch.mean((torch.square(y_vol[vol_mask] - torch.sqrt(pv)) / pv) + torch.log(pv)),
-                            min=0.0)  # floor at 0 — NLL below 0 means overfitted variance, treat as perfect
+                            min=0.0)
                     else:
                         loss_vol = lv.sum() * 0
-                    return loss_dir + 0.5 * loss_mag + 0.3 * loss_vol
+                    return 2.0 * loss_dir + 0.5 * loss_r_long + 0.5 * loss_r_short + 0.3 * loss_vol
 
                 best_val = float("inf")
                 best_dir_acc = 0.0
@@ -956,6 +1031,7 @@ class GRULSTMPredictor(BaseModel):
                 # Move val set to GPU once — it's small enough (~600K × 30 × F ≈ 600MB)
                 X_val_gpu = X_val_t.to(DEVICE, non_blocking=True)
                 Y_val_gpu = Y_val_t.to(DEVICE, non_blocking=True)
+                G_val_gpu = G_val_t.to(DEVICE, non_blocking=True)
 
                 for epoch in range(epochs):
                     self._model.train()
@@ -970,10 +1046,11 @@ class GRULSTMPredictor(BaseModel):
                         # Non-blocking H→D transfer from pinned memory
                         xb = X_train_t[idx_b].to(DEVICE, non_blocking=True)
                         yb = Y_train_t[idx_b].to(DEVICE, non_blocking=True)
+                        gb = G_train_t[idx_b].to(DEVICE, non_blocking=True)
                         with torch.amp.autocast("cuda", enabled=use_amp):
-                            dl, mp, lv = self._model(xb)
-                        dl, mp, lv = dl.float(), mp.float(), lv.float()
-                        loss = _loss_tm(dl, mp, lv, yb) / grad_accum_steps
+                            dl, rl, rs, lv = self._model(xb, gb)
+                        dl, rl, rs, lv = dl.float(), rl.float(), rs.float(), lv.float()
+                        loss = _loss_tm(dl, rl, rs, lv, yb) / grad_accum_steps
                         scaler.scale(loss).backward()
                         if (step + 1) % grad_accum_steps == 0 or (step + 1) == steps_per_epoch:
                             scaler.unscale_(optimiser)
@@ -997,17 +1074,18 @@ class GRULSTMPredictor(BaseModel):
                     val_dir_total = 0
                     val_r_abs = 0.0
                     val_r_total = 0
-                    val_positive_r_correct = 0
-                    val_positive_r_total = 0
+                    val_side_r_sign_correct = 0
+                    val_side_r_sign_total = 0
                     with torch.no_grad():
                         val_bs = batch_size * 2   # larger batches during eval (no backward pass)
                         for v_start in range(0, n_val, val_bs):
                             xb = X_val_gpu[v_start: v_start + val_bs]
                             yb = Y_val_gpu[v_start: v_start + val_bs]
+                            gb = G_val_gpu[v_start: v_start + val_bs]
                             with torch.amp.autocast("cuda", enabled=use_amp):
-                                dl, mp, lv = self._model(xb)
-                            dl, mp, lv = dl.float(), mp.float(), lv.float()
-                            val_loss += _loss_tm(dl, mp, lv, yb).item() * len(xb)
+                                dl, rl, rs, lv = self._model(xb, gb)
+                            dl, rl, rs, lv = dl.float(), rl.float(), rs.float(), lv.float()
+                            val_loss += _loss_tm(dl, rl, rs, lv, yb).item() * len(xb)
                             dir_mask = ~torch.isnan(yb[:, 0])
                             if dir_mask.sum() > 0:
                                 probs = torch.sigmoid(dl[dir_mask])
@@ -1015,18 +1093,23 @@ class GRULSTMPredictor(BaseModel):
                                 true_up = yb[:, 0][dir_mask] > 0.5
                                 val_dir_correct += int((pred_up == true_up).sum().item())
                                 val_dir_total += int(dir_mask.sum().item())
-                            r_mask = ~torch.isnan(yb[:, 1])
-                            if r_mask.sum() > 0:
-                                pred_r = mp[r_mask]
-                                true_r = yb[:, 1][r_mask]
-                                val_r_abs += float(torch.abs(pred_r - true_r).sum().item())
-                                val_r_total += int(r_mask.sum().item())
-                                val_positive_r_correct += int(((pred_r > 0.0) == (true_r > 0.0)).sum().item())
-                                val_positive_r_total += int(r_mask.sum().item())
+                            # Side-conditioned R MAE/sign accuracy across both entry sides.
+                            long_mask = ~torch.isnan(yb[:, 1])
+                            short_mask = ~torch.isnan(yb[:, 2])
+                            if long_mask.sum() > 0:
+                                val_r_abs += float(torch.abs(rl[long_mask] - yb[:, 1][long_mask]).sum().item())
+                                val_r_total += int(long_mask.sum().item())
+                                val_side_r_sign_correct += int(((rl[long_mask] > 0) == (yb[:, 1][long_mask] > 0)).sum().item())
+                                val_side_r_sign_total += int(long_mask.sum().item())
+                            if short_mask.sum() > 0:
+                                val_r_abs += float(torch.abs(rs[short_mask] - yb[:, 2][short_mask]).sum().item())
+                                val_r_total += int(short_mask.sum().item())
+                                val_side_r_sign_correct += int(((rs[short_mask] > 0) == (yb[:, 2][short_mask] > 0)).sum().item())
+                                val_side_r_sign_total += int(short_mask.sum().item())
                     val_loss /= max(1, n_val)
                     val_dir_acc = float(val_dir_correct / max(val_dir_total, 1))
                     val_r_mae = float(val_r_abs / max(val_r_total, 1))
-                    val_positive_r_acc = float(val_positive_r_correct / max(val_positive_r_total, 1))
+                    val_positive_r_acc = float(val_side_r_sign_correct / max(val_side_r_sign_total, 1))
 
                     combined_history["train_loss"].append(train_loss)
                     combined_history["val_loss"].append(val_loss)
@@ -1054,8 +1137,8 @@ class GRULSTMPredictor(BaseModel):
                             break
 
                 combined_history["groups_trained"] += 1
-                del X_train_t, Y_train_t, X_val_t, Y_val_t
-                del X_val_gpu, Y_val_gpu, train_idx
+                del X_train_t, Y_train_t, G_train_t, X_val_t, Y_val_t, G_val_t
+                del X_val_gpu, Y_val_gpu, G_val_gpu, train_idx
                 import gc; gc.collect()
                 if DEVICE.type == "cuda":
                     torch.cuda.empty_cache()
@@ -1227,8 +1310,15 @@ class GRULSTMPredictor(BaseModel):
             direction_up.iloc[np.where(best_short)[0]] = 0.0 + smoothing
 
             best_r_arr = np.where(long_r >= short_r, long_r, short_r).astype(np.float32)
+            # move_magnitude = R for the LABELED side (not the always-positive best side).
+            # This makes the regression target honest: model learns "what R do I get
+            # if I enter in the direction I'm predicting", not "what is the best possible R".
+            side_r_arr = np.where(
+                best_long, long_r,
+                np.where(best_short, short_r, np.nan)
+            ).astype(np.float32)
             move_magnitude = pd.Series(
-                np.clip(best_r_arr, -1.0, target_r),
+                np.clip(side_r_arr, -1.0, target_r),
                 index=df.index,
                 dtype=np.float32,
             )

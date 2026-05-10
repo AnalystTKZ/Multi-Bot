@@ -669,7 +669,7 @@ class RegimeClassifier(BaseModel):
     # 15M/default: 14 bars ≈ 3.5 hours. Using 14 everywhere collapses all
     # 4H distributions to nearly identical centroids → poor GMM separation.
     _TF_NBAR: dict = {"4H": 50, "1H": 24, "15M": 14, "5M": 10}
-    _TF_LABEL_HORIZON: dict = {"4H": 12, "1H": 12, "15M": 16, "5M": 24}
+    _TF_LABEL_HORIZON: dict = {"4H": 24, "1H": 12, "15M": 16, "5M": 24}  # 4H: 12→24 (2d→4d)
     _DEFAULT_NBAR = 14
 
     @staticmethod
@@ -1430,16 +1430,17 @@ class RegimeClassifier(BaseModel):
             conf[consol_mask] = (0.5 + 0.5 * consol_conf[consol_mask]).astype(np.float32)
 
             # RANGING (1): explicit sideways oscillation in the middle volatility band.
+            # Lowered adx threshold (20→25) and removed ema_stack constraint so more
+            # mid-band bars qualify — the model was predicting 0 RANGE (class collapse).
             ranging_mask = (
                 ~trend_mask & ~volatile_mask & ~consol_mask
-                & (adx <= 20)
-                & (ema_stack == 0)
+                & (adx <= 25)
                 & (drift_abs <= drift_p40)
-                & (efficiency <= 0.35)
-                & (autocorr_lag1 >= -0.15)
-                & (autocorr_lag1 <= 0.10)
-                & (atr_pctile >= 0.25)
-                & (atr_pctile <= 0.70)
+                & (efficiency <= 0.40)
+                & (autocorr_lag1 >= -0.20)
+                & (autocorr_lag1 <= 0.15)
+                & (atr_pctile >= 0.20)
+                & (atr_pctile <= 0.75)
             )
             labels[ranging_mask] = 1
             adx_range_conf = (1.0 - (adx / 20.0).clip(0.0, 1.0))
@@ -1467,7 +1468,7 @@ class RegimeClassifier(BaseModel):
             # sufficient; VOLATILE only needs 3-4 bars to be real.
             _persist_by_class = {
                 0: {"5M": 48, "15M": 16, "1H": 6, "4H": 3, "1D": 2},    # TRENDING
-                1: {"5M": 24, "15M":  8, "1H": 4, "4H": 2, "1D": 1},    # RANGING
+                1: {"5M": 12, "15M":  4, "1H": 2, "4H": 1, "1D": 1},    # RANGING — was 4H:4 (too strict → class collapse)
                 2: {"5M": 24, "15M":  8, "1H": 4, "4H": 2, "1D": 1},    # CONSOLIDATING
                 3: {"5M": 24, "15M":  8, "1H": 4, "4H": 2, "1D": 1},    # VOLATILE
             }
@@ -2154,7 +2155,10 @@ class RegimeClassifier(BaseModel):
                 logger.info("RegimeClassifier HTF score head: DataParallel across %d GPUs",
                             torch.cuda.device_count())
 
-            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "2.0"))
+            # Dynamic pos_weight from actual class distribution.
+            # Cap raised from 2.0 to 30.0 — 94% neutral gives ~27× imbalance and
+            # a 2.0 cap was starving the directional classes of gradient.
+            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "30.0"))
             pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, max_pos_weight).astype(np.float32)
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF BCE pos_weight=%s",
@@ -2195,6 +2199,12 @@ class RegimeClassifier(BaseModel):
 
             def _score_loss(logits: "torch.Tensor", target: "torch.Tensor",
                             weight: "torch.Tensor") -> "torch.Tensor":
+                """
+                Focal BCE loss for extreme class imbalance (94% BIAS_NEUTRAL).
+                Focal weight (1-pt)^gamma down-weights correctly-classified neutral bars
+                so the model concentrates gradient on the hard directional examples.
+                gamma=2.0 is the standard focal loss value from Lin et al. 2017.
+                """
                 logits_f = logits.float()
                 target_f = target.float()
                 pred = torch.sigmoid(logits_f)
@@ -2204,6 +2214,12 @@ class RegimeClassifier(BaseModel):
                     reduction="none",
                     pos_weight=pos_weight,
                 )
+                # Focal modulation: (1 - p_t)^gamma where p_t is the probability of the true class
+                gamma = float(os.getenv("REGIME_HTF_FOCAL_GAMMA", "2.0"))
+                pt = torch.exp(-per_cell.detach())  # ≈ prob of true class; detach to avoid double grad
+                focal_weight = (1.0 - pt) ** gamma
+                per_cell = focal_weight * per_cell
+
                 neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "3.0"))
                 if neg_penalty > 0.0:
                     neutral_target = (target_f < 0.5).float()
