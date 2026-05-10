@@ -192,8 +192,9 @@ SEQUENCE_FEATURES = [
 # Trained on 4H data. Only HTF-appropriate features: no 5M/15M noise.
 # Macro indices belong here — they operate at daily/weekly resolution, match 4H bias.
 REGIME_4H_FEATURES = [
-    # Lean HTF directional-bias set. Raw macro/index columns were noisy and
-    # path-dependent, so bias learns from price structure and normalised context.
+    # Lean HTF directional-bias set. Price structure core, plus macro_vix_level
+    # which conditions the model on broad-market fear/complacency — a reliable
+    # regime discriminator (high VIX → sustained directional moves; low VIX → ranging).
     "adx_14_base",
     "ema_stack_score",
     "mtf_1d_adx",
@@ -211,13 +212,14 @@ REGIME_4H_FEATURES = [
     "hh_hl_structure",
     "lh_ll_structure",
     "external_trend_direction",
-    "external_structure_score", # major-swing direction from larger swing window
+    "external_structure_score",
     "internal_structure_state",
     "swing_sequence_score",
     "bars_since_mss",
-    "mss_bull_bars_ago",        # bars since last bullish MSS at 4H resolution
-    "mss_bear_bars_ago",        # bars since last bearish MSS at 4H resolution
+    "mss_bull_bars_ago",
+    "mss_bear_bars_ago",
     "symbol_group_code",
+    "macro_vix_level",          # VIX/50 clipped [0,2]: macro fear regime conditioning
 ]
 
 # ─── 1H STRUCTURE classifier features ────────────────────────────────────────

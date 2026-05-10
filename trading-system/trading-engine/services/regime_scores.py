@@ -519,7 +519,7 @@ def classify_trade_regime(row: pd.Series | dict[str, Any]) -> str:
         if vol_pct > 0.75 or vol_score > 0.75:
             return "TRADEABLE_TREND_HIGH_VOL"
         return "TRADEABLE_TREND"
-    if range_score > 0.65 and trend_score < 0.35:
+    if range_score > 0.40 and trend_score < 0.45:
         return "RANGE"
     if consolidation_score > 0.65 or (vol_pct < 0.25 and er < 0.25):
         return "CONSOLIDATION"

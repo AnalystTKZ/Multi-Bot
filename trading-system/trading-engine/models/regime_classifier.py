@@ -2176,7 +2176,23 @@ class RegimeClassifier(BaseModel):
             n_tr = len(X_tr_gpu)
             n_va = len(X_va_gpu)
             steps_per_epoch = max(1, (n_tr + batch_size - 1) // batch_size)
-            tr_idx = np.arange(n_tr, dtype=np.int64)
+
+            # Balanced sampling: directional bars (BIAS_UP/DOWN) are 5-6% of training
+            # data but carry all the learning signal. Pure shuffle buries them in neutral
+            # batches, leaving focal loss to do all the work. Weighted oversampling draws
+            # each directional bar ~15× more often per epoch, making them ~48% of every
+            # batch without reducing total gradient steps.
+            _is_dir = (y_tr[:, 0] > 0.5) | (y_tr[:, 1] > 0.5)  # BIAS_UP or BIAS_DOWN
+            _n_dir = int(_is_dir.sum())
+            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "15.0"))
+            _htf_sample_weights = np.where(_is_dir, _dir_weight, 1.0).astype(np.float64)
+            _htf_sample_weights /= _htf_sample_weights.sum()
+            logger.info(
+                "RegimeClassifier[mode=%s]: HTF balanced sampler — dir=%d neutral=%d "
+                "dir_weight=%.0f => dir_frac_per_epoch≈%.1f%%",
+                self._mode, _n_dir, n_tr - _n_dir, _dir_weight,
+                100.0 * _n_dir * _dir_weight / (_n_dir * _dir_weight + (n_tr - _n_dir)),
+            )
 
             optimiser = torch.optim.AdamW(
                 self._model.parameters(),
@@ -2249,7 +2265,7 @@ class RegimeClassifier(BaseModel):
 
             for epoch in range(50):
                 self._model.train()
-                np.random.shuffle(tr_idx)
+                tr_idx = np.random.choice(n_tr, size=n_tr, replace=True, p=_htf_sample_weights)
                 tr_idx_t = torch.from_numpy(tr_idx).to(DEVICE)
                 optimiser.zero_grad()
                 tr_loss = 0.0
