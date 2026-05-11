@@ -1946,7 +1946,17 @@ def _compute_backtest_signal(
     if _gru_expected_r is not None:
         _gru_expected_r = float(_gru_expected_r)
         if np.isfinite(_gru_expected_r):
-            _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.30"))
+            _min_gru_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.20"))
+            # HTF soft weighting: high bias confidence reduces the R threshold.
+            # bias_score in [0,1]; HTF_WEIGHT_FACTOR=0.40 means full confidence
+            # drops threshold by 40% (e.g. 0.20 → 0.12).
+            _regime_scores = ml_preds.get("regime_scores", {})
+            _htf_bias_score = float(
+                _regime_scores.get("bias_up_score", 0.0) if side == "buy"
+                else _regime_scores.get("bias_down_score", 0.0)
+            )
+            _htf_weight_factor = float(os.getenv("HTF_WEIGHT_FACTOR", "0.40"))
+            _min_gru_r *= max(0.0, 1.0 - _htf_weight_factor * _htf_bias_score)
             if _gru_expected_r < _min_gru_r:
                 _reject("gru_expected_r_below_threshold")
                 return None
@@ -2615,6 +2625,18 @@ def _backtest_trader(
             logger.warning("QualityScorer CPU path unavailable (%s) — falling back to GPU predict()", _e)
             _qs_infer = None
 
+    # Symbols allowed to trade during Asian session (2–6 UTC).
+    # JPY pairs and major forex have meaningful Asian liquidity.
+    # XAUUSD is excluded — gold spreads widen and volatility is thin in Asia.
+    _ASIAN_SESSION_SYMBOLS = frozenset(
+        s.strip().upper()
+        for s in os.getenv(
+            "ASIAN_SESSION_SYMBOLS",
+            "EURUSD,USDJPY,EURJPY,GBPJPY,GBPUSD",
+        ).split(",")
+        if s.strip()
+    )
+
     # Hoist env-var reads outside the 473k-bar loop — os.getenv does a dict lookup
     # + string compare on every call; at 473k bars this adds measurable overhead.
     _cfg_density_lambda   = float(os.getenv("DENSITY_LAMBDA",             "0.12"))
@@ -2691,8 +2713,14 @@ def _backtest_trader(
                         trader_id, day_str)
             continue
 
-        # ── Circuit breaker 3: active hours (London open → NY close) ─────────
-        if not (7 <= dt.hour < 18):
+        # ── Circuit breaker 3: active hours (per-symbol session filter) ─────
+        # Forex pairs are liquid in Asian session; gold is not.
+        _h = dt.hour
+        if symbol in _ASIAN_SESSION_SYMBOLS:
+            _session_ok = (2 <= _h < 20)
+        else:
+            _session_ok = (6 <= _h < 20)
+        if not _session_ok:
             _dbg["session"] += 1
             continue
 

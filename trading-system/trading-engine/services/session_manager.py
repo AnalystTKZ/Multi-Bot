@@ -4,11 +4,23 @@ session_manager.py — UTC-based session detection. Single source of truth.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
 
+
+# Symbols that trade in Asian session (2–6 UTC). Matches run_backtest.py default.
+# Overrideable via ASIAN_SESSION_SYMBOLS env var (comma-separated).
+ASIAN_SESSION_SYMBOLS: frozenset[str] = frozenset(
+    s.strip().upper()
+    for s in os.getenv(
+        "ASIAN_SESSION_SYMBOLS",
+        "EURUSD,USDJPY,EURJPY,GBPJPY,GBPUSD",
+    ).split(",")
+    if s.strip()
+)
 
 # Hard close times per trader_id: (hour, minute)
 _HARD_CLOSE = {
@@ -28,13 +40,13 @@ class SessionManager:
         now = dt or datetime.now(timezone.utc)
         h = now.hour
 
-        if 2 <= h < 7:
+        if 2 <= h < 6:
             return "ASIAN"
-        elif 7 <= h < 12:
+        elif 6 <= h < 12:
             return "LONDON"
         elif h == 12:
             return "DEAD"
-        elif 13 <= h < 18:
+        elif 13 <= h < 20:
             return "NY"
         else:
             return "INACTIVE"
@@ -61,9 +73,9 @@ class SessionManager:
             return None
 
         session_hours = {
-            "ASIAN": range(2, 7),
-            "LONDON": range(7, 12),
-            "NY": range(13, 18),
+            "ASIAN": range(2, 6),
+            "LONDON": range(6, 12),
+            "NY": range(13, 20),
         }
         hours = session_hours.get(session.upper())
         if hours is None:
@@ -74,6 +86,18 @@ class SessionManager:
         if len(bars) == 0:
             return None
         return float(bars["close"].iloc[0])
+
+    def is_active_for_symbol(self, symbol: str, dt: Optional[datetime] = None) -> bool:
+        """Returns True if this symbol should be traded at the given UTC time.
+
+        Forex pairs in ASIAN_SESSION_SYMBOLS are active 2–20 UTC.
+        All other symbols (gold, etc.) are active 6–20 UTC only.
+        """
+        now = dt or datetime.now(timezone.utc)
+        h = now.hour
+        if symbol.upper() in ASIAN_SESSION_SYMBOLS:
+            return 2 <= h < 20
+        return 6 <= h < 20
 
     def should_trade(self, trader_id: str, dt: Optional[datetime] = None) -> bool:
         """Combined session + dead zone check for a specific trader."""

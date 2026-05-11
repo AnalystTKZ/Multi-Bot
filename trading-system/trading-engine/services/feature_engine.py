@@ -222,6 +222,17 @@ REGIME_4H_FEATURES = [
     "bars_since_last_mss",
     "bars_since_last_bos",
     "directional_bars_20",
+    # Causal 4H candle/price-action context. These are deliberately simple,
+    # backward-looking primitives so the classifier can distinguish a real
+    # trend body from one isolated structural event.
+    "candle_body_atr",
+    "candle_range_atr",
+    "candle_close_location",
+    "body_direction_20",
+    "wick_rejection_20",
+    "trend_body_pressure_20",
+    "range_close_position_20",
+    "breakout_close_strength",
     "mss_bull_bars_ago",
     "mss_bear_bars_ago",
     "symbol_group_code",
@@ -1168,10 +1179,23 @@ class FeatureEngine:
 
         macro = _load_macro_cache()
         mask = self._macro_mask(symbol)
+        target_index = pd.DatetimeIndex(index)
 
         def _align(series: Optional[pd.Series]) -> pd.Series:
             if series is None or len(series) == 0:
                 return pd.Series(0.0, index=index)
+            series_index = pd.DatetimeIndex(series.index)
+            target_tz = target_index.tz
+            series_tz = series_index.tz
+            if series_tz is not None and target_tz is None:
+                series = series.copy()
+                series.index = series_index.tz_convert(None)
+            elif series_tz is None and target_tz is not None:
+                series = series.copy()
+                series.index = series_index.tz_localize(target_tz)
+            elif series_tz is not None and target_tz is not None and str(series_tz) != str(target_tz):
+                series = series.copy()
+                series.index = series_index.tz_convert(target_tz)
             # ffill only — bfill would pull future values back into earlier bars (lookahead)
             s = series.reindex(index, method="ffill").fillna(0.0)
             return s

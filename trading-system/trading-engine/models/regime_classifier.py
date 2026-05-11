@@ -318,9 +318,9 @@ class RegimeClassifier(BaseModel):
         ))
         thresholds = np.unique(np.concatenate([
             np.linspace(0.35, 0.85, 11),
-            np.linspace(0.875, 0.99, 6),
+            np.array([0.875, 0.90, 0.925, 0.95, 0.975, 0.99, 0.995]),
         ]))
-        min_policy_margin = float(os.getenv("REGIME_HTF_MIN_POLICY_MARGIN", "0.05"))
+        min_policy_margin = float(os.getenv("REGIME_HTF_MIN_POLICY_MARGIN", "0.10"))
         margins = np.unique(np.concatenate([
             np.linspace(0.00, 0.30, 7),
             np.linspace(0.35, 0.65, 7),
@@ -673,7 +673,7 @@ class RegimeClassifier(BaseModel):
     # 15M/default: 14 bars ≈ 3.5 hours. Using 14 everywhere collapses all
     # 4H distributions to nearly identical centroids → poor GMM separation.
     _TF_NBAR: dict = {"4H": 50, "1H": 24, "15M": 14, "5M": 10}
-    _TF_LABEL_HORIZON: dict = {"4H": 36, "1H": 12, "15M": 16, "5M": 24}
+    _TF_LABEL_HORIZON: dict = {"4H": 84, "1H": 12, "15M": 16, "5M": 24}
     _DEFAULT_NBAR = 14
 
     @staticmethod
@@ -885,7 +885,7 @@ class RegimeClassifier(BaseModel):
         horizon = int(RegimeClassifier._TF_LABEL_HORIZON.get(_tf, 12))
         if _tf == "4H" and mode == "htf_bias":
             horizon = int(os.getenv("REGIME_HTF_LABEL_HORIZON", str(horizon)))
-            horizon = max(12, min(72, horizon))
+            horizon = max(48, min(120, horizon))
         n_bar = int(RegimeClassifier._TF_NBAR.get(_tf, RegimeClassifier._DEFAULT_NBAR))
 
         close = df["close"].astype(float)
@@ -942,6 +942,38 @@ class RegimeClassifier(BaseModel):
         bbw_pctile = score_df["bb_width_percentile"]
         rolling_range_pctile = score_df["rolling_range_percentile"]
         range_exp_z = score_df["range_expansion_zscore"]
+        open_s = df["open"].astype(float) if "open" in df.columns else close.shift(1).fillna(close)
+        candle_range = (high - low).replace(0.0, np.nan)
+        candle_body = close - open_s
+        candle_body_atr = (candle_body / (atr + 1e-9)).clip(-5.0, 5.0).fillna(0.0)
+        candle_range_atr = (candle_range / (atr + 1e-9)).clip(0.0, 8.0).fillna(0.0)
+        candle_close_location = ((close - low) / (candle_range + 1e-9)).clip(0.0, 1.0).fillna(0.5)
+        upper_wick = (high - pd.concat([open_s, close], axis=1).max(axis=1)).clip(lower=0.0)
+        lower_wick = (pd.concat([open_s, close], axis=1).min(axis=1) - low).clip(lower=0.0)
+        wick_balance = ((lower_wick - upper_wick) / (candle_range + 1e-9)).clip(-1.0, 1.0).fillna(0.0)
+        body_direction_20 = (
+            candle_body.rolling(20, min_periods=5).sum()
+            / (candle_body.abs().rolling(20, min_periods=5).sum() + 1e-9)
+        ).clip(-1.0, 1.0).fillna(0.0)
+        trend_body_pressure_20 = (
+            candle_body.rolling(20, min_periods=5).sum()
+            / (candle_range.rolling(20, min_periods=5).sum() + 1e-9)
+        ).clip(-1.0, 1.0).fillna(0.0)
+        wick_rejection_20 = wick_balance.rolling(20, min_periods=5).mean().clip(-1.0, 1.0).fillna(0.0)
+        roll_high_20 = high.rolling(20, min_periods=5).max()
+        roll_low_20 = low.rolling(20, min_periods=5).min()
+        roll_range_20 = (roll_high_20 - roll_low_20).replace(0.0, np.nan)
+        range_close_position_20 = ((close - roll_low_20) / (roll_range_20 + 1e-9)).clip(0.0, 1.0).fillna(0.5)
+        prev_high_20 = high.shift(1).rolling(20, min_periods=5).max()
+        prev_low_20 = low.shift(1).rolling(20, min_periods=5).min()
+        breakout_close_strength = np.where(
+            close > prev_high_20,
+            (close - prev_high_20) / (atr + 1e-9),
+            np.where(close < prev_low_20, -((prev_low_20 - close) / (atr + 1e-9)), 0.0),
+        )
+        breakout_close_strength = pd.Series(breakout_close_strength, index=df.index).clip(-4.0, 4.0).fillna(0.0)
+        past_drift_20 = ((close - close.shift(20)) / (atr + 1e-9)).clip(-8.0, 8.0).fillna(0.0)
+        past_drift_40 = ((close - close.shift(40)) / (atr + 1e-9)).clip(-12.0, 12.0).fillna(0.0)
 
         if mode == "htf_bias":
             labels = pd.Series(2, index=df.index, dtype=int)
@@ -950,8 +982,10 @@ class RegimeClassifier(BaseModel):
             spread = (up_exc - down_exc)
             dominance = (spread.abs() / (f_range + 1e-9)).clip(0.0, 1.0)
             dominant_exc = pd.concat([up_exc, down_exc], axis=1).max(axis=1)
-            barrier_atr = float(os.getenv("REGIME_HTF_BARRIER_ATR", "0.80"))
-            terminal_min = float(os.getenv("REGIME_HTF_TERMINAL_ATR", "0.25"))
+            barrier_atr = float(os.getenv("REGIME_HTF_BARRIER_ATR", "2.20"))
+            terminal_min = float(os.getenv("REGIME_HTF_TERMINAL_ATR", "0.80"))
+            adverse_ratio = float(os.getenv("REGIME_HTF_MAX_ADVERSE_RATIO", "0.78"))
+            dominance_min = float(os.getenv("REGIME_HTF_MIN_DOMINANCE", "0.22"))
             close_arr = close.to_numpy(dtype=np.float64, copy=False)
             high_arr = high.to_numpy(dtype=np.float64, copy=False)
             low_arr = low.to_numpy(dtype=np.float64, copy=False)
@@ -990,72 +1024,133 @@ class RegimeClassifier(BaseModel):
                 index=df.index,
             )
             up_path = up_first | (
-                (up_exc >= barrier_atr * 1.25)
+                (up_exc >= barrier_atr)
                 & (terminal > terminal_min)
-                & (dominance >= 0.35)
+                & (dominance >= dominance_min)
+                & (down_exc <= up_exc * adverse_ratio)
             )
             down_path = down_first | (
-                (down_exc >= barrier_atr * 1.25)
+                (down_exc >= barrier_atr)
                 & (terminal < -terminal_min)
-                & (dominance >= 0.35)
+                & (dominance >= dominance_min)
+                & (up_exc <= down_exc * adverse_ratio)
             )
             hh_hl_structure = score_df["hh_hl_structure"]
             lh_ll_structure = score_df["lh_ll_structure"]
+            swing_sequence = score_df.get(
+                "swing_sequence_score",
+                (hh_hl_structure.astype(float) - lh_ll_structure.astype(float)).clip(-1.0, 1.0),
+            )
+            bullish_price_action = (
+                (trend_body_pressure_20 > 0.06)
+                & (body_direction_20 > 0.10)
+                & (range_close_position_20 > 0.58)
+                & (wick_rejection_20 > -0.20)
+                & (
+                    (past_drift_20 > 0.65)
+                    | (past_drift_40 > 1.10)
+                    | (breakout_close_strength > 0.35)
+                )
+            )
+            bearish_price_action = (
+                (trend_body_pressure_20 < -0.06)
+                & (body_direction_20 < -0.10)
+                & (range_close_position_20 < 0.42)
+                & (wick_rejection_20 < 0.20)
+                & (
+                    (past_drift_20 < -0.65)
+                    | (past_drift_40 < -1.10)
+                    | (breakout_close_strength < -0.35)
+                )
+            )
             up_structure = (
                 (plus_di > minus_di * 1.08)
-                & ((adx_score > 18.0) | (trend_score > 0.55))
-                & (ema50_slope > 0.015)
+                & ((adx_score > 18.0) | (trend_score > 0.55) | bullish_price_action)
+                & ((ema50_slope > 0.015) | (past_drift_40 > 1.20))
                 & (
                     ((ema50_dist > 0.10) & (ema200_dist > 0.0))
                     | (score_df["bias_up_score"] > 0.60)
+                    | bullish_price_action
                 )
-                & (er_now > 0.24)
+                & ((er_now > 0.24) | (efficiency > 0.20) | bullish_price_action)
                 & (hh_hl_structure >= lh_ll_structure * 0.80)
+                & (swing_sequence > -0.20)
+                & (chop_score < 0.78)
             )
             down_structure = (
                 (minus_di > plus_di * 1.08)
-                & ((adx_score > 18.0) | (trend_score > 0.55))
-                & (ema50_slope < -0.015)
+                & ((adx_score > 18.0) | (trend_score > 0.55) | bearish_price_action)
+                & ((ema50_slope < -0.015) | (past_drift_40 < -1.20))
                 & (
                     ((ema50_dist < -0.10) & (ema200_dist < 0.0))
                     | (score_df["bias_down_score"] > 0.60)
+                    | bearish_price_action
                 )
-                & (er_now > 0.24)
+                & ((er_now > 0.24) | (efficiency > 0.20) | bearish_price_action)
                 & (lh_ll_structure >= hh_hl_structure * 0.80)
+                & (swing_sequence < 0.20)
+                & (chop_score < 0.78)
+            )
+            continuation_up = (
+                (terminal > terminal_min)
+                & (up_exc >= barrier_atr * 0.70)
+                & (down_exc <= np.maximum(1.20, up_exc * adverse_ratio))
+                & (dominance >= max(0.15, dominance_min * 0.75))
+                & (efficiency >= 0.16)
+            )
+            continuation_down = (
+                (terminal < -terminal_min)
+                & (down_exc >= barrier_atr * 0.70)
+                & (up_exc <= np.maximum(1.20, down_exc * adverse_ratio))
+                & (dominance >= max(0.15, dominance_min * 0.75))
+                & (efficiency >= 0.16)
             )
             up_mask = (
                 valid
                 & up_structure
-                & up_path
-                & (up_exc >= max(barrier_atr, trend_thr * 0.60))
-                & (up_exc >= down_exc * 1.15)
+                & (up_path | (continuation_up & bullish_price_action))
+                & (up_exc >= max(barrier_atr * 0.70, trend_thr * 0.45))
+                & (up_exc >= down_exc * 1.08)
                 & (terminal > terminal_min)
             )
             down_mask = (
                 valid
                 & down_structure
-                & down_path
-                & (down_exc >= max(barrier_atr, trend_thr * 0.60))
-                & (down_exc >= up_exc * 1.15)
+                & (down_path | (continuation_down & bearish_price_action))
+                & (down_exc >= max(barrier_atr * 0.70, trend_thr * 0.45))
+                & (down_exc >= up_exc * 1.08)
                 & (terminal < -terminal_min)
             )
+            conflict = up_mask & down_mask
+            up_mask &= ~conflict
+            down_mask &= ~conflict
             labels[up_mask] = 0
             labels[down_mask] = 1
 
             directional_conf = (
-                0.35 * (dominance / 0.60).clip(0.0, 1.0)
-                + 0.25 * (dominant_exc / (trend_thr + 1e-9)).clip(0.0, 1.0)
-                + 0.20 * efficiency
-                + 0.20 * er_now
+                0.28 * (dominance / 0.55).clip(0.0, 1.0)
+                + 0.22 * (dominant_exc / max(barrier_atr, trend_thr * 0.50)).clip(0.0, 1.0)
+                + 0.18 * efficiency
+                + 0.14 * er_now
+                + 0.18 * np.where(
+                    up_mask,
+                    bullish_price_action.astype(float),
+                    np.where(down_mask, bearish_price_action.astype(float), 0.0),
+                )
             ).clip(0.0, 1.0)
             conf[up_mask | down_mask] = (0.45 + 0.55 * directional_conf[up_mask | down_mask]).astype(np.float32)
 
             no_clear_path = ~(up_path | down_path)
+            two_sided_or_reversing = (
+                (dominance < 0.18)
+                | ((up_exc >= barrier_atr * 0.65) & (down_exc >= barrier_atr * 0.65))
+                | ((terminal.abs() < terminal_min) & (dominant_exc < barrier_atr * 1.15))
+            )
             neutral_structure = (
                 (
                     no_clear_path
-                    | (dominance < 0.45)
-                    | (dominant_exc < barrier_atr)
+                    | two_sided_or_reversing
+                    | (dominant_exc < barrier_atr * 0.65)
                     | (terminal.abs() < terminal_min)
                 )
                 & (
@@ -1063,6 +1158,7 @@ class RegimeClassifier(BaseModel):
                     | (er_now < 0.32)
                     | (trend_score < 0.55)
                     | (ema50_slope.abs() < 0.05)
+                    | ((body_direction_20.abs() < 0.12) & (trend_body_pressure_20.abs() < 0.08))
                 )
             )
             neutral_mask = valid & neutral_structure & ~(up_mask | down_mask)
@@ -1689,6 +1785,70 @@ class RegimeClassifier(BaseModel):
             ).rolling(24, min_periods=1).sum()
             _set("liquidity_sweep_24h", np.clip(_sw_count.to_numpy(dtype=np.float32), 0, 20))
 
+        candle_price_action_features = {
+            "candle_body_atr",
+            "candle_range_atr",
+            "candle_close_location",
+            "body_direction_20",
+            "wick_rejection_20",
+            "trend_body_pressure_20",
+            "range_close_position_20",
+            "breakout_close_strength",
+        }
+        if requested_set.intersection(candle_price_action_features):
+            try:
+                _open = df["open"].astype(float) if "open" in df.columns else close_s.shift(1).fillna(close_s)
+                _high = df["high"].astype(float)
+                _low = df["low"].astype(float)
+                _close = close_s
+                _atr = _atr().replace(0.0, np.nan)
+                _range = (_high - _low).replace(0.0, np.nan)
+                _body = _close - _open
+                _upper_wick = (_high - pd.concat([_open, _close], axis=1).max(axis=1)).clip(lower=0.0)
+                _lower_wick = (pd.concat([_open, _close], axis=1).min(axis=1) - _low).clip(lower=0.0)
+                _wick_balance = ((_lower_wick - _upper_wick) / (_range + 1e-9)).clip(-1.0, 1.0).fillna(0.0)
+                _roll_high_20 = _high.rolling(20, min_periods=5).max()
+                _roll_low_20 = _low.rolling(20, min_periods=5).min()
+                _roll_range_20 = (_roll_high_20 - _roll_low_20).replace(0.0, np.nan)
+                _prev_high_20 = _high.shift(1).rolling(20, min_periods=5).max()
+                _prev_low_20 = _low.shift(1).rolling(20, min_periods=5).min()
+
+                if _has("candle_body_atr"):
+                    _set("candle_body_atr", (_body / (_atr + 1e-9)).clip(-5.0, 5.0).fillna(0.0))
+                if _has("candle_range_atr"):
+                    _set("candle_range_atr", (_range / (_atr + 1e-9)).clip(0.0, 8.0).fillna(0.0))
+                if _has("candle_close_location"):
+                    _set("candle_close_location", ((_close - _low) / (_range + 1e-9)).clip(0.0, 1.0).fillna(0.5))
+                if _has("body_direction_20"):
+                    _set(
+                        "body_direction_20",
+                        (
+                            _body.rolling(20, min_periods=5).sum()
+                            / (_body.abs().rolling(20, min_periods=5).sum() + 1e-9)
+                        ).clip(-1.0, 1.0).fillna(0.0),
+                    )
+                if _has("wick_rejection_20"):
+                    _set("wick_rejection_20", _wick_balance.rolling(20, min_periods=5).mean().clip(-1.0, 1.0).fillna(0.0))
+                if _has("trend_body_pressure_20"):
+                    _set(
+                        "trend_body_pressure_20",
+                        (
+                            _body.rolling(20, min_periods=5).sum()
+                            / (_range.rolling(20, min_periods=5).sum() + 1e-9)
+                        ).clip(-1.0, 1.0).fillna(0.0),
+                    )
+                if _has("range_close_position_20"):
+                    _set("range_close_position_20", ((_close - _roll_low_20) / (_roll_range_20 + 1e-9)).clip(0.0, 1.0).fillna(0.5))
+                if _has("breakout_close_strength"):
+                    _breakout = np.where(
+                        _close > _prev_high_20,
+                        (_close - _prev_high_20) / (_atr + 1e-9),
+                        np.where(_close < _prev_low_20, -((_prev_low_20 - _close) / (_atr + 1e-9)), 0.0),
+                    )
+                    _set("breakout_close_strength", pd.Series(_breakout, index=df.index).clip(-4.0, 4.0).fillna(0.0))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: candle price-action features failed: {exc}") from exc
+
         structure_score_features = {
             "mss_bull_flag", "mss_bear_flag",
             "mss_bull_bars_ago", "mss_bear_bars_ago", "bars_since_mss",
@@ -2223,7 +2383,7 @@ class RegimeClassifier(BaseModel):
             # Dynamic pos_weight from actual class distribution.
             # Cap raised from 2.0 to 30.0 — 94% neutral gives ~27× imbalance and
             # a 2.0 cap was starving the directional classes of gradient.
-            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "30.0"))
+            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "20.0"))
             pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, max_pos_weight).astype(np.float32)
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF BCE pos_weight=%s",
@@ -2245,11 +2405,11 @@ class RegimeClassifier(BaseModel):
             # Balanced sampling: directional bars (BIAS_UP/DOWN) are 5-6% of training
             # data but carry all the learning signal. Pure shuffle buries them in neutral
             # batches, leaving focal loss to do all the work. Weighted oversampling draws
-            # each directional bar ~15× more often per epoch, making them ~48% of every
-            # batch without reducing total gradient steps.
+            # each directional bar more often per epoch, but not so aggressively
+            # that the head learns to flood neutral bars with directional scores.
             _is_dir = (y_tr[:, 0] > 0.5) | (y_tr[:, 1] > 0.5)  # BIAS_UP or BIAS_DOWN
             _n_dir = int(_is_dir.sum())
-            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "8.0"))
+            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "5.0"))
             _htf_sample_weights = np.where(_is_dir, _dir_weight, 1.0).astype(np.float64)
             _htf_sample_weights /= _htf_sample_weights.sum()
             logger.info(
@@ -2281,7 +2441,7 @@ class RegimeClassifier(BaseModel):
             # this floor. Prevents the model from locking in a recall-maximising state
             # early in training (epoch 15-20) before precision has recovered.
             # If no epoch ever clears the floor, we fall back to the overall best score.
-            _ckpt_min_prec = float(os.getenv("REGIME_HTF_CHECKPOINT_MIN_PRECISION", "0.30"))
+            _ckpt_min_prec = float(os.getenv("REGIME_HTF_CHECKPOINT_MIN_PRECISION", "0.45"))
             _any_epoch_above_floor = False
 
             def _score_loss(logits: "torch.Tensor", target: "torch.Tensor",
@@ -2307,7 +2467,7 @@ class RegimeClassifier(BaseModel):
                 focal_weight = (1.0 - pt) ** gamma
                 per_cell = focal_weight * per_cell
 
-                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "5.0"))
+                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "8.0"))
                 if neg_penalty > 0.0:
                     neutral_target = (target_f < 0.5).float()
                     per_cell = per_cell + neg_penalty * neutral_target * torch.square(pred)

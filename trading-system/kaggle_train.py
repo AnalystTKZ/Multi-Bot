@@ -418,11 +418,35 @@ else:
 # learned EV surface has enough density to generalise.
 _QS_MIN_TRADES = int(os.getenv("QS_MIN_TRADES_R1", "50"))
 _r1_trades = _journal_count()
+_r0_archive = _journal_path().with_name("trade_journal_train_only.jsonl")
+_r0_trades = sum(1 for _ in open(_r0_archive)) if _r0_archive.exists() else 0
+_combined_trades = _r1_trades + _r0_trades
 _qs_extra_env: dict = {}
 
-if _r1_trades >= _QS_MIN_TRADES:
-    print(f"\n=== QualityScorer: {_r1_trades} R1 trades ≥ {_QS_MIN_TRADES} — training and activating ===")
-    run_retrain("quality", label="R1 journal", extra_env=_eval_journal_training_env())
+print(f"\n  QualityScorer trade count: R0={_r0_trades} R1={_r1_trades} combined={_combined_trades} (floor={_QS_MIN_TRADES})")
+
+if _combined_trades >= _QS_MIN_TRADES:
+    # Build a combined journal file so QS can train on all available evidence.
+    # R0 archive (trade_journal_train_only.jsonl) + R1 live journal are concatenated
+    # into a temporary file that retrain_incremental.py reads via QUALITY_JOURNAL_PATH.
+    import shutil as _shutil
+    _qs_combined = _journal_path().with_name("trade_journal_qs_combined.jsonl")
+    if _r0_trades > 0 and _r1_trades > 0:
+        with open(_qs_combined, "wb") as _out:
+            with open(_r0_archive, "rb") as _f0:
+                _shutil.copyfileobj(_f0, _out)
+            with open(_journal_path(), "rb") as _f1:
+                _shutil.copyfileobj(_f1, _out)
+        _qs_journal_source = str(_qs_combined)
+        print(f"  Combined R0+R1 journal → {_qs_combined.name} ({_combined_trades} trades)")
+    elif _r1_trades > 0:
+        _qs_journal_source = str(_journal_path())
+    else:
+        _qs_journal_source = str(_r0_archive)
+
+    print(f"\n=== QualityScorer: {_combined_trades} combined trades ≥ {_QS_MIN_TRADES} — training and activating ===")
+    _qs_train_env = {**_eval_journal_training_env(), "QUALITY_JOURNAL_PATH": _qs_journal_source}
+    run_retrain("quality", label="R0+R1 combined journal", extra_env=_qs_train_env)
     _qs_weight = env["weights"] / "quality_scorer.pkl"
     if _qs_weight.exists():
         _qs_extra_env = {"BACKTEST_REQUIRE_QUALITY": "1"}
@@ -430,7 +454,16 @@ if _r1_trades >= _QS_MIN_TRADES:
     else:
         print("  WARN  QualityScorer weights not created — gate remains disabled")
 else:
-    print(f"\n  QualityScorer: {_r1_trades} R1 trades < {_QS_MIN_TRADES} minimum — gate disabled")
+    print(f"  QualityScorer: {_combined_trades} combined trades < {_QS_MIN_TRADES} minimum — gate disabled")
+
+# ─── Pre-Round 2: Incremental retrain (GRU + Regime) ─────────────────────────
+# R2 runs on blind data. Retraining on train-split data before R2 (matching what
+# happens before R3) ensures the models incorporate the most recent training
+# signal before the blind evaluation window begins.
+
+print("\n=== Pre-Round 2: Incremental retrain (GRU + Regime) ===")
+for model in ["gru", "regime"]:
+    run_retrain(model, label="pre-R2 retrain")
 
 # ─── Round 2: BLIND backtest on test window ───────────────────────────────────
 # This is the true out-of-sample evaluation.

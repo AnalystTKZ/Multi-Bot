@@ -488,6 +488,12 @@ class GRULSTMPredictor(BaseModel):
             raw_mae = float(np.mean(np.abs(p - y)))
             cal = np.clip(iso.predict(p), -1.0, GRU_LABEL_TARGET_R)
             cal_mae = float(np.mean(np.abs(cal - y)))
+            if cal_mae >= raw_mae:
+                logger.warning(
+                    "fit_r_isotonic: %s calibrator increases MAE (cal=%.4f >= raw=%.4f) — skipping",
+                    side, cal_mae, raw_mae,
+                )
+                return None, {"n": int(len(p)), "raw_mae": raw_mae, "calibrated_mae": cal_mae, "skipped": "calibrator_hurts"}
             return iso, {"n": int(len(p)), "raw_mae": raw_mae, "calibrated_mae": cal_mae}
 
         long_iso, long_stats = _fit_one(pred_long, true_long, "long")
@@ -1193,6 +1199,8 @@ class GRULSTMPredictor(BaseModel):
                 best_val_r_mae = float("inf")
                 best_positive_r_acc = 0.0
                 patience, no_improve = _patience, 0
+                _rmae_best = float("inf")
+                _rmae_ckpt = os.path.join(WEIGHT_DIR, "model_best_rmae.pt")
 
                 # Move val set to GPU once — it's small enough (~600K × 30 × F ≈ 600MB)
                 X_val_gpu = X_val_t.to(DEVICE, non_blocking=True)
@@ -1292,19 +1300,47 @@ class GRULSTMPredictor(BaseModel):
                         val_positive_r_acc, val_dir_acc, val_r_total,
                     )
 
-                    if val_loss < best_val:
+                    _improved_loss = val_loss < best_val
+                    _improved_rmae = val_r_mae < _rmae_best
+
+                    if _improved_loss:
                         best_val = val_loss
                         best_dir_acc = val_dir_acc
                         best_val_r_mae = val_r_mae
                         best_positive_r_acc = val_positive_r_acc
-                        no_improve = 0
                         self.save(WEIGHT_DIR)
-                        logger.info("train_multi TF=%s: new best val=%.4f — saved", tf, best_val)
+                        logger.info("train_multi TF=%s: new best val=%.4f r_mae=%.4f — saved", tf, best_val, val_r_mae)
+
+                    if _improved_rmae:
+                        _rmae_best = val_r_mae
+                        _m_raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+                        torch.save(_m_raw.state_dict(), _rmae_ckpt)
+                        logger.info("train_multi TF=%s: new best r_mae=%.4f — saved rmae checkpoint", tf, _rmae_best)
+
+                    if _improved_loss or _improved_rmae:
+                        no_improve = 0
                     else:
                         no_improve += 1
                         if no_improve >= patience and (epoch + 1) >= _min_epochs_before_stop:
                             logger.info("train_multi TF=%s early stop at epoch %d", tf, epoch + 1)
                             break
+
+                # Post-training: promote r_mae checkpoint if it beats the val-loss checkpoint.
+                # The val-loss-best epoch optimises composite loss; the r_mae-best epoch
+                # directly minimises prediction error on the metric used at inference.
+                if os.path.exists(_rmae_ckpt) and _rmae_best < best_val_r_mae:
+                    try:
+                        _primary_rmae = best_val_r_mae
+                        _m_raw = self._model.module if isinstance(self._model, torch.nn.DataParallel) else self._model
+                        _m_raw.load_state_dict(torch.load(_rmae_ckpt, map_location=DEVICE, weights_only=True))
+                        self.save(WEIGHT_DIR)
+                        best_val_r_mae = _rmae_best
+                        logger.info(
+                            "train_multi TF=%s: promoted r_mae checkpoint (%.4f < primary %.4f) — overwriting model.pt",
+                            tf, _rmae_best, _primary_rmae,
+                        )
+                    except Exception as _promo_exc:
+                        logger.warning("train_multi TF=%s: r_mae checkpoint promotion failed: %s", tf, _promo_exc)
 
                 # Fit monotone side-R calibrators on the held-out calibration split.
                 # Using the SAME val split as early stopping caused the calibrator to

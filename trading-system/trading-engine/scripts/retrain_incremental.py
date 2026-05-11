@@ -77,7 +77,7 @@ except RuntimeError:
 
 # All paths resolved through env — no hardcoded absolute paths
 DATA_DIR        = str(_ENV["data"])
-JOURNAL_PATH    = str(_ENV["engine"] / "logs" / "trade_journal_detailed.jsonl")
+JOURNAL_PATH    = os.getenv("QUALITY_JOURNAL_PATH") or str(_ENV["engine"] / "logs" / "trade_journal_detailed.jsonl")
 WEIGHTS_DIR     = str(_ENV["weights"])
 BACKUP_DIR      = str(_ENV["weights"] / "backups")
 SPLIT_SUMMARY_PATH = str(_ENV["ml_training"] / "datasets" / "split_summary.json")
