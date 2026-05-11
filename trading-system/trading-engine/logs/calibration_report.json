@@ -1,34 +1,22 @@
 {
-  "timestamp": "2026-05-11T15:07:03.570175+00:00",
+  "timestamp": "2026-05-11T18:55:05.779171+00:00",
   "traders": {
     "all": {
       "trader_id": "all",
-      "bins": [
-        {
-          "predicted_range": "0.00-0.50",
-          "actual_win_rate": 0.2218,
-          "count": 266
-        }
-      ],
+      "bins": [],
       "monotonic": null,
-      "reliable": true,
-      "note": "Too few populated bins for calibration check"
+      "reliable": null,
+      "note": "Insufficient data: 4 samples"
     },
     "ml_trader": {
       "trader_id": "ml_trader",
-      "bins": [
-        {
-          "predicted_range": "0.00-0.50",
-          "actual_win_rate": 0.2218,
-          "count": 266
-        }
-      ],
+      "bins": [],
       "monotonic": null,
-      "reliable": true,
-      "note": "Too few populated bins for calibration check"
+      "reliable": null,
+      "note": "Insufficient data: 4 samples"
     }
   },
-  "run_id": "bt_20260511_150327",
+  "run_id": "bt_20260511_185133",
   "source_split": "combined_eval",
   "bt_start": "2022-08-05",
   "bt_end": "2025-08-05",

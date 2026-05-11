@@ -1,1 +1,1 @@
-{"min_precision": 0.9999999999}
+{"min_precision": 0.38356164383495966, "min_f1": 0.4890829689690891, "precision_up": 0.5396825396818258, "precision_down": 0.38356164383495966, "recall_up": 0.5171102661590404, "recall_down": 0.6746987951786907, "f1_up": 0.5281553393053696, "f1_down": 0.4890829689690891, "pred_share": 0.24528647263408385, "decision_threshold": 0.4, "decision_margin": 0.15}
