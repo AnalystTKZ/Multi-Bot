@@ -467,14 +467,50 @@ def _load_series(path: Path, date_col: str, value_col: str) -> "pd.Series | None
     return s
 
 
+def _training_data_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = os.getenv("TRAINING_DATA_DIR")
+    if env_path:
+        candidates.append(Path(env_path))
+    here = Path(__file__).resolve()
+    candidates.extend(
+        [
+            Path("training_data"),
+            here.parents[2] / "training_data",
+            here.parents[1] / "training_data",
+        ]
+    )
+    kaggle_input = Path("/kaggle/input")
+    if kaggle_input.exists():
+        candidates.extend(sorted(kaggle_input.glob("*/training_data")))
+
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in candidates:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _resolve_training_data_dir() -> Path:
+    for base in _training_data_candidates():
+        if (base / "indices").exists() or (base / "fundamental").exists():
+            return base
+    return _training_data_candidates()[0]
+
+
 def _load_macro_cache() -> Dict[str, pd.Series]:
     global _MACRO_CACHE
     if _MACRO_CACHE:
         return _MACRO_CACHE
-    base = Path("training_data")
+    base = _resolve_training_data_dir()
     idx_dir = base / "indices"
     fund_dir = base / "fundamental"
     _MACRO_CACHE = {}
+    logger.info("macro_cache: using training data dir %s", base)
     if idx_dir.exists():
         for f in sorted(idx_dir.glob("*_1d.csv")):
             name = f.stem.replace("_1d", "").lower()
@@ -483,12 +519,19 @@ def _load_macro_cache() -> Dict[str, pd.Series]:
     _MACRO_CACHE["us10y_fred"] = _load_series(fund_dir / "treasury_10yr.csv", "Date", "DGS10")
     _MACRO_CACHE["us2y_fred"] = _load_series(fund_dir / "treasury_2yr.csv", "Date", "DGS2")
     _MACRO_CACHE = {k: v for k, v in _MACRO_CACHE.items() if v is not None and len(v) > 10}
+    _loaded = {k: f"{len(v)} bars {v.index[0].date()}→{v.index[-1].date()}" for k, v in _MACRO_CACHE.items()}
+    _missing = [name for name in ("vix", "dxy", "spx", "us10y_fred", "us2y_fred") if name not in _MACRO_CACHE]
+    if _missing:
+        logger.warning("macro_cache: MISSING keys (will be all-zero): %s", _missing)
+    logger.info("macro_cache loaded %d series: %s", len(_MACRO_CACHE), _loaded)
     return _MACRO_CACHE
 
 
 def _load_macro_map() -> Dict[str, Any]:
     global _MACRO_MAP_CACHE, _MACRO_MAP_MTIME
-    for path in (Path("training_data") / "macro_correlations.json",
+    base = _resolve_training_data_dir()
+    for path in (base / "macro_correlations.json",
+                 Path("training_data") / "macro_correlations.json",
                  Path("models") / "weights" / "macro_correlations.json"):
         if not path.exists():
             continue

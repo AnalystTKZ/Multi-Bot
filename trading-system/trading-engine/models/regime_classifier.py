@@ -320,10 +320,14 @@ class RegimeClassifier(BaseModel):
             np.linspace(0.35, 0.85, 11),
             np.linspace(0.875, 0.99, 6),
         ]))
+        min_policy_margin = float(os.getenv("REGIME_HTF_MIN_POLICY_MARGIN", "0.05"))
         margins = np.unique(np.concatenate([
             np.linspace(0.00, 0.30, 7),
             np.linspace(0.35, 0.65, 7),
         ]))
+        margins = margins[margins >= min_policy_margin]
+        if len(margins) == 0:
+            margins = np.array([min_policy_margin], dtype=np.float64)
         best_floor: tuple[float, float, dict] | None = None
         best_fallback: tuple[float, float, dict] | None = None
         best_floor_score = -1e9

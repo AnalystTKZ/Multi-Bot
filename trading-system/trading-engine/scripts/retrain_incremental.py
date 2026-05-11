@@ -572,7 +572,9 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         if os.path.exists(_stale_pt):
             os.remove(_stale_pt)
 
-    if os.getenv("GRU_FORCE_COLD_START", "0").lower() in ("1", "true", "yes", "on"):
+    _allow_gru_warm_start = os.getenv("GRU_ALLOW_WARM_START", "0").lower() in ("1", "true", "yes", "on")
+    _force_gru_cold = os.getenv("GRU_FORCE_COLD_START", "0").lower() in ("1", "true", "yes", "on")
+    if _force_gru_cold or not _allow_gru_warm_start:
         for _stale in (
             _stale_pt,
             os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
@@ -589,6 +591,8 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         model._isotonic = None
         model._r_long_isotonic = None
         model._r_short_isotonic = None
+        if not _force_gru_cold:
+            logger.info("GRU warm start disabled by default; set GRU_ALLOW_WARM_START=1 to reuse compatible weights")
     elif os.path.exists(_stale_pt) and model._model is not None:
         logger.info("GRU warm start enabled from existing weights: %s", _stale_pt)
     else:
@@ -813,7 +817,9 @@ def retrain_gru(dry_run: bool = False) -> dict:
             if not backup_done:
                 _backup_weights(os.path.join(WEIGHTS_DIR, "gru_lstm"))
                 _stale_pt = os.path.join(WEIGHTS_DIR, "gru_lstm", "model.pt")
-                if os.getenv("GRU_FORCE_COLD_START", "0").lower() in ("1", "true", "yes", "on"):
+                _allow_gru_warm_start = os.getenv("GRU_ALLOW_WARM_START", "0").lower() in ("1", "true", "yes", "on")
+                _force_gru_cold = os.getenv("GRU_FORCE_COLD_START", "0").lower() in ("1", "true", "yes", "on")
+                if _force_gru_cold or not _allow_gru_warm_start:
                     for _stale in (
                         _stale_pt,
                         os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
@@ -830,6 +836,8 @@ def retrain_gru(dry_run: bool = False) -> dict:
                     model._isotonic = None
                     model._r_long_isotonic = None
                     model._r_short_isotonic = None
+                    if not _force_gru_cold:
+                        logger.info("GRU warm start disabled by default; set GRU_ALLOW_WARM_START=1 to reuse compatible weights")
                 elif os.path.exists(_stale_pt) and model._model is not None:
                     logger.info("GRU warm start enabled from existing weights: %s", _stale_pt)
                 else:
