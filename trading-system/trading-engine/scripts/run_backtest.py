@@ -52,7 +52,11 @@ except Exception:
 import numpy as np
 import pandas as pd
 from services.market_decision import combined_market_decision
-from services.regime_scores import classify_tradeability_directional
+from services.regime_scores import (
+    classify_tradeability_directional,
+    has_aligned_entry_structure,
+    upgrade_uncertain_trade_regime,
+)
 
 # Write logs to both stderr (visible in terminal/notebook) AND a timestamped
 # file under trading-engine/logs/ so they survive subprocess pipe capture.
@@ -1929,10 +1933,20 @@ def _compute_backtest_signal(
     p_bull = float(ml_preds.get("p_bull", 0.5))
     p_bear = float(ml_preds.get("p_bear", 0.5))
     _dir_thresh = _live_float_env("ML_DIRECTION_THRESHOLD")
-    if p_bull >= p_bear and p_bull >= _dir_thresh:
+    _candidate_side = "buy" if p_bull >= p_bear else "sell"
+    _candidate_conf = p_bull if _candidate_side == "buy" else p_bear
+    _structural_dir_thresh = float(os.getenv("ML_STRUCTURAL_DIRECTION_THRESHOLD", "0.60"))
+    _candidate_has_structure = has_aligned_entry_structure(bar, _candidate_side)
+    if p_bull >= p_bear and (
+        p_bull >= _dir_thresh
+        or (p_bull >= _structural_dir_thresh and _candidate_has_structure)
+    ):
         side = "buy"
         conf = p_bull
-    elif p_bear > p_bull and p_bear >= _dir_thresh:
+    elif p_bear > p_bull and (
+        p_bear >= _dir_thresh
+        or (p_bear >= _structural_dir_thresh and _candidate_has_structure)
+    ):
         side = "sell"
         conf = p_bear
     else:
@@ -1957,6 +1971,14 @@ def _compute_backtest_signal(
             )
             _htf_weight_factor = float(os.getenv("HTF_WEIGHT_FACTOR", "0.40"))
             _min_gru_r *= max(0.0, 1.0 - _htf_weight_factor * _htf_bias_score)
+            if has_aligned_entry_structure(bar, side):
+                _min_gru_r *= float(os.getenv("GRU_STRUCTURAL_R_THRESHOLD_MULTIPLIER", "0.50"))
+            _conf_span = max(1e-9, 1.0 - _dir_thresh)
+            _conf_excess = max(0.0, min(1.0, (conf - _dir_thresh) / _conf_span))
+            _min_gru_r *= max(
+                0.0,
+                1.0 - float(os.getenv("GRU_CONFIDENCE_R_THRESHOLD_FACTOR", "0.25")) * _conf_excess,
+            )
             if _gru_expected_r < _min_gru_r:
                 _reject("gru_expected_r_below_threshold")
                 return None
@@ -1970,7 +1992,29 @@ def _compute_backtest_signal(
     _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.70"))
     _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
 
-    _tradeability = classify_tradeability_directional(_ltf_trade_regime, _htf_bias)
+    _ltf_trade_regime = upgrade_uncertain_trade_regime(
+        _ltf_trade_regime,
+        side=side,
+        confidence=conf,
+        bar=bar,
+        regime_scores=ml_preds.get("regime_scores"),
+        min_confidence=float(os.getenv("LTF_UNCERTAIN_RESCUE_MIN_CONFIDENCE", "0.70")),
+        min_trend_score=float(os.getenv("LTF_UNCERTAIN_RESCUE_MIN_TREND", "0.55")),
+        max_chop_score=float(os.getenv("LTF_UNCERTAIN_RESCUE_MAX_CHOP", "0.55")),
+        max_volatility_score=float(os.getenv("LTF_UNCERTAIN_RESCUE_MAX_VOL", "0.85")),
+    )
+    _neutral_strong_conf = float(os.getenv("NEUTRAL_HTF_STRONG_GRU_CONFIDENCE", "0.60"))
+    _tradeability = classify_tradeability_directional(
+        _ltf_trade_regime,
+        _htf_bias,
+        side=side,
+        directional_confidence=conf,
+        neutral_strong_confidence=_neutral_strong_conf,
+    )
+    _neutral_htf_directional_override = (
+        _htf_bias.upper() == "BIAS_NEUTRAL"
+        and _tradeability in ("TRADEABLE_UP", "TRADEABLE_DOWN")
+    )
 
     if _tradeability in ("NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "NO_TRADE_UNCERTAIN"):
         _reject(_tradeability.lower())
@@ -1983,7 +2027,7 @@ def _compute_backtest_signal(
         return None
 
     # HTF classifier confidence gate
-    if _htf_regime_conf < _htf_min_conf:
+    if _htf_regime_conf < _htf_min_conf and not _neutral_htf_directional_override:
         _reject("htf_low_regime_confidence")
         return None
 

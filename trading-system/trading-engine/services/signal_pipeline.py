@@ -17,7 +17,11 @@ import pandas as pd
 
 from services.event_bus import EventBus, EventType
 from services.market_decision import combined_market_decision
-from services.regime_scores import classify_tradeability_directional
+from services.regime_scores import (
+    classify_tradeability_directional,
+    has_aligned_entry_structure,
+    upgrade_uncertain_trade_regime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -354,10 +358,20 @@ class SignalPipeline:
         _dir_thresh = threshold if threshold is not None else float(
             getattr(self._settings, "ML_DIRECTION_THRESHOLD", 0.65)
         )
-        if p_bull >= p_bear and p_bull >= _dir_thresh:
+        _candidate_side = "buy" if p_bull >= p_bear else "sell"
+        _candidate_conf = p_bull if _candidate_side == "buy" else p_bear
+        _structural_dir_thresh = float(os.getenv("ML_STRUCTURAL_DIRECTION_THRESHOLD", "0.60"))
+        _candidate_has_structure = has_aligned_entry_structure(bar, _candidate_side)
+        if p_bull >= p_bear and (
+            p_bull >= _dir_thresh
+            or (p_bull >= _structural_dir_thresh and _candidate_has_structure)
+        ):
             side = "buy"
             conf = p_bull
-        elif p_bear > p_bull and p_bear >= _dir_thresh:
+        elif p_bear > p_bull and (
+            p_bear >= _dir_thresh
+            or (p_bear >= _structural_dir_thresh and _candidate_has_structure)
+        ):
             side = "sell"
             conf = p_bear
         else:
@@ -374,18 +388,36 @@ class SignalPipeline:
         if _gru_expected_r is not None:
             _gru_expected_r = float(_gru_expected_r)
             if np.isfinite(_gru_expected_r):
-                _global_min_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.50"))
+                _global_min_r = float(os.getenv("GRU_MIN_EXPECTED_R_MULTIPLE", "0.20"))
                 # Look up per-symbol/side threshold from calibrated JSON; use Q25 as gate.
                 _sym_side_data = self._sym_r_thresholds.get(symbol, {}).get(side, {})
                 if _sym_side_data:
-                    # Per-symbol threshold can only TIGHTEN the gate, never loosen it.
-                    # q25 of ALL labeled bars is -1.0 for most symbols (75%+ of bars are
-                    # capped-loss), so max(q25, global) keeps the global floor intact while
-                    # allowing symbols with genuinely higher q25 to be filtered more aggressively.
+                    # Positive-label Q25 is useful for provenance, but it is not a
+                    # calibrated prediction threshold when R-MAE is ~0.77. Cap it so
+                    # symbol thresholds can tighten the global floor without starving
+                    # otherwise structured entries.
                     _sym_q25 = float(_sym_side_data.get("q25", _global_min_r))
-                    _min_gru_r = max(_sym_q25, _global_min_r)
+                    _sym_cap = float(os.getenv("GRU_SYMBOL_R_THRESHOLD_CAP", "0.25"))
+                    _min_gru_r = max(_global_min_r, min(_sym_q25, _sym_cap))
                 else:
                     _min_gru_r = _global_min_r
+                _regime_scores = ml_preds.get("regime_scores", {})
+                _htf_bias_score = float(
+                    _regime_scores.get("bias_up_score", 0.0) if side == "buy"
+                    else _regime_scores.get("bias_down_score", 0.0)
+                )
+                _min_gru_r *= max(
+                    0.0,
+                    1.0 - float(os.getenv("HTF_WEIGHT_FACTOR", "0.40")) * _htf_bias_score,
+                )
+                if has_aligned_entry_structure(bar, side):
+                    _min_gru_r *= float(os.getenv("GRU_STRUCTURAL_R_THRESHOLD_MULTIPLIER", "0.50"))
+                _conf_span = max(1e-9, 1.0 - _dir_thresh)
+                _conf_excess = max(0.0, min(1.0, (conf - _dir_thresh) / _conf_span))
+                _min_gru_r *= max(
+                    0.0,
+                    1.0 - float(os.getenv("GRU_CONFIDENCE_R_THRESHOLD_FACTOR", "0.25")) * _conf_excess,
+                )
                 if _gru_expected_r < _min_gru_r:
                     logger.debug(
                         "Signal rejected %s %s — GRU side_R=%.3f < min=%.3f (per_sym=%s)",
@@ -399,6 +431,17 @@ class SignalPipeline:
         _htf_regime_conf = float(ml_preds.get("regime_conf", 1.0 / 3.0))
         _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.70"))
         _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
+        _ltf_trade_regime = upgrade_uncertain_trade_regime(
+            _ltf_trade_regime,
+            side=side,
+            confidence=conf,
+            bar=bar,
+            regime_scores=ml_preds.get("regime_scores"),
+            min_confidence=float(os.getenv("LTF_UNCERTAIN_RESCUE_MIN_CONFIDENCE", "0.70")),
+            min_trend_score=float(os.getenv("LTF_UNCERTAIN_RESCUE_MIN_TREND", "0.55")),
+            max_chop_score=float(os.getenv("LTF_UNCERTAIN_RESCUE_MAX_CHOP", "0.55")),
+            max_volatility_score=float(os.getenv("LTF_UNCERTAIN_RESCUE_MAX_VOL", "0.85")),
+        )
 
         _neutral_strong_conf = float(os.getenv("NEUTRAL_HTF_STRONG_GRU_CONFIDENCE", "0.60"))
         _tradeability = classify_tradeability_directional(

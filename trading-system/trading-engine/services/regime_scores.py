@@ -460,6 +460,76 @@ def _entry_truthy(value: Any) -> bool:
     return bool(value)
 
 
+def has_aligned_entry_structure(bar: Any, side: str) -> bool:
+    """Return true when the current bar has causal structure for the entry side."""
+    side_s = str(side or "").lower()
+    if side_s not in {"buy", "sell"}:
+        return False
+    pullback_valid = _entry_truthy(_entry_bar_value(bar, "pullback_valid", False))
+    pullback_side = str(_entry_bar_value(bar, "pullback_side", "") or "").lower()
+    if side_s == "buy":
+        return (
+            (pullback_valid and pullback_side == "buy")
+            or _entry_truthy(_entry_bar_value(bar, "bos_bull", False))
+            or _entry_truthy(_entry_bar_value(bar, "fvg_bull", False))
+            or _entry_truthy(_entry_bar_value(bar, "mss_bull", False))
+        )
+    return (
+        (pullback_valid and pullback_side == "sell")
+        or _entry_truthy(_entry_bar_value(bar, "bos_bear", False))
+        or _entry_truthy(_entry_bar_value(bar, "fvg_bear", False))
+        or _entry_truthy(_entry_bar_value(bar, "mss_bear", False))
+    )
+
+
+def upgrade_uncertain_trade_regime(
+    trade_regime: str,
+    *,
+    side: str,
+    confidence: float,
+    bar: Any,
+    regime_scores: Optional[dict[str, Any]] = None,
+    min_confidence: float = 0.70,
+    min_trend_score: float = 0.55,
+    max_chop_score: float = 0.55,
+    max_volatility_score: float = 0.85,
+) -> str:
+    """
+    Promote borderline LTF uncertainty only when price action confirms the side.
+
+    This is deliberately narrow: it does not rescue chop, extreme volatility,
+    range, or consolidation. It only handles the common case where the LTF score
+    head returns UNCERTAIN despite a trend-like score mix and a fresh aligned
+    BOS/FVG/MSS/pullback bar.
+    """
+    tr = str(trade_regime or "").upper()
+    if tr not in {"UNCERTAIN", ""}:
+        return tr
+    try:
+        conf = float(confidence)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf < float(min_confidence):
+        return tr or "UNCERTAIN"
+    if not has_aligned_entry_structure(bar, side):
+        return tr or "UNCERTAIN"
+
+    scores = regime_scores or {}
+    try:
+        trend_score = float(scores.get("trend_score", 0.0))
+        chop_score = float(scores.get("chop_score", 0.0))
+        vol_score = float(scores.get("volatility_percentile", scores.get("volatility_score", 0.0)))
+    except (TypeError, ValueError):
+        return tr or "UNCERTAIN"
+    if (
+        trend_score >= float(min_trend_score)
+        and chop_score <= float(max_chop_score)
+        and vol_score <= float(max_volatility_score)
+    ):
+        return "TRADEABLE_TREND"
+    return tr or "UNCERTAIN"
+
+
 def classify_entry_readiness(
     tradeability: str,
     side: str,
@@ -490,22 +560,7 @@ def classify_entry_readiness(
 
     range_valid = _entry_truthy(_entry_bar_value(bar, "range_valid", False))
     range_side = str(_entry_bar_value(bar, "range_side", "") or "").lower()
-    pullback_valid = _entry_truthy(_entry_bar_value(bar, "pullback_valid", False))
-    pullback_side = str(_entry_bar_value(bar, "pullback_side", "") or "").lower()
-
-    bullish_structure = (
-        (pullback_valid and pullback_side == "buy")
-        or _entry_truthy(_entry_bar_value(bar, "bos_bull", False))
-        or _entry_truthy(_entry_bar_value(bar, "fvg_bull", False))
-        or _entry_truthy(_entry_bar_value(bar, "mss_bull", False))
-    )
-    bearish_structure = (
-        (pullback_valid and pullback_side == "sell")
-        or _entry_truthy(_entry_bar_value(bar, "bos_bear", False))
-        or _entry_truthy(_entry_bar_value(bar, "fvg_bear", False))
-        or _entry_truthy(_entry_bar_value(bar, "mss_bear", False))
-    )
-    side_structure = bullish_structure if side_s == "buy" else bearish_structure
+    side_structure = has_aligned_entry_structure(bar, side_s)
 
     if ltf == "RANGING":
         if require_range and not range_valid:

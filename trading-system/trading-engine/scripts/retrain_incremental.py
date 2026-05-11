@@ -535,14 +535,14 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
     _weight_dir = str(_ENV["weights"] / "gru_lstm")
     try:
         from models.weights_manifest import WeightsManifest
-        from services.feature_engine import SEQUENCE_FEATURES, REGIME_4H_FEATURES, REGIME_1H_FEATURES, QUALITY_FEATURES
+        from services.feature_engine import SEQUENCE_FEATURES
         from models.gru_lstm_predictor import N_FEATURES, SEQUENCE_LENGTH
+        # GRU retrain compatibility is scoped to the GRU sequence input contract.
+        # Regime/quality feature changes are tracked in the manifest, but they do
+        # not change the saved GRU tensor shapes or input semantics.
         compat = WeightsManifest(_weight_dir).check(
             gru_features=list(SEQUENCE_FEATURES),
             gru_sequence_length=SEQUENCE_LENGTH,
-            regime_4h_features=list(REGIME_4H_FEATURES),
-            regime_1h_features=list(REGIME_1H_FEATURES),
-            quality_features=list(QUALITY_FEATURES),
         )
         if not compat:
             logger.info("GRU weights stale (%s) — deleting for full retrain", compat.reason)
@@ -679,13 +679,11 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         if tf != "15M":
             continue
         lbl = seg["labels"]
-        # Compute per-symbol/side R threshold from POSITIVE-R bars only.
+        # Compute per-symbol/side R diagnostics from POSITIVE-R bars only.
         # All labeled bars: Q25 = -1.0 for every symbol (75%+ of bars are capped-loss),
-        # which makes the raw Q25 useless for calibration. Instead we compute stats over
-        # bars where realized_r > 0 — actual profitable opportunities. Q25 of that
-        # sub-population gives a meaningful minimum quality gate:
-        #   "only trade when GRU predicts R above the bottom quartile of winning setups."
-        # Signal pipeline takes max(q25_pos, global_gate) so this can only tighten.
+        # which makes the raw Q25 useless for calibration. Q25 of winning labels is
+        # useful provenance, but it is not a calibrated prediction threshold while
+        # validation R-MAE is high. SignalPipeline caps q25 before using it as a gate.
         for side, col in (("buy", "realized_r_long"), ("sell", "realized_r_short")):
             if col in lbl.columns:
                 vals = lbl[col].dropna().values
@@ -703,6 +701,7 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
                     _sym_r_thresholds[sym][side] = {
                         "q25": round(q25_pos, 4) if n_pos >= 10 else round(q25_all, 4),
                         "q50": round(q50_pos, 4) if n_pos >= 10 else round(q50_all, 4),
+                        "threshold_source": "positive_label_q25_capped_at_inference",
                         "q25_all": round(q25_all, 4),
                         "q50_all": round(q50_all, 4),
                         "pos_rate": pos_rate,

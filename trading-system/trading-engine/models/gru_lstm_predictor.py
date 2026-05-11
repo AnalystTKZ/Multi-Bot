@@ -1758,15 +1758,14 @@ class GRULSTMPredictor(BaseModel):
         try:
             import torch
             from models.weights_manifest import WeightsManifest
-            from services.feature_engine import SEQUENCE_FEATURES, REGIME_4H_FEATURES, REGIME_1H_FEATURES, QUALITY_FEATURES
+            from services.feature_engine import SEQUENCE_FEATURES
 
-            # Guard: refuse to load if feature contract changed since weights were saved
+            # GRU weights only depend on the sequence feature contract. Regime and
+            # quality feature contracts live in the same manifest for provenance,
+            # but changing them must not invalidate otherwise compatible GRU weights.
             compat = WeightsManifest(WEIGHT_DIR).check(
                 gru_features=list(SEQUENCE_FEATURES),
                 gru_sequence_length=SEQUENCE_LENGTH,
-                regime_4h_features=list(REGIME_4H_FEATURES),
-                regime_1h_features=list(REGIME_1H_FEATURES),
-                quality_features=list(QUALITY_FEATURES),
             )
             if not compat:
                 logger.warning(

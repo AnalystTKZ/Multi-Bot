@@ -494,12 +494,17 @@ class RegimeClassifier(BaseModel):
                     confidence = float(conf[0])
                     extra = {}
 
-            # 3-bar hysteresis
-            self._hysteresis_buffer.append(raw_id)
-            if len(self._hysteresis_buffer) > 3:
-                self._hysteresis_buffer.pop(0)
-            if len(self._hysteresis_buffer) == 3 and len(set(self._hysteresis_buffer)) == 1:
-                self._current_regime_id = self._hysteresis_buffer[0]
+            # 3-bar hysteresis. For HTF bias, neutral is the safe abstain state:
+            # do not carry a stale directional bias through fresh neutral reads.
+            if self._mode == "htf_bias" and raw_id == HTF_CLASSES.index("BIAS_NEUTRAL"):
+                self._current_regime_id = raw_id
+                self._hysteresis_buffer = [raw_id]
+            else:
+                self._hysteresis_buffer.append(raw_id)
+                if len(self._hysteresis_buffer) > 3:
+                    self._hysteresis_buffer.pop(0)
+                if len(self._hysteresis_buffer) == 3 and len(set(self._hysteresis_buffer)) == 1:
+                    self._current_regime_id = self._hysteresis_buffer[0]
 
             return {
                 "regime":             self._class_list[self._current_regime_id],
