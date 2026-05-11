@@ -172,7 +172,7 @@ def _eval_journal_training_env() -> dict:
     """
     return {
         "ALLOW_ROUND_JOURNAL_TRAINING": "1",
-        "JOURNAL_ALLOWED_SPLITS": "train,validation,test,combined_eval,live,paper,production",
+        "JOURNAL_ALLOWED_SPLITS": "train,train_tail,validation,test,combined_eval,live,paper,production",
     }
 
 
@@ -450,8 +450,15 @@ if _combined_trades >= _QS_MIN_TRADES:
     run_retrain("win_loss", label="R0+R1 combined journal", extra_env=_qs_train_env)
     _qs_weight = env["weights"] / "quality_scorer.pkl"
     if _qs_weight.exists():
-        _qs_extra_env = {"BACKTEST_ENABLE_QUALITY_GATE": "1", "BACKTEST_REQUIRE_QUALITY": "1"}
-        print("  QualityScorer trained — gate ACTIVE for Round 2+")
+        # Lower EV threshold vs default (0.10) to avoid QS blocking all R2 trades
+        # when the model is freshly trained on limited data (< 600 samples).
+        # BACKTEST_REQUIRE_QUALITY=1 makes the gate hard; MIN_EV_THRESHOLD keeps it lenient.
+        _qs_extra_env = {
+            "BACKTEST_ENABLE_QUALITY_GATE": "1",
+            "BACKTEST_REQUIRE_QUALITY": "1",
+            "MIN_EV_THRESHOLD": "-0.20",
+        }
+        print("  QualityScorer trained — gate ACTIVE for Round 2+ (MIN_EV_THRESHOLD=-0.20)")
     else:
         print("  WARN  QualityScorer weights not created — gate remains disabled")
 else:
@@ -467,8 +474,8 @@ for model in ["rf", "kmeans"]:
     run_retrain(model, label="pre-R2 ensemble retrain")
 
 print("\n=== Pre-Round 2: Incremental retrain (GRU + Regime) ===")
-for model in ["gru", "regime"]:
-    run_retrain(model, label="pre-R2 retrain")
+run_retrain("gru", label="pre-R2 retrain", extra_env={"GRU_ALLOW_WARM_START": "1"})
+run_retrain("regime", label="pre-R2 retrain")
 
 # ─── Round 2: BLIND backtest on test window ───────────────────────────────────
 # This is the true out-of-sample evaluation.
@@ -506,8 +513,8 @@ else:
 # from the train-only journal unless explicit research feedback is enabled.
 
 print("\n=== Round 3: Incremental retrain ===")
-for model in ["gru", "regime"]:
-    run_retrain(model, label="train-split retrain")
+run_retrain("gru", label="train-split retrain", extra_env={"GRU_ALLOW_WARM_START": "1"})
+run_retrain("regime", label="train-split retrain")
 if _allow_eval_journal_retraining():
     for model in ["quality", "rl"]:
         run_retrain(

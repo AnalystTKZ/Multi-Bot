@@ -68,7 +68,7 @@ def _env_flag(name: str, default: str = "0") -> bool:
 def _default_allowed_splits() -> set[str] | None:
     if _env_flag("ALLOW_NONTRAIN_JOURNAL_TRAINING"):
         return None
-    default = "train,live,paper,production"
+    default = "train,train_tail,live,paper,production"
     if _env_flag("ALLOW_ROUND_JOURNAL_TRAINING", "0"):
         default = "train,train_tail,validation,test,combined_eval,live,paper,production"
     raw = os.getenv("JOURNAL_ALLOWED_SPLITS", default)

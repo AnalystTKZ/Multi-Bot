@@ -1566,10 +1566,23 @@ def retrain_rf(dry_run: bool = False) -> dict:
             feat_df = fe._build_sequence_df(df_15m, all_htf, symbol=sym)
             X_sym = build_rf_feature_matrix(feat_df)
             # Label: 1 if price rose by 0.5 ATR over next 5 bars, else 0
-            atr = df_15m["atr_14"].to_numpy(dtype=np.float32) if "atr_14" in df_15m.columns else None
             close = df_15m["close"].to_numpy(dtype=np.float32)
-            if atr is None:
-                continue
+            if "atr_14" in df_15m.columns:
+                atr = df_15m["atr_14"].to_numpy(dtype=np.float32)
+            elif "high" in df_15m.columns and "low" in df_15m.columns:
+                # True range approximation from high-low
+                high = df_15m["high"].to_numpy(dtype=np.float32)
+                low  = df_15m["low"].to_numpy(dtype=np.float32)
+                tr   = high - low
+                atr  = np.convolve(tr, np.ones(14) / 14, mode="full")[:len(tr)].astype(np.float32)
+                atr  = np.maximum(atr, 1e-9)
+            else:
+                # Fallback: use rolling std of close as ATR proxy
+                atr = np.array(
+                    [close[max(0, i - 13): i + 1].std() for i in range(len(close))],
+                    dtype=np.float32,
+                )
+                atr = np.maximum(atr, 1e-9)
             horizon = 5
             y_sym = np.zeros(len(feat_df), dtype=np.int32)
             for idx in range(len(feat_df) - horizon):

@@ -346,7 +346,8 @@ def build_wl_feature_matrix(
     rows_X = []
     rows_y = []
     for i, row in enumerate(journal_rows):
-        # Determine label: tp_hit=1 is a win
+        # Determine label: prefer explicit tp_hit/outcome fields, then fall
+        # back to pnl and exit_reason (standard journal schema).
         tp_hit = row.get("tp_hit")
         outcome = row.get("outcome", "")
         if tp_hit is not None:
@@ -354,7 +355,23 @@ def build_wl_feature_matrix(
         elif outcome:
             label = 1 if str(outcome).lower() in ("win", "tp", "tp1", "tp2") else 0
         else:
-            continue  # skip unclosed
+            pnl = row.get("pnl")
+            exit_reason = str(row.get("exit_reason", "")).lower()
+            if pnl is None and not exit_reason:
+                continue  # skip unclosed / no outcome data
+            if pnl is not None:
+                try:
+                    label = 1 if float(pnl) > 0 else 0
+                except (TypeError, ValueError):
+                    continue
+            else:
+                # exit_reason fallback
+                if exit_reason in ("tp", "tp1", "tp2", "take_profit", "target"):
+                    label = 1
+                elif exit_reason in ("sl", "stop_loss", "stop", "loss"):
+                    label = 0
+                else:
+                    continue
 
         extra = (extra_cols or {}).get(i, {})
         feats = []

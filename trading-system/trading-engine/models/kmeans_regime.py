@@ -17,7 +17,7 @@ Why K-Means alongside supervised regime?
     actually adds signal; if not, it can be zeroed out via env flag.
 
 Architecture:
-  - sklearn KMeans (k-means++ init, n_jobs=-1)
+  - sklearn KMeans (k-means++ init)
   - K defaults to 8 (env: KMEANS_N_CLUSTERS); range 4–16 typical
   - Input: REGIME_4H_FEATURES (34 features) — same as HTF regime classifier
   - StandardScaler applied before clustering (persisted with model)
@@ -175,7 +175,6 @@ class KMeansRegimeModel:
             n_init=n_init,
             max_iter=max_iter,
             random_state=random_state,
-            n_jobs=-1 if hasattr(KMeans(), "n_jobs") else None,
         )
         km.fit(X_scaled)
 
