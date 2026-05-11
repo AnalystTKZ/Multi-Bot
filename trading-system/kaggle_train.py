@@ -447,6 +447,7 @@ if _combined_trades >= _QS_MIN_TRADES:
     print(f"\n=== QualityScorer: {_combined_trades} combined trades ≥ {_QS_MIN_TRADES} — training and activating ===")
     _qs_train_env = {**_eval_journal_training_env(), "QUALITY_JOURNAL_PATH": _qs_journal_source}
     run_retrain("quality", label="R0+R1 combined journal", extra_env=_qs_train_env)
+    run_retrain("win_loss", label="R0+R1 combined journal", extra_env=_qs_train_env)
     _qs_weight = env["weights"] / "quality_scorer.pkl"
     if _qs_weight.exists():
         _qs_extra_env = {"BACKTEST_ENABLE_QUALITY_GATE": "1", "BACKTEST_REQUIRE_QUALITY": "1"}
@@ -460,6 +461,10 @@ else:
 # R2 runs on blind data. Retraining on train-split data before R2 (matching what
 # happens before R3) ensures the models incorporate the most recent training
 # signal before the blind evaluation window begins.
+
+print("\n=== Pre-Round 2: Ensemble models (RF + K-Means, trained on processed data) ===")
+for model in ["rf", "kmeans"]:
+    run_retrain(model, label="pre-R2 ensemble retrain")
 
 print("\n=== Pre-Round 2: Incremental retrain (GRU + Regime) ===")
 for model in ["gru", "regime"]:

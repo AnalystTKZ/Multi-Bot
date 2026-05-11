@@ -87,6 +87,12 @@ trading-system/
     │   ├── gru_lstm_predictor.py     ← GRU(64,2L)→LSTM(128,2L)→3 heads; 74 SEQUENCE_FEATURES
     │   │                               temperature.pt sidecar for post-hoc calibration
     │   ├── quality_scorer.py         ← EV regressor; class-weighted Huber; 17 QUALITY_FEATURES
+    │   ├── rf_direction.py           ← Random Forest direction ensemble; 30 tabular features
+    │   │                               blends with GRU: RF_BLEND_WEIGHT (default 0.30)
+    │   ├── win_loss_classifier.py    ← ANN binary win/loss on trade outcomes; 23 features
+    │   │                               optional gate: WIN_LOSS_GATE_ENABLED=1, WIN_LOSS_MIN_PROB=0.45
+    │   ├── kmeans_regime.py          ← K-Means unsupervised 4H clustering; k=8; KMEANS_N_CLUSTERS
+    │   │                               outputs kmeans_regime_id [0,1] in ml_preds
     │   ├── sentiment_model.py        ← FinBERT primary; VADER fallback
     │   ├── rl_agent.py               ← PPO via SB3; CPU; 43-dim state; 16 actions
     │   ├── vector_store.py           ← FAISS index of 64-dim GRU embeddings
@@ -97,6 +103,9 @@ trading-system/
     │       ├── regime_htf.pkl        ← HTF bias (3-class: BIAS_UP/DOWN/NEUTRAL)
     │       ├── regime_ltf.pkl        ← LTF behaviour (4-class: TRENDING/RANGING/CONSOLIDATING/VOLATILE)
     │       ├── quality_scorer.pkl
+    │       ├── rf_direction/         ← RF ensemble (model.pkl + meta.json)
+    │       ├── win_loss_classifier/  ← ANN win/loss (model.pt + meta.json)
+    │       ├── kmeans_regime/        ← K-Means (model.pkl + scaler.pkl + meta.json)
     │       └── rl_ppo/model.zip
     ├── traders/
     │   └── __init__.py               ← empty; all trader files deleted
@@ -121,6 +130,9 @@ trading-system/
 | SentimentModel | News headline scoring | `sentiment_score`, `sentiment_label` | pre-trained |
 | RLAgent | Selectivity tier selection (CPU) | action 0–15 | `weights/rl_ppo/model.zip` |
 | VectorStore | FAISS similarity index of GRU embeddings | nearest trade patterns | `weights/gru_lstm/vector_store/` |
+| RFDirectionClassifier | Random Forest tabular direction ensemble | `p_bull_rf` blended with GRU (weight 0.30) | `weights/rf_direction/model.pkl` |
+| WinLossClassifier | ANN binary win/loss classifier on trade outcomes | `p_win_ann` ∈ [0,1] (logged; gate with WIN_LOSS_GATE_ENABLED=1) | `weights/win_loss_classifier/model.pt` |
+| KMeansRegimeModel | K-Means unsupervised 4H regime clustering (k=8) | `kmeans_regime_id` normalised [0,1] in ml_preds | `weights/kmeans_regime/model.pkl` |
 
 **Feature counts — fixed contract. Changing order or length breaks saved weights.**
 
@@ -229,7 +241,10 @@ python scripts/run_backtest.py
 # Retrain (from trading-engine/)
 python scripts/retrain_incremental.py --model regime
 python scripts/retrain_incremental.py --model gru
-python scripts/retrain_incremental.py --model all
+python scripts/retrain_incremental.py --model rf        # Random Forest direction
+python scripts/retrain_incremental.py --model kmeans    # K-Means regime clustering
+python scripts/retrain_incremental.py --model win_loss  # ANN win/loss classifier
+python scripts/retrain_incremental.py --model all       # gru+regime+quality+rl+rf+kmeans
 
 # Offline pipeline (from trading-system/)
 export PYTHONPATH="/home/tybobo/Desktop/Multi-Bot/trading-system:/home/tybobo/Desktop/Multi-Bot/trading-system/trading-engine"

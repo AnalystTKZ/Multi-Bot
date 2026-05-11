@@ -1537,6 +1537,188 @@ def retrain_rl(dry_run: bool = False) -> dict:
     return result
 
 
+def retrain_rf(dry_run: bool = False) -> dict:
+    """Random Forest direction classifier: train on last-bar snapshot features."""
+    import time as _time
+    _t0 = _time.perf_counter()
+    logger.info("=== RF direction classifier retrain ===")
+    from models.rf_direction import RFDirectionClassifier, build_rf_feature_matrix, RF_FEATURES
+
+    # Build dataset from aligned parquet files (train split)
+    records_X = []
+    records_y = []
+    split = RETRAIN_DATA_SPLIT if RETRAIN_DATA_SPLIT != "all" else "train"
+
+    active_symbols = os.getenv(
+        "BACKTEST_SYMBOLS",
+        "EURUSD,GBPUSD,USDJPY,AUDUSD,NZDUSD,USDCAD,USDCHF,EURGBP,EURJPY,GBPJPY,XAUUSD",
+    ).split(",")
+
+    for sym in active_symbols:
+        sym = sym.strip()
+        try:
+            df_15m = _load_ohlcv(sym, "15M", split=split)
+            if df_15m is None or len(df_15m) < 200:
+                continue
+            from services.feature_engine import FeatureEngine
+            fe = FeatureEngine()
+            all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("5M", "1H", "4H", "1D")}
+            feat_df = fe._build_sequence_df(df_15m, all_htf, symbol=sym)
+            X_sym = build_rf_feature_matrix(feat_df)
+            # Label: 1 if price rose by 0.5 ATR over next 5 bars, else 0
+            atr = df_15m["atr_14"].to_numpy(dtype=np.float32) if "atr_14" in df_15m.columns else None
+            close = df_15m["close"].to_numpy(dtype=np.float32)
+            if atr is None:
+                continue
+            horizon = 5
+            y_sym = np.zeros(len(feat_df), dtype=np.int32)
+            for idx in range(len(feat_df) - horizon):
+                future_ret = close[idx + horizon] - close[idx]
+                threshold = 0.5 * max(atr[idx], 1e-9)
+                y_sym[idx] = 1 if future_ret > threshold else 0
+            # Trim last `horizon` rows (no label)
+            X_sym = X_sym[:-horizon]
+            y_sym = y_sym[:-horizon]
+            records_X.append(X_sym)
+            records_y.append(y_sym)
+            logger.info("RF direction: loaded %s (%d bars)", sym, len(y_sym))
+        except Exception as exc:
+            logger.warning("RF direction: failed to build features for %s: %s", sym, exc)
+
+    if not records_X:
+        return {"error": "No feature data available for RF direction training"}
+
+    X_all = np.concatenate(records_X, axis=0)
+    y_all = np.concatenate(records_y, axis=0)
+
+    n_pos = int(y_all.sum())
+    n_neg = int(len(y_all) - n_pos)
+    if n_pos < 50 or n_neg < 50:
+        return {"error": f"Insufficient class balance: pos={n_pos} neg={n_neg}"}
+
+    # 80/20 split for validation
+    split_idx = int(len(X_all) * 0.8)
+    X_tr, X_val = X_all[:split_idx], X_all[split_idx:]
+    y_tr, y_val = y_all[:split_idx], y_all[split_idx:]
+
+    if dry_run:
+        logger.info("DRY RUN: would train RF direction on %d samples", len(X_tr))
+        return {"dry_run": True, "samples": len(X_tr)}
+
+    rf = RFDirectionClassifier()
+    result = rf.train(X_tr, y_tr, val_X=X_val, val_y=y_val)
+    result["total_time"] = round(_time.perf_counter() - _t0, 1)
+    logger.info("RF direction retrain: %.1fs | train_acc=%.4f val_auc=%.4f",
+                result["total_time"],
+                result.get("train_acc", float("nan")),
+                result.get("val_auc", float("nan")))
+    return result
+
+
+def retrain_win_loss(dry_run: bool = False) -> dict:
+    """Win/loss ANN classifier: train on closed trade outcomes from journal."""
+    import time as _time
+    _t0 = _time.perf_counter()
+    logger.info("=== Win/loss ANN classifier retrain ===")
+    from models.win_loss_classifier import WinLossClassifier, build_wl_feature_matrix
+
+    if not os.path.exists(JOURNAL_PATH):
+        return {"error": f"Journal not found: {JOURNAL_PATH}"}
+
+    import json as _json
+    rows = []
+    try:
+        with open(JOURNAL_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(_json.loads(line))
+                except Exception:
+                    pass
+    except Exception as exc:
+        return {"error": f"Failed to read journal: {exc}"}
+
+    if len(rows) < 30:
+        return {"error": f"Only {len(rows)} journal rows — need ≥30"}
+
+    X, y = build_wl_feature_matrix(rows)
+    if len(X) < 30:
+        return {"error": f"Only {len(X)} labeled trades after outcome filtering — need ≥30"}
+
+    n_pos = int(y.sum())
+    n_neg = int(len(y) - n_pos)
+    if n_pos < 10 or n_neg < 10:
+        return {"error": f"Insufficient class balance: wins={n_pos} losses={n_neg}"}
+
+    split_idx = int(len(X) * 0.8)
+    X_tr, X_val = X[:split_idx], X[split_idx:]
+    y_tr, y_val = y[:split_idx], y[split_idx:]
+
+    if dry_run:
+        logger.info("DRY RUN: would train WinLoss ANN on %d samples", len(X_tr))
+        return {"dry_run": True, "samples": len(X_tr)}
+
+    wl = WinLossClassifier()
+    result = wl.train(X_tr, y_tr, val_X=X_val, val_y=y_val)
+    result["total_time"] = round(_time.perf_counter() - _t0, 1)
+    logger.info("WinLoss ANN retrain: %.1fs | train_acc=%.4f val_auc=%.4f",
+                result["total_time"],
+                result.get("train_acc", float("nan")),
+                result.get("val_auc", float("nan")))
+    return result
+
+
+def retrain_kmeans(dry_run: bool = False) -> dict:
+    """K-Means unsupervised regime: cluster 4H feature vectors."""
+    import time as _time
+    _t0 = _time.perf_counter()
+    logger.info("=== K-Means regime retrain ===")
+    from models.kmeans_regime import KMeansRegimeModel, build_kmeans_feature_matrix, KMEANS_FEATURES
+
+    active_symbols = os.getenv(
+        "BACKTEST_SYMBOLS",
+        "EURUSD,GBPUSD,USDJPY,AUDUSD,NZDUSD,USDCAD,USDCHF,EURGBP,EURJPY,GBPJPY,XAUUSD",
+    ).split(",")
+
+    X_parts = []
+    for sym in active_symbols:
+        sym = sym.strip()
+        try:
+            df_4h = _load_ohlcv(sym, "4H", split="all")
+            if df_4h is None or len(df_4h) < 100:
+                continue
+            all_htf = {tf: _load_ohlcv(sym, tf, split="all") for tf in ("1H", "4H", "1D")}
+            from models.regime_classifier import RegimeClassifier as _RC
+            X_sym = _RC._build_feature_matrix(df_4h, all_htf, sym, feature_names=KMEANS_FEATURES)
+            if X_sym is None or len(X_sym) < 50:
+                continue
+            X_parts.append(X_sym)
+            logger.info("KMeans: loaded %s 4H (%d bars)", sym, len(X_sym))
+        except Exception as exc:
+            logger.warning("KMeans: failed to build features for %s: %s", sym, exc)
+
+    if not X_parts:
+        return {"error": "No 4H feature data available for K-Means training"}
+
+    X_all = np.concatenate(X_parts, axis=0)
+    logger.info("KMeans: total samples=%d", len(X_all))
+
+    if dry_run:
+        return {"dry_run": True, "samples": len(X_all)}
+
+    km = KMeansRegimeModel()
+    n_clusters = int(os.getenv("KMEANS_N_CLUSTERS", "8"))
+    result = km.train(X_all, n_clusters=n_clusters)
+    result["total_time"] = round(_time.perf_counter() - _t0, 1)
+    logger.info("KMeans retrain: %.1fs | k=%d inertia=%.1f sil=%.4f",
+                result["total_time"], result.get("n_clusters", 0),
+                result.get("inertia", float("nan")),
+                result.get("silhouette", float("nan")))
+    return result
+
+
 def validate_only() -> dict:
     """Check that all model files exist and imports work."""
     results = {}
@@ -1651,7 +1833,8 @@ def log_retrain(model_name: str, result: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Incremental model retraining")
-    parser.add_argument("--model", choices=["gru", "regime", "quality", "rl", "all"],
+    parser.add_argument("--model",
+                        choices=["gru", "regime", "quality", "rl", "rf", "win_loss", "kmeans", "all"],
                         default="all", help="Model to retrain")
     parser.add_argument("--dry-run", action="store_true", help="Validate without saving")
     args = parser.parse_args()
@@ -1693,6 +1876,24 @@ def main():
         log_retrain("rl_agent", result)
         if result.get("error"):
             any_failure = True
+
+    if model in ("all", "rf"):
+        result = retrain_rf(dry)
+        log_retrain("rf_direction", result)
+        if result.get("error"):
+            logger.warning("RF direction retrain failed (non-fatal): %s", result["error"])
+
+    if model in ("all", "kmeans"):
+        result = retrain_kmeans(dry)
+        log_retrain("kmeans_regime", result)
+        if result.get("error"):
+            logger.warning("KMeans retrain failed (non-fatal): %s", result["error"])
+
+    if model in ("win_loss",):
+        result = retrain_win_loss(dry)
+        log_retrain("win_loss_classifier", result)
+        if result.get("error"):
+            logger.warning("WinLoss ANN retrain failed (non-fatal): %s", result["error"])
 
     if dry:
         logger.info("=== DRY RUN COMPLETE — validation results ===")

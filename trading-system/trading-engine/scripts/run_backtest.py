@@ -473,6 +473,19 @@ def _ml_cache_entry(cache: dict[str, np.ndarray] | None, idx: int) -> dict:
         trade_regime_id = int(cache["trade_regime"][idx])
         if 0 <= trade_regime_id < len(_TRADE_REGIME_NAMES):
             out["trade_regime"] = str(_TRADE_REGIME_NAMES[trade_regime_id])
+    # RF direction ensemble
+    if "p_bull_rf" in cache:
+        out["p_bull_rf"] = float(cache["p_bull_rf"][idx])
+    if "p_bull_blend" in cache:
+        v = float(cache["p_bull_blend"][idx])
+        if not np.isnan(v):
+            out["p_bull_blend"] = v
+    # Win/loss ANN
+    if "p_win_ann" in cache:
+        out["p_win_ann"] = float(cache["p_win_ann"][idx])
+    # K-Means regime cluster
+    if "kmeans_regime_id" in cache:
+        out["kmeans_regime_id"] = float(cache["kmeans_regime_id"][idx])
     return out
 
 
@@ -1687,6 +1700,10 @@ def _precompute_ml_cache(
             "atr_percentile_500": np.full(n, np.nan, dtype=np.float32),
             "efficiency_ratio_20": np.full(n, np.nan, dtype=np.float32),
             "trade_regime": np.full(n, -1, dtype=np.int8),
+            "p_bull_rf": np.full(n, 0.5, dtype=np.float32),
+            "p_bull_blend": np.full(n, np.nan, dtype=np.float32),
+            "p_win_ann": np.full(n, 0.5, dtype=np.float32),
+            "kmeans_regime_id": np.full(n, 0.0, dtype=np.float32),
         }
         if gru_model and seq_arr is not None and gru_model.is_trained and gru_model._model is not None:
             try:
@@ -1805,6 +1822,53 @@ def _precompute_ml_cache(
             finally:
                 if 'seq_arr' in dir() and seq_arr is not None:
                     del seq_arr  # ~(N×F) float32 — free before regime allocates X_all
+
+        # ── RF direction batch inference ──────────────────────────────────────
+        _rf_model = ml_models.get("rf_direction")
+        if _rf_model is not None and _rf_model.is_trained:
+            try:
+                from models.rf_direction import build_rf_feature_matrix, RF_BLEND_WEIGHT_DEFAULT
+                _rf_feat_df = fe._build_sequence_df(df, htf, symbol=symbol)
+                _X_rf = build_rf_feature_matrix(_rf_feat_df)
+                del _rf_feat_df
+                _p_bull_rf = _rf_model.predict_proba_batch(_X_rf)  # shape (n,)
+                del _X_rf
+                _rf_blend_w = float(os.getenv("RF_BLEND_WEIGHT", str(RF_BLEND_WEIGHT_DEFAULT)))
+                # Blend with GRU where GRU is valid
+                _gru_valid = ~np.isnan(cache["p_bull"])
+                cache["p_bull_rf"][_gru_valid] = _p_bull_rf[_gru_valid]
+                cache["p_bull_blend"][_gru_valid] = (
+                    (1.0 - _rf_blend_w) * cache["p_bull"][_gru_valid]
+                    + _rf_blend_w * _p_bull_rf[_gru_valid]
+                ).astype(np.float32)
+                del _p_bull_rf
+                logger.info("ML cache [%s]: RF direction blend applied (w=%.2f)", symbol, _rf_blend_w)
+            except Exception as exc:
+                logger.warning("ML cache: RF direction batch failed for %s: %s", symbol, exc)
+
+        # ── K-Means regime batch inference ────────────────────────────────────
+        _km_model = ml_models.get("kmeans_regime")
+        if _km_model is not None and _km_model.is_trained:
+            try:
+                from models.kmeans_regime import build_kmeans_feature_matrix
+                _df_src_4h_km = htf.get("4H") or htf.get("H4")
+                if _df_src_4h_km is not None and len(_df_src_4h_km) > 10:
+                    _X_km = build_kmeans_feature_matrix(_df_src_4h_km)
+                    _km_ids_norm = _km_model.predict_normalised(_X_km)  # shape (n_4h_bars,)
+                    del _X_km
+                    # Align 4H cluster IDs to 15M index via forward fill
+                    import pandas as _pd_km
+                    _km_series = _pd_km.Series(
+                        _km_ids_norm,
+                        index=_df_src_4h_km.index,
+                        name="kmeans_regime_id",
+                    )
+                    _km_aligned = _km_series.reindex(df.index, method="ffill").fillna(0.0)
+                    cache["kmeans_regime_id"] = _km_aligned.to_numpy(dtype=np.float32, copy=False)
+                    del _km_ids_norm, _km_series, _km_aligned
+                    logger.info("ML cache [%s]: K-Means regime ids assigned (k=%d)", symbol, _km_model.n_clusters)
+            except Exception as exc:
+                logger.warning("ML cache: KMeans regime batch failed for %s: %s", symbol, exc)
 
         # ── Build LTF per-bar lookup (behaviour class name + confidence) ─────
         if _regime_ltf_series is not None:
@@ -1929,8 +1993,10 @@ def _compute_backtest_signal(
         _reject("high_uncertainty")
         return None
 
-    # ── Gate 3: GRU direction ─────────────────────────────────────────────────
-    p_bull = float(ml_preds.get("p_bull", 0.5))
+    # ── Gate 3: GRU direction (blended with RF when available) ───────────────
+    p_bull_gru = float(ml_preds.get("p_bull", 0.5))
+    p_bull_blend = ml_preds.get("p_bull_blend")
+    p_bull = float(p_bull_blend) if (p_bull_blend is not None and np.isfinite(float(p_bull_blend))) else p_bull_gru
     p_bear = float(ml_preds.get("p_bear", 0.5))
     _dir_thresh = _live_float_env("ML_DIRECTION_THRESHOLD")
     _candidate_side = "buy" if p_bull >= p_bear else "sell"
@@ -3086,6 +3152,32 @@ def _backtest_trader(
                 )
                 continue
 
+        # ── Win/Loss ANN gate (optional, permissive) ──────────────────────────
+        if os.getenv("WIN_LOSS_GATE_ENABLED", "0") == "1" and ml_preds:
+            _p_win_ann = float(ml_preds.get("p_win_ann", 0.5))
+            _win_loss_min = float(os.getenv("WIN_LOSS_MIN_PROB", str(0.45)))
+            if _p_win_ann < _win_loss_min:
+                _dbg["quality_block"] += 1
+                _log_backtest_candidate(
+                    candidate_logger,
+                    df=df,
+                    entry_idx=i,
+                    raw_signal={**raw_signal, "rr_ratio": rr_ratio},
+                    ml_preds=ml_preds,
+                    bar=bar,
+                    timestamp=dt.isoformat(),
+                    executed=False,
+                    rejection_reason="win_loss_ann_below_threshold",
+                    pm_open_positions_seen=len(open_positions_detail),
+                    run_id=run_id,
+                    source_split=source_split,
+                    bt_start=start,
+                    bt_end=end,
+                    split_summary_hash=split_summary_hash,
+                    correlation_id=candidate_correlation_id,
+                )
+                continue
+
         # ── Simulate trade ────────────────────────────────────────────────────
         result = _simulate_trade_pm(df, i, enriched["side"], entry, sl, tp1, tp2, size, atr)
         pnl = result["pnl"]
@@ -3398,6 +3490,27 @@ def _run_trader_worker(args_tuple: tuple) -> tuple:
                     worker_ml_models["gru_lstm"] = g
                 else:
                     raise RuntimeError("Worker GRU-LSTM model is not ready")
+                try:
+                    from models.rf_direction import RFDirectionClassifier
+                    _wrf = RFDirectionClassifier()
+                    if _wrf.is_trained:
+                        worker_ml_models["rf_direction"] = _wrf
+                except Exception:
+                    pass
+                try:
+                    from models.win_loss_classifier import WinLossClassifier
+                    _wwl = WinLossClassifier()
+                    if _wwl.is_trained:
+                        worker_ml_models["win_loss"] = _wwl
+                except Exception:
+                    pass
+                try:
+                    from models.kmeans_regime import KMeansRegimeModel
+                    _wkm = KMeansRegimeModel()
+                    if _wkm.is_trained:
+                        worker_ml_models["kmeans_regime"] = _wkm
+                except Exception:
+                    pass
         except Exception as exc:
             logger.error("Worker ML model load failed: %s", exc)
             raise
@@ -3874,6 +3987,40 @@ def main():
             except Exception as exc:
                 logger.error("GRU-LSTM load failed: %s", exc)
                 raise
+
+        # ── Optional ensemble models (soft-load — absence is not fatal) ─────────
+        try:
+            from models.rf_direction import RFDirectionClassifier
+            _rf = RFDirectionClassifier()
+            if _rf.is_trained:
+                ml_models["rf_direction"] = _rf
+                logger.info("RF direction classifier loaded")
+            else:
+                logger.info("RF direction classifier not yet trained — skipping blend")
+        except Exception as _e:
+            logger.warning("RF direction classifier load failed: %s", _e)
+
+        try:
+            from models.win_loss_classifier import WinLossClassifier
+            _wl = WinLossClassifier()
+            if _wl.is_trained:
+                ml_models["win_loss"] = _wl
+                logger.info("Win/loss ANN classifier loaded")
+            else:
+                logger.info("Win/loss ANN not yet trained — skipping")
+        except Exception as _e:
+            logger.warning("Win/loss ANN load failed: %s", _e)
+
+        try:
+            from models.kmeans_regime import KMeansRegimeModel
+            _km = KMeansRegimeModel()
+            if _km.is_trained:
+                ml_models["kmeans_regime"] = _km
+                logger.info("K-Means regime model loaded (k=%d)", _km.n_clusters)
+            else:
+                logger.info("K-Means regime model not yet trained — skipping")
+        except Exception as _e:
+            logger.warning("K-Means regime load failed: %s", _e)
 
         if not ml_models:
             raise RuntimeError(
