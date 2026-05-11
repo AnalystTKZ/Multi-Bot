@@ -411,6 +411,27 @@ if _allow_eval_journal_retraining():
 else:
     print("\n  SKIP  Round 1 Quality+RL retrain — train-tail journal kept evaluation-only")
 
+# ─── Quality scorer: auto-train on R1 journal if enough trades ───────────────
+# If Round 1 produced enough trades, train the QualityScorer now and activate
+# it as a filter gate for Round 2 and Round 3 backtests. The minimum is
+# intentionally higher than the model's internal floor (≥20) to ensure the
+# learned EV surface has enough density to generalise.
+_QS_MIN_TRADES = int(os.getenv("QS_MIN_TRADES_R1", "50"))
+_r1_trades = _journal_count()
+_qs_extra_env: dict = {}
+
+if _r1_trades >= _QS_MIN_TRADES:
+    print(f"\n=== QualityScorer: {_r1_trades} R1 trades ≥ {_QS_MIN_TRADES} — training and activating ===")
+    run_retrain("quality", label="R1 journal", extra_env=_eval_journal_training_env())
+    _qs_weight = env["weights"] / "quality_scorer.pkl"
+    if _qs_weight.exists():
+        _qs_extra_env = {"BACKTEST_REQUIRE_QUALITY": "1"}
+        print("  QualityScorer trained — gate ACTIVE for Round 2+")
+    else:
+        print("  WARN  QualityScorer weights not created — gate remains disabled")
+else:
+    print(f"\n  QualityScorer: {_r1_trades} R1 trades < {_QS_MIN_TRADES} minimum — gate disabled")
+
 # ─── Round 2: BLIND backtest on test window ───────────────────────────────────
 # This is the true out-of-sample evaluation.
 # Models were trained on data up to val_start; they have NEVER seen this data.
@@ -420,7 +441,7 @@ run_step(
     "Round 2 - Blind backtest (test)",
     "step6_backtest.py",
     env["base"] / "backtesting" / "results" / "round2_summary.json",
-    extra_env={"BT_WINDOW": "round2"},
+    extra_env={"BT_WINDOW": "round2", **_qs_extra_env},
 )
 _copy_bt_result("Round 2", "round2_summary.json")
 print(f"  Journal after Round 2: {_journal_count()} entries")
@@ -469,7 +490,7 @@ run_step(
     "Round 3 - Post-retrain backtest (last 3yr)",
     "step6_backtest.py",
     env["base"] / "backtesting" / "results" / "round3_summary.json",
-    extra_env={"BT_WINDOW": "round3"},
+    extra_env={"BT_WINDOW": "round3", **_qs_extra_env},
 )
 _copy_bt_result("Round 3", "round3_summary.json")
 print(f"  Journal after Round 3: {_journal_count()} entries")

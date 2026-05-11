@@ -154,12 +154,17 @@ class ProductionTradingEngine:
             if settings.SIMPLIFIED_USE_QUALITY:
                 model_factories.append(("quality", QualityScorer))
         else:
+            from models.quality_scorer import WEIGHT_PATH as _QS_WEIGHT_PATH
+            _qs_trained = os.path.isfile(_QS_WEIGHT_PATH)
             model_factories = [
                 ("regime_htf", lambda: RegimeClassifier(timeframe="4H", mode="htf_bias")),
                 ("regime_ltf", lambda: RegimeClassifier(timeframe="1H", mode="ltf_behaviour")),
-                ("quality", QualityScorer),
                 ("gru_lstm", GRULSTMPredictor),
             ]
+            if _qs_trained:
+                model_factories.append(("quality", QualityScorer))
+            else:
+                logger.info("QualityScorer: weights not found at %s — gate disabled", _QS_WEIGHT_PATH)
         # RL is optional — only loaded when explicitly enabled
         if settings.RL_ENABLED:
             model_factories.append(("rl", RLAgent))
@@ -178,11 +183,12 @@ class ProductionTradingEngine:
                 logger.warning("Skipping %s: weights missing or load failed", model_id)
 
         # Publish model status to Redis (RL reported as dormant when disabled)
-        active_model_ids = (
-            ["unified_direction_regime"]
-            if settings.SIMPLIFIED_ML_ENABLED
-            else ["regime_htf", "regime_ltf", "quality", "gru_lstm"]
-        )
+        if settings.SIMPLIFIED_ML_ENABLED:
+            active_model_ids = ["unified_direction_regime"]
+        else:
+            active_model_ids = ["regime_htf", "regime_ltf", "gru_lstm"]
+            if _qs_trained:
+                active_model_ids.append("quality")
         if settings.SIMPLIFIED_ML_ENABLED and settings.SIMPLIFIED_USE_QUALITY:
             active_model_ids.append("quality")
         for model_id in active_model_ids:
