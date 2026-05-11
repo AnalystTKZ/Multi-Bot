@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-05-10T23:42:56.978885+00:00",
+  "timestamp": "2026-05-11T01:50:24.590787+00:00",
   "traders": {
     "all": {
       "trader_id": "all",
       "bins": [
         {
           "predicted_range": "0.00-0.50",
-          "actual_win_rate": 0.2866,
-          "count": 157
+          "actual_win_rate": 0.2793,
+          "count": 358
         }
       ],
       "monotonic": null,
@@ -19,8 +19,8 @@
       "bins": [
         {
           "predicted_range": "0.00-0.50",
-          "actual_win_rate": 0.2866,
-          "count": 157
+          "actual_win_rate": 0.2793,
+          "count": 358
         }
       ],
       "monotonic": null,
@@ -28,7 +28,7 @@
       "note": "Too few populated bins for calibration check"
     }
   },
-  "run_id": "bt_20260510_234007",
+  "run_id": "bt_20260511_014731",
   "source_split": "combined_eval",
   "bt_start": "2022-08-05",
   "bt_end": "2025-08-05",
