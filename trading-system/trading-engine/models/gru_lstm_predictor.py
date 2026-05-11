@@ -122,26 +122,26 @@ def _build_torch_model():
                 hidden_size=64,
                 num_layers=2,
                 batch_first=True,
-                dropout=0.3,
+                dropout=0.35,
             )
-            self.drop1 = nn.Dropout(0.3)
+            self.drop1 = nn.Dropout(0.35)
             self.lstm = nn.LSTM(
                 input_size=64,
                 hidden_size=128,
                 num_layers=2,
                 batch_first=True,
-                dropout=0.3,
+                dropout=0.35,
             )
             # Self-attention over the full sequence.
             # 4 heads × 32 dims each = 128 total embed_dim.
             self.attn  = nn.MultiheadAttention(
                 embed_dim=128, num_heads=4, dropout=0.1, batch_first=True
             )
-            self.drop2 = nn.Dropout(0.3)
+            self.drop2 = nn.Dropout(0.35)
             self.shared = nn.Sequential(
                 nn.Linear(128, 64),
                 nn.ReLU(),
-                nn.Dropout(0.3),
+                nn.Dropout(0.35),
             )
             # Symbol-group embedding: N_GROUPS+1 rows (last = unknown/default)
             self.group_embed = nn.Embedding(N_GROUPS + 1, GROUP_EMBED_DIM)
@@ -884,16 +884,23 @@ class GRULSTMPredictor(BaseModel):
                     seg_feats, seg_tgts = seg_feats_new, seg_tgts_new
                     total_seq = sum(len(t) for t in seg_tgts)
 
-                # Count train/val sizes first (no allocation yet)
-                n_train, n_val = 0, 0
+                # Count train/calib/val sizes first (no allocation yet).
+                # calib is a held-out slice between train and val, used exclusively for
+                # post-training isotonic R calibration. It is never seen by the optimizer
+                # or the early-stopping criterion, preventing val-set overfitting of the
+                # calibrator (which inflated R-MAE by 0.005-0.016 in prior runs).
+                _calib_frac = float(os.getenv("GRU_CALIB_SPLIT", "0.10"))
+                n_train, n_calib, n_val = 0, 0, 0
                 n_feat = seg_feats[0].shape[1] if seg_feats else 0
                 for sf, st in zip(seg_feats, seg_tgts):
                     n = len(st)
-                    sp = int(n * (1 - validation_split))
-                    if sp <= 0 or sp >= n:
+                    sp_train = int(n * (1 - validation_split - _calib_frac))
+                    sp_calib = int(n * (1 - validation_split))
+                    if sp_train <= 0 or sp_calib <= 0 or sp_calib >= n:
                         continue
-                    n_train += sp
-                    n_val   += n - sp
+                    n_train += sp_train
+                    n_calib += sp_calib - sp_train
+                    n_val   += n - sp_calib
 
                 if n_train == 0:
                     del seg_feats, seg_tgts
@@ -905,21 +912,23 @@ class GRULSTMPredictor(BaseModel):
                 import gc as _gc
                 import numpy.lib.stride_tricks as _st
                 row_bytes   = SEQUENCE_LENGTH * n_feat * 4
-                numpy_bytes = (n_train + n_val) * row_bytes
+                numpy_bytes = (n_train + n_calib + n_val) * row_bytes
                 # After pinning, torch makes another copy → peak ≈ 2× numpy allocation
                 peak_est_mb = numpy_bytes * 2 / 1e6
                 logger.info("train_multi TF=%s: estimated peak RAM = %.0f MB "
-                            "(train=%d val=%d n_feat=%d seq_len=%d)",
-                            tf, peak_est_mb, n_train, n_val, n_feat, SEQUENCE_LENGTH)
+                            "(train=%d calib=%d val=%d n_feat=%d seq_len=%d)",
+                            tf, peak_est_mb, n_train, n_calib, n_val, n_feat, SEQUENCE_LENGTH)
                 if peak_est_mb > 20_000:
-                    # Trim to fit: recompute n_train/n_val for 20 GB budget
+                    # Trim to fit: maintain 70/10/20 ratio within 20 GB budget
                     max_rows  = int(20_000 * 1e6 / (row_bytes * 2))
-                    n_train   = min(n_train, int(max_rows * 0.8))
-                    n_val     = min(n_val,   int(max_rows * 0.2))
+                    n_train   = min(n_train, int(max_rows * 0.70))
+                    n_calib   = min(n_calib, int(max_rows * 0.10))
+                    n_val     = min(n_val,   int(max_rows * 0.20))
                     logger.warning(
                         "train_multi TF=%s: trimming to fit RAM budget — "
-                        "new train=%d val=%d (%.0f MB est)",
-                        tf, n_train, n_val, (n_train + n_val) * row_bytes * 2 / 1e6
+                        "new train=%d calib=%d val=%d (%.0f MB est)",
+                        tf, n_train, n_calib, n_val,
+                        (n_train + n_calib + n_val) * row_bytes * 2 / 1e6
                     )
                 _gc.collect()
 
@@ -927,28 +936,37 @@ class GRULSTMPredictor(BaseModel):
                 X_train = np.empty((n_train, SEQUENCE_LENGTH, n_feat), dtype=np.float32)
                 Y_train = np.empty((n_train, 4), dtype=np.float32)
                 G_train = np.empty((n_train,),   dtype=np.int64)   # symbol group IDs
+                X_calib = np.empty((n_calib, SEQUENCE_LENGTH, n_feat), dtype=np.float32)
+                Y_calib = np.empty((n_calib, 4), dtype=np.float32)
+                G_calib = np.empty((n_calib,),   dtype=np.int64)
                 X_val   = np.empty((n_val,   SEQUENCE_LENGTH, n_feat), dtype=np.float32)
                 Y_val   = np.empty((n_val,   4), dtype=np.float32)
                 G_val   = np.empty((n_val,),     dtype=np.int64)
 
-                tr_off, va_off = 0, 0
+                tr_off, ca_off, va_off = 0, 0, 0
                 for sf, st, grp in zip(seg_feats, seg_tgts, seg_groups):
-                    if tr_off >= n_train and va_off >= n_val:
+                    if tr_off >= n_train and ca_off >= n_calib and va_off >= n_val:
                         break   # budget exhausted
                     n = len(st)
-                    sp = int(n * (1 - validation_split))
-                    if sp <= 0 or sp >= n:
+                    sp_train = int(n * (1 - validation_split - _calib_frac))
+                    sp_calib = int(n * (1 - validation_split))
+                    if sp_train <= 0 or sp_calib <= 0 or sp_calib >= n:
                         continue
-                    for start_idx, end_idx, X_out, Y_out, G_out, is_train in [
-                        (0,  sp, X_train, Y_train, G_train, True),
-                        (sp, n,  X_val,   Y_val,   G_val,   False),
+                    for start_idx, end_idx, X_out, Y_out, G_out, seg_tag in [
+                        (0,         sp_train, X_train, Y_train, G_train, "train"),
+                        (sp_train,  sp_calib, X_calib, Y_calib, G_calib, "calib"),
+                        (sp_calib,  n,        X_val,   Y_val,   G_val,   "val"),
                     ]:
                         seg_n = end_idx - start_idx
                         if seg_n <= 0:
                             continue
-                        off      = tr_off if is_train else va_off
-                        cap      = n_train if is_train else n_val
-                        seg_n    = min(seg_n, cap - off)   # don't overflow pre-alloc
+                        if seg_tag == "train":
+                            off, cap = tr_off, n_train
+                        elif seg_tag == "calib":
+                            off, cap = ca_off, n_calib
+                        else:
+                            off, cap = va_off, n_val
+                        seg_n = min(seg_n, cap - off)   # don't overflow pre-alloc
                         if seg_n <= 0:
                             continue
                         raw = _st.sliding_window_view(
@@ -958,8 +976,10 @@ class GRULSTMPredictor(BaseModel):
                         X_out[off: off + seg_n] = raw
                         Y_out[off: off + seg_n] = st[start_idx: start_idx + seg_n]
                         G_out[off: off + seg_n] = grp   # same group for every row in segment
-                        if is_train:
+                        if seg_tag == "train":
                             tr_off += seg_n
+                        elif seg_tag == "calib":
+                            ca_off += seg_n
                         else:
                             va_off += seg_n
                         del raw
@@ -968,26 +988,33 @@ class GRULSTMPredictor(BaseModel):
                 X_train = X_train[:tr_off]
                 Y_train = Y_train[:tr_off]
                 G_train = G_train[:tr_off]
+                X_calib = X_calib[:ca_off]
+                Y_calib = Y_calib[:ca_off]
+                G_calib = G_calib[:ca_off]
                 X_val   = X_val[:va_off]
                 Y_val   = Y_val[:va_off]
                 G_val   = G_val[:va_off]
-                n_train, n_val = tr_off, va_off
+                n_train, n_calib, n_val = tr_off, ca_off, va_off
 
                 del seg_feats, seg_tgts, seg_groups
                 _gc.collect()
 
-                logger.info("train_multi TF=%s: train=%d val=%d (%.0f MB tensors)",
-                            tf, n_train, n_val,
-                            (X_train.nbytes + Y_train.nbytes + X_val.nbytes + Y_val.nbytes) / 1e6)
+                logger.info("train_multi TF=%s: train=%d calib=%d val=%d (%.0f MB tensors)",
+                            tf, n_train, n_calib, n_val,
+                            (X_train.nbytes + Y_train.nbytes + X_calib.nbytes
+                             + Y_calib.nbytes + X_val.nbytes + Y_val.nbytes) / 1e6)
 
                 # Pin to page-locked memory for fast H→D transfers
                 X_train_t = torch.from_numpy(X_train).pin_memory()
                 Y_train_t = torch.from_numpy(Y_train).pin_memory()
                 G_train_t = torch.from_numpy(G_train).pin_memory()
+                X_calib_t = torch.from_numpy(X_calib).pin_memory()
+                Y_calib_t = torch.from_numpy(Y_calib).pin_memory()
+                G_calib_t = torch.from_numpy(G_calib).pin_memory()
                 X_val_t   = torch.from_numpy(X_val).pin_memory()
                 Y_val_t   = torch.from_numpy(Y_val).pin_memory()
                 G_val_t   = torch.from_numpy(G_val).pin_memory()
-                del X_train, Y_train, G_train, X_val, Y_val, G_val
+                del X_train, Y_train, G_train, X_calib, Y_calib, G_calib, X_val, Y_val, G_val
                 _gc.collect()
 
                 # Structural bar sampling weights — upweight bars where a trade is
@@ -1054,7 +1081,7 @@ class GRULSTMPredictor(BaseModel):
                     _patience = 12  # longer patience: cosine decay needs more epochs to converge
                     _min_epochs_before_stop = 8
                     optimiser = torch.optim.AdamW(
-                        self._model.parameters(), lr=_train_lr, weight_decay=1e-3
+                        self._model.parameters(), lr=_train_lr, weight_decay=2e-3
                     )
                     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                         optimiser, T_max=epochs, eta_min=1e-6,
@@ -1075,7 +1102,7 @@ class GRULSTMPredictor(BaseModel):
                     _patience = 25   # was 18 — model needs more epochs to converge
                     _min_epochs_before_stop = max(22, int(epochs * 0.45))
                     optimiser = torch.optim.AdamW(
-                        self._model.parameters(), lr=_train_lr, weight_decay=1e-3
+                        self._model.parameters(), lr=_train_lr, weight_decay=2e-3
                     )
                     scheduler = torch.optim.lr_scheduler.OneCycleLR(
                         optimiser, max_lr=_train_lr, epochs=epochs,
@@ -1279,25 +1306,31 @@ class GRULSTMPredictor(BaseModel):
                             logger.info("train_multi TF=%s early stop at epoch %d", tf, epoch + 1)
                             break
 
-                # Fit monotone side-R calibrators on the validation split. This
-                # corrects non-linear R-head reliability that a scalar probability
-                # temperature cannot fix.
+                # Fit monotone side-R calibrators on the held-out calibration split.
+                # Using the SAME val split as early stopping caused the calibrator to
+                # overfit to the val distribution and inflate blind-test R-MAE by
+                # 0.005-0.016. The calib split (10% of data between train and val) has
+                # never been seen by the optimizer or the early-stopping criterion.
                 try:
+                    X_calib_gpu = X_calib_t.to(DEVICE, non_blocking=True)
+                    Y_calib_gpu = Y_calib_t.to(DEVICE, non_blocking=True)
+                    G_calib_gpu = G_calib_t.to(DEVICE, non_blocking=True)
                     pred_long_parts, pred_short_parts = [], []
                     true_long_parts, true_short_parts = [], []
                     self._model.eval()
                     with torch.no_grad():
-                        val_bs = batch_size * 2
-                        for v_start in range(0, n_val, val_bs):
-                            xb = X_val_gpu[v_start: v_start + val_bs]
-                            yb = Y_val_gpu[v_start: v_start + val_bs]
-                            gb = G_val_gpu[v_start: v_start + val_bs]
+                        calib_bs = batch_size * 2
+                        for c_start in range(0, n_calib, calib_bs):
+                            xb = X_calib_gpu[c_start: c_start + calib_bs]
+                            yb = Y_calib_gpu[c_start: c_start + calib_bs]
+                            gb = G_calib_gpu[c_start: c_start + calib_bs]
                             with torch.amp.autocast("cuda", enabled=use_amp):
                                 _, rl, rs, _ = self._model(xb, gb)
                             pred_long_parts.append(rl.float().cpu().numpy())
                             pred_short_parts.append(rs.float().cpu().numpy())
                             true_long_parts.append(yb[:, 1].float().cpu().numpy())
                             true_short_parts.append(yb[:, 2].float().cpu().numpy())
+                    del X_calib_gpu, Y_calib_gpu, G_calib_gpu
                     r_cal_stats = self.fit_r_isotonic(
                         np.concatenate(pred_long_parts),
                         np.concatenate(true_long_parts),
@@ -1309,8 +1342,8 @@ class GRULSTMPredictor(BaseModel):
                     logger.warning("train_multi TF=%s: side-R isotonic calibration failed: %s", tf, exc)
 
                 combined_history["groups_trained"] += 1
-                del X_train_t, Y_train_t, G_train_t, X_val_t, Y_val_t, G_val_t
-                del X_val_gpu, Y_val_gpu, G_val_gpu, train_idx
+                del X_train_t, Y_train_t, G_train_t, X_calib_t, Y_calib_t, G_calib_t
+                del X_val_t, Y_val_t, G_val_t, X_val_gpu, Y_val_gpu, G_val_gpu, train_idx
                 import gc; gc.collect()
                 if DEVICE.type == "cuda":
                     torch.cuda.empty_cache()

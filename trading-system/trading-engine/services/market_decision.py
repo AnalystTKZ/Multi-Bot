@@ -117,18 +117,24 @@ def combined_market_decision(
     mss_bear = _as_bool(_bar_value(bar, "mss_bear", False))
     adx = _as_float(_bar_value(bar, "adx_14", _bar_value(bar, "adx", 20.0)), 20.0)
 
-    bullish_structure = (
-        (pullback_valid and pullback_side == "buy")
-        or bos_bull
-        or fvg_bull
-        or mss_bull
-    )
-    bearish_structure = (
-        (pullback_valid and pullback_side == "sell")
-        or bos_bear
-        or fvg_bear
-        or mss_bear
-    )
+    # Require ≥2 independent structural signals before treating the bar as a valid
+    # entry context. Single-signal (e.g. FVG alone) produced WR=26% vs 37.5% break-even;
+    # requiring confluence of at least two filters raises the quality bar without
+    # eliminating valid setups that carry multiple aligned signals.
+    _bull_signals = sum([
+        bool(pullback_valid and pullback_side == "buy"),
+        bool(bos_bull),
+        bool(fvg_bull),
+        bool(mss_bull),
+    ])
+    _bear_signals = sum([
+        bool(pullback_valid and pullback_side == "sell"),
+        bool(bos_bear),
+        bool(fvg_bear),
+        bool(mss_bear),
+    ])
+    bullish_structure = _bull_signals >= 2
+    bearish_structure = _bear_signals >= 2
     side_structure = bullish_structure if side == "buy" else bearish_structure
 
     if score_state in {"TRADEABLE_UP", "TRADEABLE_DOWN"}:

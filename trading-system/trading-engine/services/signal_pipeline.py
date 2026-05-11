@@ -400,7 +400,7 @@ class SignalPipeline:
         _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.70"))
         _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
 
-        _neutral_strong_conf = float(os.getenv("NEUTRAL_HTF_STRONG_GRU_CONFIDENCE", "0.70"))
+        _neutral_strong_conf = float(os.getenv("NEUTRAL_HTF_STRONG_GRU_CONFIDENCE", "0.60"))
         _tradeability = classify_tradeability_directional(
             _ltf_trade_regime,
             _htf_bias,

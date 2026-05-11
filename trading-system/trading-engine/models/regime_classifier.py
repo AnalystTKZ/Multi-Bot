@@ -2245,7 +2245,7 @@ class RegimeClassifier(BaseModel):
             # batch without reducing total gradient steps.
             _is_dir = (y_tr[:, 0] > 0.5) | (y_tr[:, 1] > 0.5)  # BIAS_UP or BIAS_DOWN
             _n_dir = int(_is_dir.sum())
-            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "15.0"))
+            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "8.0"))
             _htf_sample_weights = np.where(_is_dir, _dir_weight, 1.0).astype(np.float64)
             _htf_sample_weights /= _htf_sample_weights.sum()
             logger.info(
@@ -2273,6 +2273,12 @@ class RegimeClassifier(BaseModel):
             best_loss = float("inf")
             best_state = None
             patience, no_improve = 8, 0
+            # Precision gate: only promote a checkpoint if BOTH directional classes meet
+            # this floor. Prevents the model from locking in a recall-maximising state
+            # early in training (epoch 15-20) before precision has recovered.
+            # If no epoch ever clears the floor, we fall back to the overall best score.
+            _ckpt_min_prec = float(os.getenv("REGIME_HTF_CHECKPOINT_MIN_PRECISION", "0.30"))
+            _any_epoch_above_floor = False
 
             def _score_loss(logits: "torch.Tensor", target: "torch.Tensor",
                             weight: "torch.Tensor") -> "torch.Tensor":
@@ -2297,7 +2303,7 @@ class RegimeClassifier(BaseModel):
                 focal_weight = (1.0 - pt) ** gamma
                 per_cell = focal_weight * per_cell
 
-                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "3.0"))
+                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "5.0"))
                 if neg_penalty > 0.0:
                     neutral_target = (target_f < 0.5).float()
                     per_cell = per_cell + neg_penalty * neutral_target * torch.square(pred)
@@ -2388,13 +2394,25 @@ class RegimeClassifier(BaseModel):
                     logger.info("Regime HTF score epoch %2d/50 — tr=%.4f va=%.4f bal=%.3f",
                                 epoch + 1, tr_loss, va_loss, metrics["balanced_accuracy"])
 
-                if score > best_score:
+                _prec_ok = _ep_min_prec >= _ckpt_min_prec
+                if _prec_ok:
+                    _any_epoch_above_floor = True
+                # Promote this checkpoint if: (a) precision meets floor AND score improves,
+                # OR (b) precision floor never met yet AND this is the overall best score.
+                _promote = (score > best_score) and (_prec_ok or not _any_epoch_above_floor)
+                if _promote:
                     best_score = score
                     best_loss = va_loss
                     no_improve = 0
                     m_bs = self._model.module if isinstance(
                         self._model, torch.nn.DataParallel) else self._model
                     best_state = {k: v.cpu().clone() for k, v in m_bs.state_dict().items()}
+                    if not _prec_ok:
+                        logger.debug(
+                            "Regime HTF score epoch %d: below precision floor (%.3f<%.3f) "
+                            "— saved as fallback only",
+                            epoch + 1, _ep_min_prec, _ckpt_min_prec,
+                        )
                 else:
                     no_improve += 1
                     if no_improve >= patience and epoch + 1 >= 10:
