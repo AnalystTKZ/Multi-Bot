@@ -449,7 +449,7 @@ if _combined_trades >= _QS_MIN_TRADES:
     run_retrain("quality", label="R0+R1 combined journal", extra_env=_qs_train_env)
     _qs_weight = env["weights"] / "quality_scorer.pkl"
     if _qs_weight.exists():
-        _qs_extra_env = {"BACKTEST_REQUIRE_QUALITY": "1"}
+        _qs_extra_env = {"BACKTEST_ENABLE_QUALITY_GATE": "1", "BACKTEST_REQUIRE_QUALITY": "1"}
         print("  QualityScorer trained — gate ACTIVE for Round 2+")
     else:
         print("  WARN  QualityScorer weights not created — gate remains disabled")

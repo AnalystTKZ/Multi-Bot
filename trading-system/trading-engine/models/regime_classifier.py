@@ -314,8 +314,11 @@ class RegimeClassifier(BaseModel):
         ))
         min_recall = float(os.getenv(
             "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
-            os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.10"),
+            os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.15"),
         ))
+        # Minimum share of bars that must receive a directional (non-neutral) prediction.
+        # Prevents selecting a threshold/margin that makes the classifier always neutral.
+        min_pred_share = float(os.getenv("REGIME_HTF_MIN_PRED_SHARE", "0.05"))
         thresholds = np.unique(np.concatenate([
             np.linspace(0.35, 0.85, 11),
             np.array([0.875, 0.90, 0.925, 0.95, 0.975, 0.99, 0.995, 0.999]),
@@ -359,34 +362,38 @@ class RegimeClassifier(BaseModel):
                     and down_r >= min_recall
                     and up_pred_n >= min_directional_predictions
                     and down_pred_n >= min_directional_predictions
+                    and directional_pred_share >= min_pred_share
                 )
                 precision_score = min(up_p, down_p)
+                # F1-primary scoring: a classifier with coverage is more useful than
+                # a perfect-precision classifier that predicts direction 0.5% of bars.
                 floor_score = (
-                    5.0 * min(up_p, down_p)
-                    + 1.0 * min(up_f1, down_f1)
-                    + 0.25 * min(up_r, down_r)
-                    + 0.75 * neutral_r
+                    2.0 * min(up_p, down_p)
+                    + 3.0 * min(up_f1, down_f1)
+                    + 1.0 * min(up_r, down_r)
+                    + 0.50 * neutral_r
                     + 0.25 * metrics["accuracy"]
-                    - 3.0 * directional_fp_share
+                    - 2.0 * directional_fp_share
                 )
                 if meets_floor:
                     if floor_score > best_floor_score:
                         best_floor_score = floor_score
                         best_floor = (float(threshold), float(margin), metrics)
 
-                # If the model cannot hit the floor, prefer the most precise
-                # non-trivial abstaining policy rather than a recall-heavy flood.
+                # Fallback: enough predictions but doesn't meet all floors.
+                # Balance precision and F1 equally — don't let perfect precision
+                # win if it produces near-zero recall.
                 enough_predictions = (
                     up_pred_n >= min_directional_predictions
                     and down_pred_n >= min_directional_predictions
+                    and directional_pred_share >= min_pred_share
                 )
                 if enough_predictions:
                     fallback_score = (
-                        10.0 * precision_score
-                        + 1.0 * min(up_f1, down_f1)
+                        4.0 * precision_score
+                        + 4.0 * min(up_f1, down_f1)
                         + 0.50 * neutral_r
-                        - 4.0 * directional_fp_share
-                        - 0.75 * directional_pred_share
+                        - 3.0 * directional_fp_share
                     )
                     if fallback_score > best_fallback_score:
                         best_fallback_score = fallback_score
@@ -2802,7 +2809,7 @@ class RegimeClassifier(BaseModel):
             ))
             min_directional_recall = float(os.getenv(
                 "REGIME_HTF_MIN_DIRECTIONAL_RECALL",
-                os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.10"),
+                os.getenv("REGIME_MIN_DIRECTIONAL_RECALL", "0.15"),
             ))
             min_directional_f1 = float(os.getenv(
                 "REGIME_HTF_MIN_DIRECTIONAL_F1",
@@ -2863,17 +2870,36 @@ class RegimeClassifier(BaseModel):
                 float(final_metrics["precision"].get("BIAS_UP", 0.0)),
                 float(final_metrics["precision"].get("BIAS_DOWN", 0.0)),
             )
+            _new_min_f1 = min(
+                float(final_metrics["f1"].get("BIAS_UP", 0.0)),
+                float(final_metrics["f1"].get("BIAS_DOWN", 0.0)),
+            )
+            _conf_arr = np.array(final_metrics["confusion"])
+            _new_pred_share = float(
+                (_conf_arr[:, 0].sum() + _conf_arr[:, 1].sum()) / max(_conf_arr.sum(), 1)
+            )
             _old_min_prec = 0.0
+            _old_min_f1 = 0.0
             if _prec_sidecar.exists():
                 try:
-                    _old_min_prec = float(_json.loads(_prec_sidecar.read_text()).get("min_precision", 0.0))
+                    _old_sidecar = _json.loads(_prec_sidecar.read_text())
+                    _old_min_prec = float(_old_sidecar.get("min_precision", 0.0))
+                    _old_min_f1 = float(_old_sidecar.get("min_f1", 0.0))
                 except Exception:
                     pass
-            _prec_regressed = _old_min_prec > 0.05 and _new_min_prec < _old_min_prec - 0.01
+            # Don't-regress: block only if BOTH precision AND F1 drop meaningfully.
+            # A collapsed-precision model (1.0 prec, 0.03 recall) should NOT block
+            # a better-coverage model (0.80 prec, 0.20 recall) from being promoted.
+            _prec_regressed = (
+                _old_min_prec > 0.10
+                and _new_min_prec < _old_min_prec - 0.05
+                and _new_min_f1 < _old_min_f1 - 0.02
+            )
             if _prec_regressed:
                 _regress_msg = (
-                    f"HTF precision regressed {_old_min_prec:.3f} → {_new_min_prec:.3f} "
-                    f"(>{0.01:.3f} drop); keeping previous weights to avoid trading degradation."
+                    f"HTF precision+F1 both regressed "
+                    f"(prec {_old_min_prec:.3f}→{_new_min_prec:.3f}, "
+                    f"f1 {_old_min_f1:.3f}→{_new_min_f1:.3f}); keeping previous weights."
                 )
                 warnings.append(_regress_msg)
                 logger.warning(_regress_msg)
@@ -2882,7 +2908,19 @@ class RegimeClassifier(BaseModel):
                 logger.info("RegimeClassifier[%s] HTF score head saved to %s",
                             self._timeframe or "default", self.weight_path)
                 try:
-                    _prec_sidecar.write_text(_json.dumps({"min_precision": float(_new_min_prec)}))
+                    _prec_sidecar.write_text(_json.dumps({
+                        "min_precision": float(_new_min_prec),
+                        "min_f1": float(_new_min_f1),
+                        "precision_up": float(final_metrics["precision"].get("BIAS_UP", 0.0)),
+                        "precision_down": float(final_metrics["precision"].get("BIAS_DOWN", 0.0)),
+                        "recall_up": float(final_metrics["recall"].get("BIAS_UP", 0.0)),
+                        "recall_down": float(final_metrics["recall"].get("BIAS_DOWN", 0.0)),
+                        "f1_up": float(final_metrics["f1"].get("BIAS_UP", 0.0)),
+                        "f1_down": float(final_metrics["f1"].get("BIAS_DOWN", 0.0)),
+                        "pred_share": float(_new_pred_share),
+                        "decision_threshold": round(float(threshold), 4),
+                        "decision_margin": round(float(margin), 4),
+                    }))
                 except Exception:
                     pass
             return {

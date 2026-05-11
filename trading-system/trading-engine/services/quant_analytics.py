@@ -337,8 +337,8 @@ class ConfidenceCalibrator:
             result["bins"] = bins
 
             if len(win_rates) < 2:
-                result["note"] = "Too few populated bins for calibration check"
-                result["reliable"] = True   # assume OK when data sparse
+                result["note"] = f"Only {len(win_rates)} populated bin(s) — cannot assess calibration monotonicity"
+                result["reliable"] = False
                 return result
 
             # Check monotonicity. Keep the strict flag literal; use reliability
