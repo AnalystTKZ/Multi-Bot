@@ -378,10 +378,12 @@ class SignalPipeline:
                 # Look up per-symbol/side threshold from calibrated JSON; use Q25 as gate.
                 _sym_side_data = self._sym_r_thresholds.get(symbol, {}).get(side, {})
                 if _sym_side_data:
-                    _min_gru_r = float(_sym_side_data.get("q25", _global_min_r))
-                    # Don't allow per-symbol threshold to go below a hard floor of 0.20
-                    # (prevents degenerate symbols from disabling the gate entirely).
-                    _min_gru_r = max(_min_gru_r, 0.20)
+                    # Per-symbol threshold can only TIGHTEN the gate, never loosen it.
+                    # q25 of ALL labeled bars is -1.0 for most symbols (75%+ of bars are
+                    # capped-loss), so max(q25, global) keeps the global floor intact while
+                    # allowing symbols with genuinely higher q25 to be filtered more aggressively.
+                    _sym_q25 = float(_sym_side_data.get("q25", _global_min_r))
+                    _min_gru_r = max(_sym_q25, _global_min_r)
                 else:
                     _min_gru_r = _global_min_r
                 if _gru_expected_r < _min_gru_r:

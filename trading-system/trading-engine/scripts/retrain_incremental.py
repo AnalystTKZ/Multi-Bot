@@ -670,24 +670,42 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         if tf != "15M":
             continue
         lbl = seg["labels"]
-        # realized_r_long: R if you went long; realized_r_short: R if you went short.
-        # Q25 = the bottom quartile threshold — we only want top-75% quality setups.
+        # Compute per-symbol/side R threshold from POSITIVE-R bars only.
+        # All labeled bars: Q25 = -1.0 for every symbol (75%+ of bars are capped-loss),
+        # which makes the raw Q25 useless for calibration. Instead we compute stats over
+        # bars where realized_r > 0 — actual profitable opportunities. Q25 of that
+        # sub-population gives a meaningful minimum quality gate:
+        #   "only trade when GRU predicts R above the bottom quartile of winning setups."
+        # Signal pipeline takes max(q25_pos, global_gate) so this can only tighten.
         for side, col in (("buy", "realized_r_long"), ("sell", "realized_r_short")):
             if col in lbl.columns:
                 vals = lbl[col].dropna().values
-                if len(vals) >= 20:
-                    q25 = float(np.nanpercentile(vals, 25))
-                    q50 = float(np.nanpercentile(vals, 50))
+                pos_vals = vals[vals > 0]
+                n_all = int(len(vals))
+                n_pos = int(len(pos_vals))
+                if n_all >= 20:
+                    q25_all = float(np.nanpercentile(vals, 25))
+                    q50_all = float(np.nanpercentile(vals, 50))
+                    q25_pos = float(np.nanpercentile(pos_vals, 25)) if n_pos >= 10 else float("nan")
+                    q50_pos = float(np.nanpercentile(pos_vals, 50)) if n_pos >= 10 else float("nan")
+                    pos_rate = round(n_pos / max(n_all, 1), 4)
                     if sym not in _sym_r_thresholds:
                         _sym_r_thresholds[sym] = {}
                     _sym_r_thresholds[sym][side] = {
-                        "q25": round(q25, 4),
-                        "q50": round(q50, 4),
-                        "n": int(len(vals)),
+                        "q25": round(q25_pos, 4) if n_pos >= 10 else round(q25_all, 4),
+                        "q50": round(q50_pos, 4) if n_pos >= 10 else round(q50_all, 4),
+                        "q25_all": round(q25_all, 4),
+                        "q50_all": round(q50_all, 4),
+                        "pos_rate": pos_rate,
+                        "n": n_all,
+                        "n_pos": n_pos,
                     }
                     logger.info(
-                        "GRU R threshold %s/%s: q25=%.3f q50=%.3f (n=%d)",
-                        sym, side, q25, q50, len(vals),
+                        "GRU R threshold %s/%s: q25_pos=%.3f q50_pos=%.3f "
+                        "pos_rate=%.1f%% (n=%d n_pos=%d)",
+                        sym, side, q25_pos if n_pos >= 10 else float("nan"),
+                        q50_pos if n_pos >= 10 else float("nan"),
+                        100.0 * pos_rate, n_all, n_pos,
                     )
 
     _threshold_path = str(_ENV["weights"] / "gru_lstm" / "symbol_r_thresholds.json")
