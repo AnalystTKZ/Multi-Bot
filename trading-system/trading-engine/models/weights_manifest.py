@@ -65,6 +65,7 @@ class WeightsManifest:
     def write(
         self,
         gru_features: Optional[list[str]] = None,
+        gru_sequence_length: Optional[int] = None,
         regime_4h_features: Optional[list[str]] = None,
         regime_1h_features: Optional[list[str]] = None,
         quality_features: Optional[list[str]] = None,
@@ -80,6 +81,7 @@ class WeightsManifest:
                 "feature_names": gru_features or [],
                 "hidden_size":   gru_hidden,
                 "num_layers":    gru_layers,
+                "sequence_length": int(gru_sequence_length or 0),
             },
             "regime_4h": {
                 "n_features":    len(regime_4h_features) if regime_4h_features else 0,
@@ -119,6 +121,7 @@ class WeightsManifest:
     def check(
         self,
         gru_features: Optional[list[str]] = None,
+        gru_sequence_length: Optional[int] = None,
         regime_4h_features: Optional[list[str]] = None,
         regime_1h_features: Optional[list[str]] = None,
         quality_features: Optional[list[str]] = None,
@@ -165,6 +168,14 @@ class WeightsManifest:
                     ok=False,
                     reason=f"{name} feature contract changed: {'; '.join(detail) or 'order/rename'}"
                 )
+            if name == "gru" and gru_sequence_length is not None:
+                saved_seq_len = int(saved.get("sequence_length") or 0)
+                current_seq_len = int(gru_sequence_length)
+                if saved_seq_len != current_seq_len:
+                    return CompatResult(
+                        ok=False,
+                        reason=f"gru sequence length changed: {saved_seq_len}→{current_seq_len}"
+                    )
 
         return CompatResult(ok=True)
 

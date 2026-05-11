@@ -133,6 +133,8 @@ SEQUENCE_FEATURES = [
     "vol_slope_seq",
     "time_sin",
     "time_cos",
+    "session_hour_sin",
+    "session_hour_cos",
     "mins_since_london_open",
     "mins_since_ny_open",
     # ── EMA / market structure ───────────────────────────────────────────────
@@ -167,6 +169,7 @@ SEQUENCE_FEATURES = [
     "upper_wick_ratio",
     "lower_wick_ratio",
     "adx_15m",
+    "adx_cat",           # ADX bucket: choppy(0.0)/building(0.33)/trending(0.67)/strong(1.0)
     "vol_expansion",
     "atr_pctile",
     "vwap_dist_atr",
@@ -216,6 +219,9 @@ REGIME_4H_FEATURES = [
     "internal_structure_state",
     "swing_sequence_score",
     "bars_since_mss",
+    "bars_since_last_mss",
+    "bars_since_last_bos",
+    "directional_bars_20",
     "mss_bull_bars_ago",
     "mss_bear_bars_ago",
     "symbol_group_code",
@@ -626,10 +632,15 @@ class FeatureEngine:
         if hasattr(out.index, "hour"):
             hour = out.index.hour
             out["is_asian"]  = ((hour >= 0) & (hour < 7)).astype(float)
+            out["is_asia_session"] = out["is_asian"]
             out["is_london"] = ((hour >= 7) & (hour < 12)).astype(float)
             out["is_ny"]     = ((hour >= 13) & (hour < 18)).astype(float)
+            out["is_london_session"] = out["is_london"]
+            out["is_ny_session"] = out["is_ny"]
         else:
             out["is_asian"] = out["is_london"] = out["is_ny"] = 0.0
+            out["is_asia_session"] = 0.0
+            out["is_london_session"] = out["is_ny_session"] = 0.0
 
         if "bos_bull" not in out.columns:
             bos = detect_break_of_structure(df)
@@ -1014,9 +1025,16 @@ class FeatureEngine:
         ).astype(np.float32)
 
         # ── ADX on 15M ────────────────────────────────────────────────────────
-        extra["adx_15m"] = np.clip(
-            _compute_adx(out, 14).fillna(0.0).to_numpy(dtype=np.float64) / 100.0, 0.0, 1.0
+        _adx14 = _compute_adx(out, 14).fillna(0.0).to_numpy(dtype=np.float64)
+        extra["adx_15m"] = np.clip(_adx14 / 100.0, 0.0, 1.0).astype(np.float32)
+        # ADX category bucket: 0.0=choppy(<20), 0.33=building(20-30), 0.67=trending(30-40), 1.0=strong(40+)
+        # Backtest shows ADX 20-30 PF≈1.44 vs ADX 40+ PF≈0.56 — model needs explicit regime signal.
+        extra["adx_cat"] = np.where(
+            _adx14 < 20, 0.00,
+            np.where(_adx14 < 30, 0.33,
+                     np.where(_adx14 < 40, 0.67, 1.00))
         ).astype(np.float32)
+        extra["adx_category_normalized"] = extra["adx_cat"]
 
         # ── VWAP / wick auction structure ─────────────────────────────────────
         from indicators.market_structure import (
@@ -1048,7 +1066,10 @@ class FeatureEngine:
 
         # ── Session timing — continuous ───────────────────────────────────────
         if hasattr(out.index, "hour") and hasattr(out.index, "minute"):
-            _mins_in_day = out.index.hour * 60 + out.index.minute
+            _mins_in_day = np.asarray(out.index.hour * 60 + out.index.minute, dtype=np.float32)
+            _hour_angle = 2.0 * np.pi * (_mins_in_day / 1440.0)
+            extra["session_hour_sin"] = np.sin(_hour_angle).astype(np.float32)
+            extra["session_hour_cos"] = np.cos(_hour_angle).astype(np.float32)
             # London: 07:00 = 420 min, window 8h = 480 min
             _london_mins = (_mins_in_day - 420).astype(np.float32)
             extra["mins_since_london_open"] = np.where(
@@ -1060,6 +1081,8 @@ class FeatureEngine:
                 _ny_mins >= 0, np.clip(_ny_mins / 300.0, 0.0, 1.0), -1.0
             ).astype(np.float32)
         else:
+            extra["session_hour_sin"] = np.zeros(n, dtype=np.float32)
+            extra["session_hour_cos"] = np.ones(n, dtype=np.float32)
             extra["mins_since_london_open"] = np.full(n, -1.0, dtype=np.float32)
             extra["mins_since_ny_open"]     = np.full(n, -1.0, dtype=np.float32)
 

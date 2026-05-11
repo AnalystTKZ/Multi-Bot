@@ -536,9 +536,10 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
     try:
         from models.weights_manifest import WeightsManifest
         from services.feature_engine import SEQUENCE_FEATURES, REGIME_4H_FEATURES, REGIME_1H_FEATURES, QUALITY_FEATURES
-        from models.gru_lstm_predictor import N_FEATURES
+        from models.gru_lstm_predictor import N_FEATURES, SEQUENCE_LENGTH
         compat = WeightsManifest(_weight_dir).check(
             gru_features=list(SEQUENCE_FEATURES),
+            gru_sequence_length=SEQUENCE_LENGTH,
             regime_4h_features=list(REGIME_4H_FEATURES),
             regime_1h_features=list(REGIME_1H_FEATURES),
             quality_features=list(QUALITY_FEATURES),
@@ -576,6 +577,8 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
             _stale_pt,
             os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
             os.path.join(WEIGHTS_DIR, "gru_lstm", "isotonic.pkl"),
+            os.path.join(WEIGHTS_DIR, "gru_lstm", "r_isotonic_long.pkl"),
+            os.path.join(WEIGHTS_DIR, "gru_lstm", "r_isotonic_short.pkl"),
         ):
             if os.path.exists(_stale):
                 os.remove(_stale)
@@ -584,6 +587,8 @@ def _retrain_gru_multi(model, symbols: list) -> dict:
         model._loaded = False
         model._temperature = 1.0
         model._isotonic = None
+        model._r_long_isotonic = None
+        model._r_short_isotonic = None
     elif os.path.exists(_stale_pt) and model._model is not None:
         logger.info("GRU warm start enabled from existing weights: %s", _stale_pt)
     else:
@@ -813,6 +818,8 @@ def retrain_gru(dry_run: bool = False) -> dict:
                         _stale_pt,
                         os.path.join(WEIGHTS_DIR, "gru_lstm", "temperature.pt"),
                         os.path.join(WEIGHTS_DIR, "gru_lstm", "isotonic.pkl"),
+                        os.path.join(WEIGHTS_DIR, "gru_lstm", "r_isotonic_long.pkl"),
+                        os.path.join(WEIGHTS_DIR, "gru_lstm", "r_isotonic_short.pkl"),
                     ):
                         if os.path.exists(_stale):
                             os.remove(_stale)
@@ -821,6 +828,8 @@ def retrain_gru(dry_run: bool = False) -> dict:
                     model._loaded = False
                     model._temperature = 1.0
                     model._isotonic = None
+                    model._r_long_isotonic = None
+                    model._r_short_isotonic = None
                 elif os.path.exists(_stale_pt) and model._model is not None:
                     logger.info("GRU warm start enabled from existing weights: %s", _stale_pt)
                 else:

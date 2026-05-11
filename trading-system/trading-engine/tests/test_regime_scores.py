@@ -125,6 +125,7 @@ def test_final_regime_decision_blocks_chop_and_allows_trend():
 
 def test_market_decision_uses_score_regime_as_filter():
     from services.market_decision import combined_market_decision
+    from services.regime_scores import classify_tradeability_directional
 
     allowed, reason = combined_market_decision(
         htf_bias="BIAS_UP",
@@ -144,6 +145,24 @@ def test_market_decision_uses_score_regime_as_filter():
         confidence=0.90,
         bar={"bos_bull": True},
         trade_regime="TRADEABLE_TREND",
+    )
+    assert allowed
+    assert reason == "trend_structure_entry"
+
+    assert classify_tradeability_directional(
+        "TRADEABLE_TREND",
+        "BIAS_NEUTRAL",
+        side="buy",
+        directional_confidence=0.74,
+    ) == "TRADEABLE_UP"
+
+    allowed, reason = combined_market_decision(
+        htf_bias="BIAS_NEUTRAL",
+        ltf_behaviour="TRENDING",
+        side="buy",
+        confidence=0.74,
+        bar={"bos_bull": True},
+        trade_regime="TRADEABLE_UP",
     )
     assert allowed
     assert reason == "trend_structure_entry"

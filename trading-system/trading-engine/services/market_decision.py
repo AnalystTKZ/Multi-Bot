@@ -60,8 +60,8 @@ def combined_market_decision(
       - BIAS_UP: buy only; TRENDING needs bullish structure, RANGING needs buy
         range-boundary entry, VOLATILE needs high confidence plus structure.
       - BIAS_DOWN: sell only; mirror of BIAS_UP.
-      - BIAS_NEUTRAL: only range-boundary trades are allowed, and only when the
-        LTF classifier explicitly says RANGING.
+      - BIAS_NEUTRAL: does not veto a strong directional override from LTF trend
+        plus GRU direction; otherwise only range-boundary trades are allowed.
 
     htf_confidence: HTF regime classifier's softmax confidence for its prediction.
       The HTF confidence gate (HTF_MIN_REGIME_CONFIDENCE) is applied in the caller
@@ -160,7 +160,13 @@ def combined_market_decision(
     if htf == "BIAS_DOWN" and mss_bull:
         return False, "mss_against_bias"
 
-    if htf == "BIAS_NEUTRAL":
+    neutral_directional_override = (
+        htf == "BIAS_NEUTRAL"
+        and score_state in {"TRADEABLE_UP", "TRADEABLE_DOWN"}
+        and ltf in {"TRENDING", "VOLATILE"}
+    )
+
+    if htf == "BIAS_NEUTRAL" and not neutral_directional_override:
         if conf < neutral_threshold:
             return False, "neutral_bias_weak_conf"
         if ltf != "RANGING":

@@ -669,7 +669,7 @@ class RegimeClassifier(BaseModel):
     # 15M/default: 14 bars ≈ 3.5 hours. Using 14 everywhere collapses all
     # 4H distributions to nearly identical centroids → poor GMM separation.
     _TF_NBAR: dict = {"4H": 50, "1H": 24, "15M": 14, "5M": 10}
-    _TF_LABEL_HORIZON: dict = {"4H": 12, "1H": 12, "15M": 16, "5M": 24}  # 4H reverted 24→12 (4d→2d): 24-bar horizon labels were too ambiguous, hurting precision
+    _TF_LABEL_HORIZON: dict = {"4H": 36, "1H": 12, "15M": 16, "5M": 24}
     _DEFAULT_NBAR = 14
 
     @staticmethod
@@ -879,6 +879,9 @@ class RegimeClassifier(BaseModel):
 
         _tf = (timeframe or "4H").upper()
         horizon = int(RegimeClassifier._TF_LABEL_HORIZON.get(_tf, 12))
+        if _tf == "4H" and mode == "htf_bias":
+            horizon = int(os.getenv("REGIME_HTF_LABEL_HORIZON", str(horizon)))
+            horizon = max(12, min(72, horizon))
         n_bar = int(RegimeClassifier._TF_NBAR.get(_tf, RegimeClassifier._DEFAULT_NBAR))
 
         close = df["close"].astype(float)
@@ -1565,7 +1568,12 @@ class RegimeClassifier(BaseModel):
 
         requested_set = set(requested)
         strict_requested = feature_names is not None
-        need_bos = "swing_hh_hl_count" in requested_set
+        time_in_trend_features = {
+            "bars_since_last_mss",
+            "bars_since_last_bos",
+            "directional_bars_20",
+        }
+        need_bos = bool({"swing_hh_hl_count", "bars_since_last_bos"} & requested_set)
         need_sweep = "liquidity_sweep_24h" in requested_set
         df = RegimeClassifier._ensure_structure_columns(
             df,
@@ -1694,6 +1702,59 @@ class RegimeClassifier(BaseModel):
                     _set(name, structure_df[name].to_numpy(dtype=np.float32))
             except Exception as exc:
                 raise RuntimeError(f"_build_feature_matrix: structure scoring failed: {exc}") from exc
+
+        if requested_set.intersection(time_in_trend_features):
+            try:
+                from services.regime_scores import build_regime_score_frame
+
+                def _bars_since_event(mask, cap: int = 96) -> np.ndarray:
+                    mask_arr = np.asarray(mask, dtype=bool)
+                    if mask_arr.shape[0] != n:
+                        raise RuntimeError("event mask length mismatch")
+                    event_positions = np.where(mask_arr)[0]
+                    if len(event_positions) == 0:
+                        return np.ones(n, dtype=np.float32)
+                    bar_idx = np.arange(n, dtype=np.int64)
+                    grp = np.searchsorted(event_positions, bar_idx, side="right") - 1
+                    last = np.where(
+                        grp >= 0,
+                        event_positions[np.clip(grp, 0, len(event_positions) - 1)],
+                        -cap,
+                    )
+                    return np.clip((bar_idx - last) / float(cap), 0.0, 1.0).astype(np.float32)
+
+                structure_df = compute_market_structure_scores(df)
+                if _has("bars_since_last_mss"):
+                    any_mss = (
+                        structure_df["mss_bull"].fillna(False).to_numpy(dtype=bool)
+                        | structure_df["mss_bear"].fillna(False).to_numpy(dtype=bool)
+                    )
+                    _set("bars_since_last_mss", _bars_since_event(any_mss))
+
+                if _has("bars_since_last_bos"):
+                    any_bos = (
+                        df["bos_bull"].fillna(False).to_numpy(dtype=bool)
+                        | df["bos_bear"].fillna(False).to_numpy(dtype=bool)
+                    )
+                    _set("bars_since_last_bos", _bars_since_event(any_bos))
+
+                if _has("directional_bars_20"):
+                    score_df = build_regime_score_frame(df, symbol=symbol, window=regime_n_bar)
+                    di_total = score_df["plus_di"] + score_df["minus_di"] + 1e-9
+                    di_balance = (score_df["plus_di"] - score_df["minus_di"]) / di_total
+                    signed_pressure = (
+                        0.45 * di_balance
+                        + 0.35 * structure_df["swing_sequence_score"].astype(float)
+                        + 0.20 * np.sign(score_df["ema_50_slope"].astype(float))
+                    )
+                    directional_bar = pd.Series(
+                        np.where(signed_pressure > 0.15, 1.0, np.where(signed_pressure < -0.15, -1.0, 0.0)),
+                        index=df.index,
+                    )
+                    directional_bars_20 = directional_bar.rolling(20, min_periods=1).sum() / 20.0
+                    _set("directional_bars_20", directional_bars_20.clip(-1.0, 1.0).to_numpy(dtype=np.float32))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: time-in-trend features failed: {exc}") from exc
 
         # ── MTF features ─────────────────────────────────────────────────────
         _tf_specs = {

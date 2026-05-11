@@ -1425,7 +1425,7 @@ def _precompute_ml_cache(
         fe = FeatureEngine()
 
         n = len(df)
-        SEQUENCE_LENGTH = 30
+        from models.gru_lstm_predictor import SEQUENCE_LENGTH
 
         # ── Regime inference ──────────────────────────────────────────────────────
         # Build feature matrix once per source df (serially), slice per model.
@@ -1744,6 +1744,20 @@ def _precompute_ml_cache(
                     _target_r = max(float(GRU_LABEL_TARGET_R), 1e-6)
                     expected_r_long = np.clip(all_r_long, -1.0, _target_r).astype(np.float32, copy=False)
                     expected_r_short = np.clip(all_r_short, -1.0, _target_r).astype(np.float32, copy=False)
+                    if getattr(gru_model, "_isotonic", None) is not None:
+                        all_p_bull = np.clip(gru_model._isotonic.predict(all_p_bull), 0.0, 1.0).astype(np.float32, copy=False)
+                    if getattr(gru_model, "_r_long_isotonic", None) is not None:
+                        expected_r_long = np.clip(
+                            gru_model._r_long_isotonic.predict(expected_r_long),
+                            -1.0,
+                            _target_r,
+                        ).astype(np.float32, copy=False)
+                    if getattr(gru_model, "_r_short_isotonic", None) is not None:
+                        expected_r_short = np.clip(
+                            gru_model._r_short_isotonic.predict(expected_r_short),
+                            -1.0,
+                            _target_r,
+                        ).astype(np.float32, copy=False)
                     expected_r_gru = np.where(
                         all_p_bull >= 0.5,
                         expected_r_long,

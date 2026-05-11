@@ -370,7 +370,14 @@ TRADEABILITY_STATES = frozenset({
 })
 
 
-def classify_tradeability_directional(ltf_trade_regime: str, htf_bias: str) -> str:
+def classify_tradeability_directional(
+    ltf_trade_regime: str,
+    htf_bias: str,
+    *,
+    side: str | None = None,
+    directional_confidence: float | None = None,
+    neutral_strong_confidence: float = 0.70,
+) -> str:
     """
     Map (ltf_trade_regime, htf_bias) → direction-aware tradeability state.
 
@@ -385,7 +392,7 @@ def classify_tradeability_directional(ltf_trade_regime: str, htf_bias: str) -> s
       TRADEABLE_DOWN          — HTF down + LTF tradeable/range → sell-only
       NO_TRADE_CHOP           — low-momentum choppy market
       NO_TRADE_EXTREME_VOL    — volatility too high to trade
-      NO_TRADE_UNCERTAIN      — regime unclear or neutral HTF bias
+      NO_TRADE_UNCERTAIN      — regime unclear without a strong LTF/GRU override
     """
     tr = str(ltf_trade_regime or "").upper()
     bias = str(htf_bias or "BIAS_NEUTRAL").upper()
@@ -400,8 +407,21 @@ def classify_tradeability_directional(ltf_trade_regime: str, htf_bias: str) -> s
     if tr in ("CONSOLIDATION", "UNCERTAIN", ""):
         return "NO_TRADE_UNCERTAIN"
 
-    # Neutral HTF bias → no directional conviction
+    # Neutral HTF bias should not be a hard veto. If LTF says the market is
+    # tradeable-trending and the GRU side is strong, let the execution gate
+    # validate structure/pullback instead of collapsing to NO_TRADE_UNCERTAIN.
     if bias == "BIAS_NEUTRAL":
+        if tr in ("TRADEABLE_TREND", "TRADEABLE_TREND_HIGH_VOL"):
+            side_s = str(side or "").lower()
+            try:
+                dir_conf = float(directional_confidence)
+            except (TypeError, ValueError):
+                dir_conf = 0.0
+            if dir_conf >= float(neutral_strong_confidence):
+                if side_s == "buy":
+                    return "TRADEABLE_UP"
+                if side_s == "sell":
+                    return "TRADEABLE_DOWN"
         return "NO_TRADE_UNCERTAIN"
 
     # Trending LTF + aligned HTF bias → directional trade

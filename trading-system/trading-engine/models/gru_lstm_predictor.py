@@ -23,7 +23,7 @@ from services.feature_engine import SEQUENCE_FEATURES
 
 logger = logging.getLogger(__name__)
 
-SEQUENCE_LENGTH = 30
+SEQUENCE_LENGTH = 60
 N_FEATURES = len(SEQUENCE_FEATURES)
 _MODEL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # trading-engine/
 WEIGHT_DIR  = os.path.join(_MODEL_ROOT, "weights", "gru_lstm") + os.sep
@@ -200,6 +200,8 @@ class GRULSTMPredictor(BaseModel):
         self._model = None
         self._temperature: float = 1.0
         self._isotonic = None   # IsotonicRegression calibrator — loaded from isotonic.pkl if present
+        self._r_long_isotonic = None
+        self._r_short_isotonic = None
         os.makedirs(WEIGHT_DIR, exist_ok=True)
         if self.is_trained:
             try:
@@ -252,7 +254,7 @@ class GRULSTMPredictor(BaseModel):
             import torch
             from services.feature_engine import FeatureEngine
             fe = FeatureEngine()
-            seq = fe.get_sequence(df, length=SEQUENCE_LENGTH, df_htf=df_htf, symbol=symbol)  # (30, N)
+            seq = fe.get_sequence(df, length=SEQUENCE_LENGTH, df_htf=df_htf, symbol=symbol)
             x = torch.tensor(seq[np.newaxis, ...], dtype=torch.float32).to(DEVICE)  # (1, 30, N_FEATURES)
 
             group_id = SYMBOL_GROUPS.get(symbol, N_GROUPS)
@@ -264,6 +266,10 @@ class GRULSTMPredictor(BaseModel):
                 p_bull_raw = float(torch.sigmoid(dir_logits[0] / self._temperature).item())
                 expected_r_long  = float(np.clip(r_long_pred[0].item(),  -1.0, GRU_LABEL_TARGET_R))
                 expected_r_short = float(np.clip(r_short_pred[0].item(), -1.0, GRU_LABEL_TARGET_R))
+                if self._r_long_isotonic is not None:
+                    expected_r_long = float(np.clip(self._r_long_isotonic.predict([expected_r_long])[0], -1.0, GRU_LABEL_TARGET_R))
+                if self._r_short_isotonic is not None:
+                    expected_r_short = float(np.clip(self._r_short_isotonic.predict([expected_r_short])[0], -1.0, GRU_LABEL_TARGET_R))
                 # Side-conditioned R: use the head that matches the predicted direction
                 expected_r_gru = expected_r_long if p_bull_raw >= 0.5 else expected_r_short
                 expected_move = float(np.clip(max(expected_r_gru, 0.0) / max(GRU_LABEL_TARGET_R, 1e-6), 0.0, 1.0))
@@ -444,6 +450,63 @@ class GRULSTMPredictor(BaseModel):
             logger.error("fit_temperature: isotonic calibration failed: %s", exc)
 
         return T_opt
+
+    def fit_r_isotonic(
+        self,
+        pred_long: np.ndarray,
+        true_long: np.ndarray,
+        pred_short: np.ndarray,
+        true_short: np.ndarray,
+    ) -> dict:
+        """Fit monotone calibrators from predicted side-R to realised side-R."""
+        try:
+            from sklearn.isotonic import IsotonicRegression
+            import pickle as _pkl
+        except ImportError:
+            logger.warning("fit_r_isotonic: sklearn not available — R calibration skipped")
+            return {"skipped": "sklearn unavailable"}
+
+        def _fit_one(pred: np.ndarray, true: np.ndarray, side: str):
+            p = np.asarray(pred, dtype=np.float64).ravel()
+            y = np.asarray(true, dtype=np.float64).ravel()
+            mask = np.isfinite(p) & np.isfinite(y)
+            p = np.clip(p[mask], -1.0, GRU_LABEL_TARGET_R)
+            y = np.clip(y[mask], -1.0, GRU_LABEL_TARGET_R)
+            if len(p) < 200 or len(np.unique(np.round(p, 4))) < 8:
+                logger.warning(
+                    "fit_r_isotonic: insufficient %s samples for R calibration (n=%d)",
+                    side, len(p),
+                )
+                return None, {"n": int(len(p)), "skipped": "insufficient samples"}
+            iso = IsotonicRegression(
+                y_min=-1.0,
+                y_max=float(GRU_LABEL_TARGET_R),
+                out_of_bounds="clip",
+                increasing=True,
+            )
+            iso.fit(p, y)
+            raw_mae = float(np.mean(np.abs(p - y)))
+            cal = np.clip(iso.predict(p), -1.0, GRU_LABEL_TARGET_R)
+            cal_mae = float(np.mean(np.abs(cal - y)))
+            return iso, {"n": int(len(p)), "raw_mae": raw_mae, "calibrated_mae": cal_mae}
+
+        long_iso, long_stats = _fit_one(pred_long, true_long, "long")
+        short_iso, short_stats = _fit_one(pred_short, true_short, "short")
+
+        stats = {"long": long_stats, "short": short_stats}
+        try:
+            if long_iso is not None:
+                with open(os.path.join(WEIGHT_DIR, "r_isotonic_long.pkl"), "wb") as fh:
+                    _pkl.dump(long_iso, fh, protocol=4)
+                self._r_long_isotonic = long_iso
+            if short_iso is not None:
+                with open(os.path.join(WEIGHT_DIR, "r_isotonic_short.pkl"), "wb") as fh:
+                    _pkl.dump(short_iso, fh, protocol=4)
+                self._r_short_isotonic = short_iso
+            logger.info("fit_r_isotonic: saved side-R calibrators stats=%s", stats)
+        except Exception as exc:
+            logger.error("fit_r_isotonic: failed to save R calibrators: %s", exc)
+        return stats
 
     def train(
         self,
@@ -927,7 +990,50 @@ class GRULSTMPredictor(BaseModel):
                 del X_train, Y_train, G_train, X_val, Y_val, G_val
                 _gc.collect()
 
-                # Pre-shuffle index array (re-shuffled each epoch) — no DataLoader needed
+                # Structural bar sampling weights — upweight bars where a trade is
+                # actually plausible: current/recent BOS, FVG, MSS, or sweep context.
+                # This keeps ambient bars from dominating the R-head gradient.
+                _struct_feat_names = [
+                    "bos_bull_flag", "bos_bear_flag",
+                    "fvg_bull_open", "fvg_bear_open",
+                    "mss_bull_flag", "mss_bear_flag",
+                ]
+                _struct_idxs = [
+                    SEQUENCE_FEATURES.index(f) for f in _struct_feat_names
+                    if f in SEQUENCE_FEATURES
+                ]
+                if _struct_idxs:
+                    # last bar of each sequence: shape (n_train, n_feat)
+                    _last_bar = X_train_t[:, -1, _struct_idxs].numpy()
+                    _is_struct = (_last_bar > 0.5).any(axis=1)  # (n_train,) bool
+                    # Recent event context matters too: retests and pullbacks often
+                    # occur several bars after the structural print.
+                    for _age_name in ("bos_bull_bars_ago", "bos_bear_bars_ago", "mss_bull_bars_ago", "mss_bear_bars_ago"):
+                        if _age_name in SEQUENCE_FEATURES:
+                            _age_col = X_train_t[:, -1, SEQUENCE_FEATURES.index(_age_name)].numpy()
+                            _is_struct |= _age_col <= 0.25
+                    _sweep_idx = SEQUENCE_FEATURES.index("sweep_wick_depth_atr") if "sweep_wick_depth_atr" in SEQUENCE_FEATURES else -1
+                    if _sweep_idx >= 0:
+                        _sweep_col = X_train_t[:, -1, _sweep_idx].numpy()
+                        _is_struct |= _sweep_col > 0.1
+                    _struct_weight = float(os.getenv("GRU_STRUCTURAL_SAMPLE_WEIGHT", "15.0"))
+                    _struct_weights = np.where(_is_struct, _struct_weight, 1.0).astype(np.float64)
+                    if os.getenv("GRU_STRUCTURAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                        _struct_weights = np.where(_is_struct, 1.0, 0.0).astype(np.float64)
+                        if _struct_weights.sum() <= 0:
+                            raise RuntimeError("GRU_STRUCTURAL_ONLY=1 but no structural training bars were found")
+                    _struct_weights /= _struct_weights.sum()
+                    _n_struct = int(_is_struct.sum())
+                    logger.info(
+                        "train_multi TF=%s: structural bar weighting — %d structural bars "
+                        "(%.1f%%) weight=%.1f structural_only=%s",
+                        tf, _n_struct, 100.0 * _n_struct / max(n_train, 1),
+                        _struct_weight, os.getenv("GRU_STRUCTURAL_ONLY", "0"),
+                    )
+                else:
+                    _struct_weights = None
+
+                # Index array for epoch sampling
                 train_idx = np.arange(n_train, dtype=np.int64)
                 steps_per_epoch = max(1, (n_train + batch_size - 1) // batch_size)
 
@@ -1069,8 +1175,12 @@ class GRULSTMPredictor(BaseModel):
                 for epoch in range(epochs):
                     self._model.train()
                     train_loss = 0.0
-                    # Re-shuffle index array each epoch
-                    np.random.shuffle(train_idx)
+                    # Resample with structural weighting (replace=True) so structural bars
+                    # appear proportionally to their importance, not their frequency.
+                    if _struct_weights is not None:
+                        train_idx = np.random.choice(n_train, size=n_train, replace=True, p=_struct_weights)
+                    else:
+                        np.random.shuffle(train_idx)
                     optimiser.zero_grad()
                     for step in range(steps_per_epoch):
                         b_start = step * batch_size
@@ -1168,6 +1278,35 @@ class GRULSTMPredictor(BaseModel):
                         if no_improve >= patience and (epoch + 1) >= _min_epochs_before_stop:
                             logger.info("train_multi TF=%s early stop at epoch %d", tf, epoch + 1)
                             break
+
+                # Fit monotone side-R calibrators on the validation split. This
+                # corrects non-linear R-head reliability that a scalar probability
+                # temperature cannot fix.
+                try:
+                    pred_long_parts, pred_short_parts = [], []
+                    true_long_parts, true_short_parts = [], []
+                    self._model.eval()
+                    with torch.no_grad():
+                        val_bs = batch_size * 2
+                        for v_start in range(0, n_val, val_bs):
+                            xb = X_val_gpu[v_start: v_start + val_bs]
+                            yb = Y_val_gpu[v_start: v_start + val_bs]
+                            gb = G_val_gpu[v_start: v_start + val_bs]
+                            with torch.amp.autocast("cuda", enabled=use_amp):
+                                _, rl, rs, _ = self._model(xb, gb)
+                            pred_long_parts.append(rl.float().cpu().numpy())
+                            pred_short_parts.append(rs.float().cpu().numpy())
+                            true_long_parts.append(yb[:, 1].float().cpu().numpy())
+                            true_short_parts.append(yb[:, 2].float().cpu().numpy())
+                    r_cal_stats = self.fit_r_isotonic(
+                        np.concatenate(pred_long_parts),
+                        np.concatenate(true_long_parts),
+                        np.concatenate(pred_short_parts),
+                        np.concatenate(true_short_parts),
+                    )
+                    combined_history["r_isotonic"] = r_cal_stats
+                except Exception as exc:
+                    logger.warning("train_multi TF=%s: side-R isotonic calibration failed: %s", tf, exc)
 
                 combined_history["groups_trained"] += 1
                 del X_train_t, Y_train_t, G_train_t, X_val_t, Y_val_t, G_val_t
@@ -1319,30 +1458,89 @@ class GRULSTMPredictor(BaseModel):
             long_r[unresolved & ~long_done] = terminal_long_r[unresolved & ~long_done]
             short_r[unresolved & ~short_done] = terminal_short_r[unresolved & ~short_done]
 
+            try:
+                from indicators.market_structure import (
+                    compute_market_structure_scores,
+                    detect_break_of_structure,
+                    detect_fair_value_gaps,
+                    detect_liquidity_sweeps,
+                    detect_order_blocks,
+                )
+
+                bos = detect_break_of_structure(df)
+                fvg = detect_fair_value_gaps(df)
+                sweeps = detect_liquidity_sweeps(df)
+                obs = detect_order_blocks(df)
+                structure = compute_market_structure_scores(df)
+
+                def _recent(mask: pd.Series | np.ndarray, bars: int = 8) -> np.ndarray:
+                    s = pd.Series(np.asarray(mask, dtype=bool), index=df.index)
+                    return (
+                        s.astype(float)
+                        .replace(0.0, np.nan)
+                        .ffill(limit=bars)
+                        .fillna(0.0)
+                        .to_numpy(dtype=np.float32)
+                        > 0.0
+                    )
+
+                bull_recent = (
+                    _recent(bos["bos_bull"])
+                    | _recent(fvg["fvg_bull"])
+                    | _recent(sweeps["sweep_bull"])
+                    | _recent(obs["ob_bull"])
+                    | _recent(structure["mss_bull"])
+                )
+                bear_recent = (
+                    _recent(bos["bos_bear"])
+                    | _recent(fvg["fvg_bear"])
+                    | _recent(sweeps["sweep_bear"])
+                    | _recent(obs["ob_bear"])
+                    | _recent(structure["mss_bear"])
+                )
+                swing_score = structure["swing_sequence_score"].to_numpy(dtype=np.float32)
+                internal_state = structure["internal_structure_state"].to_numpy(dtype=np.float32)
+                external_state = structure["external_trend_direction"].to_numpy(dtype=np.float32)
+                long_supported = bull_recent | (swing_score > 0.15) | ((internal_state > 0.20) & (external_state >= 0.0))
+                short_supported = bear_recent | (swing_score < -0.15) | ((internal_state < -0.20) & (external_state <= 0.0))
+                long_supported &= ~(bear_recent & ~bull_recent)
+                short_supported &= ~(bull_recent & ~bear_recent)
+            except Exception as exc:
+                logger.warning("GRU create_labels: structural side mask failed (%s); using unmasked R labels", exc)
+                long_supported = np.ones(n_rows, dtype=bool)
+                short_supported = np.ones(n_rows, dtype=bool)
+
+            long_r[valid_base & ~long_supported] = np.nan
+            short_r[valid_base & ~short_supported] = np.nan
+
             smoothing = 0.05
-            side_labelable = valid_base & np.isfinite(long_r) & np.isfinite(short_r)
+            long_labelable = valid_base & np.isfinite(long_r)
+            short_labelable = valid_base & np.isfinite(short_r)
+            both_labelable = long_labelable & short_labelable
+            side_labelable = long_labelable | short_labelable
             best_long = (
-                side_labelable
+                long_labelable
                 & ((long_r - short_r) >= min_side_edge_r)
             )
             best_short = (
-                side_labelable
+                short_labelable
                 & ((short_r - long_r) >= min_side_edge_r)
             )
             if not bool(np.any(best_long | best_short)):
-                best_long = (
-                    side_labelable
-                    & (long_r >= short_r)
-                )
-                best_short = (
-                    side_labelable
-                    & (short_r > long_r)
-                )
+                best_long = long_labelable & (~both_labelable | (long_r >= short_r))
+                best_short = short_labelable & (~both_labelable | (short_r > long_r))
+            else:
+                best_long |= long_labelable & ~short_labelable
+                best_short |= short_labelable & ~long_labelable
             direction_up = pd.Series(np.nan, index=df.index, dtype=np.float32)
             direction_up.iloc[np.where(best_long)[0]] = 1.0 - smoothing
             direction_up.iloc[np.where(best_short)[0]] = 0.0 + smoothing
 
-            best_r_arr = np.where(long_r >= short_r, long_r, short_r).astype(np.float32)
+            best_r_arr = np.where(
+                np.isfinite(long_r) & np.isfinite(short_r),
+                np.maximum(long_r, short_r),
+                np.where(np.isfinite(long_r), long_r, np.where(np.isfinite(short_r), short_r, np.nan)),
+            ).astype(np.float32)
             # move_magnitude = R for the LABELED side (not the always-positive best side).
             # This makes the regression target honest: model learns "what R do I get
             # if I enter in the direction I'm predicting", not "what is the best possible R".
@@ -1476,6 +1674,7 @@ class GRULSTMPredictor(BaseModel):
                 self._last_mtime = os.path.getmtime(WEIGHT_FILE)
                 WeightsManifest(WEIGHT_DIR).write(
                     gru_features=list(SEQUENCE_FEATURES),
+                    gru_sequence_length=SEQUENCE_LENGTH,
                     regime_4h_features=list(REGIME_4H_FEATURES),
                     regime_1h_features=list(REGIME_1H_FEATURES),
                     quality_features=list(QUALITY_FEATURES),
@@ -1495,6 +1694,7 @@ class GRULSTMPredictor(BaseModel):
             # Guard: refuse to load if feature contract changed since weights were saved
             compat = WeightsManifest(WEIGHT_DIR).check(
                 gru_features=list(SEQUENCE_FEATURES),
+                gru_sequence_length=SEQUENCE_LENGTH,
                 regime_4h_features=list(REGIME_4H_FEATURES),
                 regime_1h_features=list(REGIME_1H_FEATURES),
                 quality_features=list(QUALITY_FEATURES),
@@ -1552,6 +1752,22 @@ class GRULSTMPredictor(BaseModel):
                     self._isotonic = None
             else:
                 self._isotonic = None
+            for _side, _attr in (
+                ("long", "_r_long_isotonic"),
+                ("short", "_r_short_isotonic"),
+            ):
+                _r_iso_file = os.path.join(WEIGHT_DIR, f"r_isotonic_{_side}.pkl")
+                if os.path.exists(_r_iso_file):
+                    try:
+                        import pickle as _pkl
+                        with open(_r_iso_file, "rb") as fh:
+                            setattr(self, _attr, _pkl.load(fh))
+                        logger.info("GRULSTMPredictor: loaded %s R isotonic calibrator from %s", _side, _r_iso_file)
+                    except Exception as _rie:
+                        logger.warning("GRULSTMPredictor: could not load %s: %s", _r_iso_file, _rie)
+                        setattr(self, _attr, None)
+                else:
+                    setattr(self, _attr, None)
             logger.info("GRULSTMPredictor loaded from %s (device=%s)", WEIGHT_FILE, DEVICE)
         except Exception as exc:
             logger.error("GRULSTMPredictor.load failed: %s", exc)

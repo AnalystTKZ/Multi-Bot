@@ -400,7 +400,18 @@ class SignalPipeline:
         _htf_min_conf = float(os.getenv("HTF_MIN_REGIME_CONFIDENCE", "0.70"))
         _ltf_trade_regime = str(ml_preds.get("trade_regime") or "").upper()
 
-        _tradeability = classify_tradeability_directional(_ltf_trade_regime, _htf_bias)
+        _neutral_strong_conf = float(os.getenv("NEUTRAL_HTF_STRONG_GRU_CONFIDENCE", "0.70"))
+        _tradeability = classify_tradeability_directional(
+            _ltf_trade_regime,
+            _htf_bias,
+            side=side,
+            directional_confidence=conf,
+            neutral_strong_confidence=_neutral_strong_conf,
+        )
+        _neutral_htf_directional_override = (
+            _htf_bias.upper() == "BIAS_NEUTRAL"
+            and _tradeability in ("TRADEABLE_UP", "TRADEABLE_DOWN")
+        )
 
         if _tradeability in ("NO_TRADE_CHOP", "NO_TRADE_EXTREME_VOL", "NO_TRADE_UNCERTAIN"):
             logger.debug("Signal rejected %s — tradeability=%s", symbol, _tradeability)
@@ -413,7 +424,7 @@ class SignalPipeline:
             return None
 
         # Gate 5: HTF regime classifier confidence
-        if _htf_regime_conf < _htf_min_conf:
+        if _htf_regime_conf < _htf_min_conf and not _neutral_htf_directional_override:
             logger.debug(
                 "Signal rejected %s — htf_low_regime_confidence conf=%.3f",
                 symbol, _htf_regime_conf,
