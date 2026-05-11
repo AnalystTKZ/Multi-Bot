@@ -12,14 +12,17 @@ features fed to a GRU-LSTM model. There are no rule-based traders.
 ## What It Does
 
 - **Single unified ML signal generator** — one `ml_trader` across all 11 symbols
-- **Dual-cascade RegimeClassifier** — 4H macro bias + 1H intraday structure, both injected into every GRU timestep
-- **GRU-LSTM** — 30-bar × 74-feature sequences → direction, magnitude, uncertainty
+- **Dual-cascade RegimeClassifier** — 4H macro bias + 1H intraday behaviour used alongside GRU outputs
+- **GRU-LSTM** — 30-bar × 94-feature sequences → direction, magnitude, uncertainty
 - **QualityScorer** — EV regressor in R-multiples, runs post-signal with actual rr_ratio
 - **PPO RL agent** — selectivity tier selection (currently requires ≥200 journal trades to converge)
 - **PortfolioManager** — TP1/TP2 targets, SL→breakeven, trailing stop, correlation cap, streak scaling
 - **Tiered retraining** — Quality + RL weekly, Regime + GRU monthly
 - **Two trade journals** — clean CSV + detailed JSONL feeding the ML training pipeline
 - **Kaggle split-dataset training** on T4 × 2 GPUs
+
+See [day_trading_feature_context.md](day_trading_feature_context.md) for the
+current MACD, RSI, VWAP, pivot, volume-proxy, and day-trading feature policy.
 
 ---
 
@@ -33,9 +36,9 @@ features fed to a GRU-LSTM model. There are no rule-based traders.
 | Broker | Capital.com REST API (demo + live) |
 | Message bus | Redis pub/sub |
 | Persistence | PostgreSQL 15, Redis 7 |
-| ML — sequences | PyTorch GPU (GRU(64,2L)→LSTM(128,2L)→3 heads, 74 features, temperature scaling) |
-| ML — regime | PyTorch GPU (dual MLP cascade: HTF 4H 3-class + LTF 1H 4-class) |
-| ML — EV | PyTorch GPU (MLP 17→64→32→1, class-weighted Huber loss) |
+| ML — sequences | PyTorch GPU (GRU(64,2L)→LSTM(128,2L)→3 heads, 94 features, temperature scaling) |
+| ML — regime | PyTorch GPU (score-head RegimeClassifier: HTF 4H bias + LTF 1H behaviour) |
+| ML — EV | PyTorch GPU (MLP over 20 Quality features, class-weighted Huber loss) |
 | ML — RL | stable-baselines3 PPO (CPU) |
 | Training hardware | Kaggle T4 × 2 GPUs (DataParallel) |
 | Infrastructure | Docker Compose |
@@ -142,10 +145,10 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
         │
         ▼
   _precompute_ml_cache(symbol) — GPU-batched, once per symbol
-        ├── RegimeClassifier (4H, 34 features) → regime_4h + conf
-        ├── RegimeClassifier (1H, 18 features) → regime_1h + conf
-        ├── Build 74-feature sequence matrix (regime injected per timestep)
-        └── GRU-LSTM (30×74, batched 1024) → p_bull, p_bear, expected_variance
+        ├── RegimeClassifier (4H, 51 features) → regime_4h + conf
+        ├── RegimeClassifier (1H, 53 features) → regime_1h + conf
+        ├── Build 94-feature sequence matrix
+        └── GRU-LSTM (30×94, batched 1024) → p_bull, p_bear, expected_variance
         │
         ▼
   Bar loop (dict lookup + gate evaluation)
@@ -154,7 +157,7 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
         ├── Dead zone 12:00–13:00 UTC / cooldown / daily cap / drawdown → skip
         ├── ATR-based entry / SL / TP levels
         ├── PortfolioManager: size, TP1/TP2, correlation cap
-        ├── QualityScorer (17 features, uses actual rr_ratio) → ev
+        ├── QualityScorer (20 features, uses actual rr_ratio) → ev
         ├── ev < 0.10 → skip
         └── Simulate trade → TradeJournal
         │
@@ -188,15 +191,15 @@ processed_data/histdata/{SYMBOL}_{TF}.parquet
 
 | Model | Architecture | Features | Weights |
 |---|---|---|---|
-| RegimeClassifier (4H) | MLP 34→128→64→3 (BIAS_UP/DOWN/NEUTRAL) | `REGIME_4H_FEATURES` (34) | `weights/regime_htf.pkl` |
-| RegimeClassifier (1H) | MLP 18→128→64→4 (TRENDING/RANGING/CONSOLIDATING/VOLATILE) | `REGIME_1H_FEATURES` (18) | `weights/regime_ltf.pkl` |
-| GRU-LSTM | GRU(64,2L)→LSTM(128,2L)→3 heads + temperature.pt | `SEQUENCE_FEATURES` (74) | `weights/gru_lstm/model.pt` |
-| QualityScorer | MLP 17→64→32→1, Huber | `QUALITY_FEATURES` (17) | `weights/quality_scorer.pkl` |
+| RegimeClassifier (4H) | MLP over HTF bias features | `REGIME_4H_FEATURES` (51) | `weights/regime_htf.pkl` |
+| RegimeClassifier (1H) | MLP over LTF behaviour features | `REGIME_1H_FEATURES` (53) | `weights/regime_ltf.pkl` |
+| GRU-LSTM | GRU(64,2L)→LSTM(128,2L)→3 heads + temperature.pt | `SEQUENCE_FEATURES` (94) | `weights/gru_lstm/model.pt` |
+| QualityScorer | MLP over EV/selectivity features, Huber | `QUALITY_FEATURES` (20) | `weights/quality_scorer.pkl` |
 | SentimentModel | FinBERT + VADER fallback | news headlines | pre-trained |
 | RLAgent | PPO (SB3), CPU, 16 actions | 43-dim state | `weights/rl_ppo/model.zip` |
 
-**HTF regime classes (3):** BIAS_UP, BIAS_DOWN, BIAS_NEUTRAL
-**LTF regime classes (4):** TRENDING, RANGING, CONSOLIDATING, VOLATILE
+**HTF regime:** independent `bias_up_score` / `bias_down_score`; `BIAS_NEUTRAL` is derived when neither side clears policy.
+**LTF regime:** score outputs for trend, range, chop, volatility percentile, and consolidation.
 
 **EV label tiers (QualityScorer):**
 
@@ -223,8 +226,8 @@ ICT/SMC is encoded numerically in `SEQUENCE_FEATURES` — the GRU learns which p
 | Liquidity sweep | Wick depth / ATR, body recovery ratio |
 | EMA pullback | Band position, EMA21 slope, EMA stack |
 | Asian range | Range width / ATR, price vs high/low |
-| HTF regime (4H) | BIAS_UP/DOWN/NEUTRAL one-hot (3 dims) + conf — indices 26–29 |
-| LTF regime (1H) | TRENDING/RANGING/CONSOLIDATING/VOLATILE one-hot (4 dims) + conf — indices 30–34 |
+| Day-trading context | MACD/RSI momentum, VWAP acceptance, prior-day pivots, volume proxies |
+| HTF/LTF regime | Consumed by the decision layer alongside GRU outputs, not treated as standalone trade signals |
 
 ---
 
@@ -307,7 +310,7 @@ trading-system/
 └── trading-engine/
     ├── main.py                       ← ProductionTradingEngine (functional)
     ├── models/
-    │   ├── regime_classifier.py      ← Dual-cascade MLP (HTF 4H 3-class + LTF 1H 4-class)
+    │   ├── regime_classifier.py      ← Score-head RegimeClassifier (HTF 4H bias + LTF 1H behaviour)
     │   ├── gru_lstm_predictor.py     ← GRU(64,2L)→LSTM(128,2L)→3 heads + temperature.pt
     │   ├── quality_scorer.py         ← EV regressor, class-weighted Huber
     │   ├── sentiment_model.py        ← FinBERT + VADER
