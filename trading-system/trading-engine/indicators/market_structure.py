@@ -1175,7 +1175,7 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     """
     Master function. Computes all indicators and returns an enriched DataFrame.
 
-    Trend / momentum: ema_21/50/200, atr_14, rsi_14, adx_14, bb_*, stoch_k/d, ema_stack
+    Trend / momentum: ema_21/50/200, atr_14, rsi_14, adx_14, bb_*, stoch_k/d, ema_stack, macd_*
     SMC structure:    fvg_bull/bear, bos_bull/bear, mss_bull/bear, sweep_bull/bear, ob_bull/bear
     S/R zones:        sr_nearest_resist/support, sr_dist_*, sr_in_supply/demand_zone
     Range / pullback: range_valid/side/support/resist, pullback_valid/side/level
@@ -1183,9 +1183,8 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     Volume structure: volume_delta, volume_delta_pct, cum_delta_20, delta_*_div
     Auction result:   wick_auction_ratio, body_pct
 
-    Note: MACD (compute_macd) is available as a standalone function but is NOT
-    included in compute_all — its information is captured by the EMA-distance
-    features already present in SEQUENCE_FEATURES.
+    MACD is included as raw indicator columns. Model feature builders normalise
+    MACD by ATR before adding it to active feature contracts.
     """
     out = df.copy()
 
@@ -1195,6 +1194,10 @@ def compute_all(df: pd.DataFrame) -> pd.DataFrame:
     out["atr_14"] = compute_atr(df, 14)
     out["rsi_14"] = compute_rsi(df["close"], 14)
     out["adx_14"] = compute_adx(df, 14)
+    macd_line, macd_signal, macd_hist = compute_macd(df["close"])
+    out["macd_line"] = macd_line
+    out["macd_signal"] = macd_signal
+    out["macd_hist"] = macd_hist
 
     stoch_k, stoch_d = compute_stochastic(df)
     out["stoch_k"] = stoch_k

@@ -105,6 +105,37 @@ MACRO_FEATURES = INDEX_FEATURES + [
     "macro_yield_spread",
 ]
 
+DAY_TRADING_FEATURES = [
+    # Momentum confirmation / exhaustion. Values are ATR- or unit-normalised
+    # and are causal at bar close.
+    "rsi_14",
+    "rsi_slope_5",
+    "macd_line_atr",
+    "macd_hist_atr",
+    "macd_hist_slope_3",
+    "macd_cross_age",
+    # Intraday fair value / acceptance.
+    "vwap_dist_atr",
+    "vwap_band_position",
+    "vwap_slope_20",
+    "bars_since_vwap_cross",
+    # Normalised tick-volume / auction pressure. Raw volume is deliberately
+    # excluded because FX volume is broker/tick-volume, not centralised volume.
+    "relative_volume_20",
+    "session_relative_volume",
+    "volume_delta_pct",
+    "cum_delta_20_z",
+    "delta_divergence",
+    # Previous-day structure and floor-pivot location for day-trading context.
+    "dist_to_daily_open_atr",
+    "dist_to_prev_day_high_atr",
+    "dist_to_prev_day_low_atr",
+    "dist_to_pivot_atr",
+    "dist_to_nearest_pivot_atr",
+    "pivot_band_position",
+    "cpr_width_atr",
+]
+
 SEQUENCE_FEATURES = [
     # ── 15M execution price action ───────────────────────────────────────────
     "log_return",
@@ -112,6 +143,11 @@ SEQUENCE_FEATURES = [
     "close_vs_open",
     "atr_normalized",
     "rsi_14",
+    "rsi_slope_5",
+    "macd_line_atr",
+    "macd_hist_atr",
+    "macd_hist_slope_3",
+    "macd_cross_age",
     "ema21_dist",
     "ema50_dist",
     "bb_position",
@@ -173,7 +209,22 @@ SEQUENCE_FEATURES = [
     "vol_expansion",
     "atr_pctile",
     "vwap_dist_atr",
+    "vwap_band_position",
+    "vwap_slope_20",
+    "bars_since_vwap_cross",
     "wick_auction_ratio",
+    "relative_volume_20",
+    "session_relative_volume",
+    "volume_delta_pct",
+    "cum_delta_20_z",
+    "delta_divergence",
+    "dist_to_daily_open_atr",
+    "dist_to_prev_day_high_atr",
+    "dist_to_prev_day_low_atr",
+    "dist_to_pivot_atr",
+    "dist_to_nearest_pivot_atr",
+    "pivot_band_position",
+    "cpr_width_atr",
     # ── MSS / CHoCH (market structure shift) ─────────────────────────────────
     "mss_bull_flag",            # 1 at bar where bullish MSS/CHoCH occurred
     "mss_bear_flag",            # 1 at bar where bearish MSS/CHoCH occurred
@@ -203,15 +254,29 @@ REGIME_4H_FEATURES = [
     "mtf_1d_adx",
     "mtf_1d_ema_stack",
     "mtf_1d_atr_ratio",
+    "rsi_14",
+    "rsi_slope_5",
+    "macd_line_atr",
+    "macd_hist_atr",
+    "macd_hist_slope_3",
+    "macd_cross_age",
     "efficiency_ratio",
     "plus_di",
     "minus_di",
+    "di_spread",
+    "di_spread_slope_10",
+    "adx_slope_10",
     "ema_50_slope",
     "ema_200_slope",
     "ema_50_dist_atr",
+    "ema50_extension_z",
     "ema_200_dist_atr",
     "atr_percentile_500",
+    "rolling_vol_percentile",
+    "bb_width_percentile",
     "rolling_range_percentile",
+    "range_expansion_zscore",
+    "wick_ratio",
     "hh_hl_structure",
     "lh_ll_structure",
     "external_trend_direction",
@@ -222,6 +287,7 @@ REGIME_4H_FEATURES = [
     "bars_since_last_mss",
     "bars_since_last_bos",
     "directional_bars_20",
+    "trend_age_40",
     # Causal 4H candle/price-action context. These are deliberately simple,
     # backward-looking primitives so the classifier can distinguish a real
     # trend body from one isolated structural event.
@@ -248,6 +314,28 @@ REGIME_1H_FEATURES = [
     "mtf_4h_adx",
     "mtf_4h_ema_stack",
     "session_code",
+    "rsi_14",
+    "rsi_slope_5",
+    "macd_line_atr",
+    "macd_hist_atr",
+    "macd_hist_slope_3",
+    "macd_cross_age",
+    "vwap_dist_atr",
+    "vwap_band_position",
+    "vwap_slope_20",
+    "bars_since_vwap_cross",
+    "relative_volume_20",
+    "session_relative_volume",
+    "volume_delta_pct",
+    "cum_delta_20_z",
+    "delta_divergence",
+    "dist_to_daily_open_atr",
+    "dist_to_prev_day_high_atr",
+    "dist_to_prev_day_low_atr",
+    "dist_to_pivot_atr",
+    "dist_to_nearest_pivot_atr",
+    "pivot_band_position",
+    "cpr_width_atr",
     "efficiency_ratio",
     "plus_di",
     "minus_di",
@@ -314,6 +402,217 @@ QUALITY_FEATURES = [
 RL_STATE_DIM = 43
 
 _INSTRUMENT_IDX = {"EURUSD": 0, "GBPUSD": 1, "USDJPY": 2, "XAUUSD": 3}
+
+
+def _signed_bars_since_state_change(state: pd.Series, cap: int) -> np.ndarray:
+    """Signed, capped age of a non-zero state. Positive/negative carries direction."""
+    arr = pd.Series(state).replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(dtype=np.float64)
+    signed_state = np.where(arr > 0.0, 1, np.where(arr < 0.0, -1, 0)).astype(np.int8)
+    n = len(signed_state)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    prev = np.empty(n, dtype=np.int8)
+    prev[0] = 0
+    prev[1:] = signed_state[:-1]
+    event_mask = (signed_state != 0) & (signed_state != prev)
+    event_positions = np.where(event_mask)[0]
+    bar_idx = np.arange(n, dtype=np.int64)
+    if len(event_positions) == 0:
+        age = np.full(n, cap, dtype=np.float32)
+    else:
+        grp = np.searchsorted(event_positions, bar_idx, side="right") - 1
+        last = np.where(
+            grp >= 0,
+            event_positions[np.clip(grp, 0, len(event_positions) - 1)],
+            -cap,
+        )
+        age = np.clip((bar_idx - last) / float(max(1, cap)), 0.0, 1.0).astype(np.float32)
+    return (signed_state.astype(np.float32) * age).astype(np.float32)
+
+
+def _build_day_trading_context(
+    df: pd.DataFrame,
+    atr: Optional[pd.Series] = None,
+) -> pd.DataFrame:
+    """
+    Causal day-trading context shared by GRU sequence features and regime models.
+
+    Features are normalized to compact ranges and are known at the current bar
+    close. Previous-day pivots use only completed prior sessions.
+    """
+    from indicators.market_structure import compute_macd, compute_rsi, compute_volume_delta, compute_vwap
+
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=DAY_TRADING_FEATURES)
+    missing = {"open", "high", "low", "close"} - set(df.columns)
+    if missing:
+        raise ValueError(f"_build_day_trading_context missing OHLC columns: {sorted(missing)}")
+
+    idx = df.index
+    open_s = df["open"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+    bar_range = (high - low).abs().replace(0.0, np.nan)
+    if atr is None:
+        atr_s = compute_atr(df, 14).astype(float)
+    else:
+        atr_s = pd.Series(atr, index=idx, dtype=float)
+    atr_s = (
+        atr_s.replace([np.inf, -np.inf], np.nan)
+        .replace(0.0, np.nan)
+        .fillna(bar_range)
+        .ffill()
+        .bfill()
+        .fillna(1.0)
+    )
+    atr_safe = atr_s + 1e-9
+
+    work = df.copy(deep=False)
+    if "volume" not in work.columns:
+        work = work.copy()
+        work["volume"] = 1.0
+    volume = (
+        pd.to_numeric(work["volume"], errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .clip(lower=0.0)
+    )
+    if float(volume.sum()) <= 0.0:
+        work = work.copy()
+        work["volume"] = 1.0
+        volume = pd.Series(np.ones(len(work), dtype=np.float64), index=idx)
+
+    out = pd.DataFrame(index=idx)
+
+    rsi_raw = compute_rsi(close, 14).replace([np.inf, -np.inf], np.nan).fillna(50.0)
+    out["rsi_14"] = ((rsi_raw - 50.0) / 50.0).clip(-1.0, 1.0)
+    out["rsi_slope_5"] = ((rsi_raw - rsi_raw.shift(5)) / 50.0).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(-1.0, 1.0)
+
+    macd_line, macd_signal, macd_hist = compute_macd(close)
+    macd_line = macd_line.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    macd_signal = macd_signal.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    macd_hist = macd_hist.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    out["macd_line_atr"] = (macd_line / atr_safe).clip(-5.0, 5.0)
+    out["macd_hist_atr"] = (macd_hist / atr_safe).clip(-5.0, 5.0)
+    out["macd_hist_slope_3"] = ((macd_hist - macd_hist.shift(3)) / atr_safe).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(-3.0, 3.0)
+    out["macd_cross_age"] = _signed_bars_since_state_change(macd_line - macd_signal, cap=96)
+
+    vwap_df = compute_vwap(work)
+    vwap = vwap_df["vwap"].astype(float).replace([np.inf, -np.inf], np.nan).ffill().fillna(close)
+    vwap_std = (vwap_df["vwap_upper1"].astype(float) - vwap).abs().replace(0.0, np.nan)
+    out["vwap_dist_atr"] = ((close - vwap) / atr_safe).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(-3.0, 3.0)
+    out["vwap_band_position"] = (((close - vwap) / (vwap_std + 1e-9)).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(-3.0, 3.0) / 3.0)
+    out["vwap_slope_20"] = (((vwap - vwap.shift(20)) / atr_safe).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(-3.0, 3.0) / 3.0)
+    out["bars_since_vwap_cross"] = _signed_bars_since_state_change(close - vwap, cap=96)
+
+    vol_mean_20 = volume.shift(1).rolling(20, min_periods=5).mean()
+    vol_mean_20 = vol_mean_20.fillna(volume.expanding(min_periods=1).mean()).replace(0.0, np.nan)
+    rel_vol = (volume / (vol_mean_20 + 1e-9)).replace([np.inf, -np.inf], np.nan).fillna(1.0)
+    out["relative_volume_20"] = ((rel_vol - 1.0) / 2.0).clip(-1.0, 1.0)
+
+    if isinstance(idx, pd.DatetimeIndex):
+        minute_bucket = pd.Series(idx.hour * 60 + idx.minute, index=idx)
+        try:
+            session_ref = volume.groupby(minute_bucket).transform(
+                lambda s: s.shift(1).rolling(20, min_periods=3).mean()
+            )
+        except Exception:
+            session_ref = pd.Series(np.nan, index=idx)
+        session_ref = session_ref.fillna(vol_mean_20).replace(0.0, np.nan)
+    else:
+        session_ref = vol_mean_20
+    session_rel = (volume / (session_ref + 1e-9)).replace([np.inf, -np.inf], np.nan).fillna(1.0)
+    out["session_relative_volume"] = ((session_rel - 1.0) / 2.0).clip(-1.0, 1.0)
+
+    vol_delta = compute_volume_delta(work)
+    out["volume_delta_pct"] = vol_delta["volume_delta_pct"].astype(float).clip(-1.0, 1.0)
+    cum_delta = vol_delta["cum_delta_20"].astype(float).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    cum_mean = cum_delta.rolling(100, min_periods=20).mean()
+    cum_std = cum_delta.rolling(100, min_periods=20).std().replace(0.0, np.nan)
+    out["cum_delta_20_z"] = (((cum_delta - cum_mean) / (cum_std + 1e-9)).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(-4.0, 4.0) / 4.0)
+    out["delta_divergence"] = (
+        vol_delta["delta_bull_div"].astype(float) - vol_delta["delta_bear_div"].astype(float)
+    ).clip(-1.0, 1.0)
+
+    if isinstance(idx, pd.DatetimeIndex):
+        day_key = idx.normalize()
+        daily_src = pd.DataFrame(
+            {"open": open_s, "high": high, "low": low, "close": close},
+            index=idx,
+        )
+        daily = daily_src.groupby(day_key).agg(
+            open=("open", "first"),
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+        )
+        prev = daily.shift(1)
+        daily_open = pd.Series(daily["open"].reindex(day_key).to_numpy(dtype=np.float64), index=idx)
+        prev_high = pd.Series(prev["high"].reindex(day_key).to_numpy(dtype=np.float64), index=idx)
+        prev_low = pd.Series(prev["low"].reindex(day_key).to_numpy(dtype=np.float64), index=idx)
+        prev_close = pd.Series(prev["close"].reindex(day_key).to_numpy(dtype=np.float64), index=idx)
+    else:
+        daily_open = open_s.copy()
+        prev_high = high.shift(1)
+        prev_low = low.shift(1)
+        prev_close = close.shift(1)
+
+    daily_open = daily_open.fillna(open_s)
+    prev_high = prev_high.fillna(high)
+    prev_low = prev_low.fillna(low)
+    prev_close = prev_close.fillna(close)
+    pivot = (prev_high + prev_low + prev_close) / 3.0
+    r1 = 2.0 * pivot - prev_low
+    s1 = 2.0 * pivot - prev_high
+    r2 = pivot + (prev_high - prev_low)
+    s2 = pivot - (prev_high - prev_low)
+    bc = (prev_high + prev_low) / 2.0
+    tc = 2.0 * pivot - bc
+    pivot_width = (r1 - s1).abs().replace(0.0, np.nan)
+
+    out["dist_to_daily_open_atr"] = ((close - daily_open) / atr_safe).clip(-10.0, 10.0)
+    out["dist_to_prev_day_high_atr"] = ((close - prev_high) / atr_safe).clip(-10.0, 10.0)
+    out["dist_to_prev_day_low_atr"] = ((close - prev_low) / atr_safe).clip(-10.0, 10.0)
+    out["dist_to_pivot_atr"] = ((close - pivot) / atr_safe).clip(-10.0, 10.0)
+    level_matrix = np.column_stack([
+        daily_open.to_numpy(dtype=np.float64),
+        prev_high.to_numpy(dtype=np.float64),
+        prev_low.to_numpy(dtype=np.float64),
+        pivot.to_numpy(dtype=np.float64),
+        r1.to_numpy(dtype=np.float64),
+        s1.to_numpy(dtype=np.float64),
+        r2.to_numpy(dtype=np.float64),
+        s2.to_numpy(dtype=np.float64),
+    ])
+    nearest = np.nanmin(np.abs(level_matrix - close.to_numpy(dtype=np.float64)[:, None]), axis=1)
+    out["dist_to_nearest_pivot_atr"] = np.clip(
+        nearest / (atr_safe.to_numpy(dtype=np.float64) + 1e-9), 0.0, 10.0
+    )
+    out["pivot_band_position"] = ((close - s1) / (pivot_width + 1e-9)).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.5).clip(-1.0, 2.0)
+    out["cpr_width_atr"] = ((tc - bc).abs() / atr_safe).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0.0).clip(0.0, 5.0)
+
+    for col in DAY_TRADING_FEATURES:
+        if col not in out.columns:
+            out[col] = 0.0
+    return out[DAY_TRADING_FEATURES].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+
 
 _MACRO_CACHE: Dict[str, pd.Series] = {}
 _MACRO_MAP_CACHE: Dict[str, Any] | None = None
@@ -1090,15 +1389,12 @@ class FeatureEngine:
         ).astype(np.float32)
         extra["adx_category_normalized"] = extra["adx_cat"]
 
-        # ── VWAP / wick auction structure ─────────────────────────────────────
-        from indicators.market_structure import (
-            compute_vwap as _vwap_fn,
-            compute_wick_ratio as _wr_fn,
-        )
-        _vwap_df = _vwap_fn(out)
-        extra["vwap_dist_atr"] = np.clip(
-            _vwap_df["vwap_dist_atr"].fillna(0.0).to_numpy(dtype=np.float64), -3.0, 3.0
-        ).astype(np.float32)
+        # ── Day-trading context: MACD/RSI, VWAP, volume pressure, pivots ───────
+        from indicators.market_structure import compute_wick_ratio as _wr_fn
+
+        _day_df = _build_day_trading_context(out, atr=atr)
+        for _day_col in DAY_TRADING_FEATURES:
+            extra[_day_col] = _day_df[_day_col].to_numpy(dtype=np.float32)
 
         _wr_df = _wr_fn(out)
         extra["wick_auction_ratio"] = (

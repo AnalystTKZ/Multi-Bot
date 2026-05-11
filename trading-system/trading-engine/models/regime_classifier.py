@@ -318,12 +318,12 @@ class RegimeClassifier(BaseModel):
         ))
         thresholds = np.unique(np.concatenate([
             np.linspace(0.35, 0.85, 11),
-            np.array([0.875, 0.90, 0.925, 0.95, 0.975, 0.99, 0.995]),
+            np.array([0.875, 0.90, 0.925, 0.95, 0.975, 0.99, 0.995, 0.999]),
         ]))
         min_policy_margin = float(os.getenv("REGIME_HTF_MIN_POLICY_MARGIN", "0.10"))
         margins = np.unique(np.concatenate([
             np.linspace(0.00, 0.30, 7),
-            np.linspace(0.35, 0.65, 7),
+            np.linspace(0.35, 0.90, 12),
         ]))
         margins = margins[margins >= min_policy_margin]
         if len(margins) == 0:
@@ -987,10 +987,11 @@ class RegimeClassifier(BaseModel):
             spread = (up_exc - down_exc)
             dominance = (spread.abs() / (f_range + 1e-9)).clip(0.0, 1.0)
             dominant_exc = pd.concat([up_exc, down_exc], axis=1).max(axis=1)
-            barrier_atr = float(os.getenv("REGIME_HTF_BARRIER_ATR", "2.20"))
-            terminal_min = float(os.getenv("REGIME_HTF_TERMINAL_ATR", "0.80"))
-            adverse_ratio = float(os.getenv("REGIME_HTF_MAX_ADVERSE_RATIO", "0.78"))
-            dominance_min = float(os.getenv("REGIME_HTF_MIN_DOMINANCE", "0.22"))
+            barrier_atr = float(os.getenv("REGIME_HTF_BARRIER_ATR", "2.40"))
+            terminal_min = float(os.getenv("REGIME_HTF_TERMINAL_ATR", "1.00"))
+            adverse_ratio = float(os.getenv("REGIME_HTF_MAX_ADVERSE_RATIO", "0.65"))
+            dominance_min = float(os.getenv("REGIME_HTF_MIN_DOMINANCE", "0.30"))
+            min_excursion_ratio = float(os.getenv("REGIME_HTF_MIN_EXCURSION_RATIO", "1.20"))
             close_arr = close.to_numpy(dtype=np.float64, copy=False)
             high_arr = high.to_numpy(dtype=np.float64, copy=False)
             low_arr = low.to_numpy(dtype=np.float64, copy=False)
@@ -1115,7 +1116,7 @@ class RegimeClassifier(BaseModel):
                 & up_structure
                 & (up_path | (continuation_up & bullish_price_action))
                 & (up_exc >= max(barrier_atr * 0.70, trend_thr * 0.45))
-                & (up_exc >= down_exc * 1.08)
+                & (up_exc >= down_exc * min_excursion_ratio)
                 & (terminal > terminal_min)
             )
             down_mask = (
@@ -1123,7 +1124,7 @@ class RegimeClassifier(BaseModel):
                 & down_structure
                 & (down_path | (continuation_down & bearish_price_action))
                 & (down_exc >= max(barrier_atr * 0.70, trend_thr * 0.45))
-                & (down_exc >= up_exc * 1.08)
+                & (down_exc >= up_exc * min_excursion_ratio)
                 & (terminal < -terminal_min)
             )
             conflict = up_mask & down_mask
@@ -1660,7 +1661,13 @@ class RegimeClassifier(BaseModel):
             compute_adx, compute_atr, compute_ema_stack_score,
             compute_bollinger_bands, compute_market_structure_scores,
         )
-        from services.feature_engine import INDEX_NAMES, _vec_atr_pctile, _vec_autocorr
+        from services.feature_engine import (
+            DAY_TRADING_FEATURES,
+            INDEX_NAMES,
+            _build_day_trading_context,
+            _vec_atr_pctile,
+            _vec_autocorr,
+        )
 
         if feature_names is None:
             raise ValueError("_build_feature_matrix requires explicit feature_names")
@@ -1677,6 +1684,7 @@ class RegimeClassifier(BaseModel):
             "bars_since_last_mss",
             "bars_since_last_bos",
             "directional_bars_20",
+            "trend_age_40",
         }
         need_bos = bool({"swing_hh_hl_count", "bars_since_last_bos"} & requested_set)
         need_sweep = "liquidity_sweep_24h" in requested_set
@@ -1753,6 +1761,19 @@ class RegimeClassifier(BaseModel):
                     bb_u, bb_m, bb_l = compute_bollinger_bands(df["close"])
                     bb_width_series = ((bb_u - bb_l) / (bb_m + 1e-9)).astype(float)
             return bb_width_series
+
+        # ── Day-trading context shared with the GRU sequence model ─────────────
+        # These features are causal at bar close. HTF uses the momentum subset;
+        # LTF uses full intraday location/volume/pivot context.
+        if requested_set.intersection(DAY_TRADING_FEATURES):
+            try:
+                day_df = _build_day_trading_context(df, atr=_atr())
+                for name in sorted(requested_set.intersection(DAY_TRADING_FEATURES)):
+                    if name not in day_df.columns:
+                        raise RuntimeError(f"day-trading context helper missing {name}")
+                    _set(name, day_df[name].to_numpy(dtype=np.float32))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: day-trading context features failed: {exc}") from exc
 
         # ── Base structural features ────────────────────────────────────────
         if _has("adx_14_base"):
@@ -1854,6 +1875,35 @@ class RegimeClassifier(BaseModel):
             except Exception as exc:
                 raise RuntimeError(f"_build_feature_matrix: candle price-action features failed: {exc}") from exc
 
+        htf_dynamics_features = {
+            "di_spread",
+            "di_spread_slope_10",
+            "adx_slope_10",
+            "ema50_extension_z",
+        }
+        if requested_set.intersection(htf_dynamics_features):
+            try:
+                from services.regime_scores import build_regime_score_frame
+
+                score_df = build_regime_score_frame(df, symbol=symbol, window=regime_n_bar)
+                plus = score_df["plus_di"].astype(float)
+                minus = score_df["minus_di"].astype(float)
+                di_spread = ((plus - minus) / (plus + minus + 1e-9)).clip(-1.0, 1.0)
+                if _has("di_spread"):
+                    _set("di_spread", di_spread.fillna(0.0).to_numpy(dtype=np.float32))
+                if _has("di_spread_slope_10"):
+                    _set("di_spread_slope_10", di_spread.diff(10).clip(-1.0, 1.0).fillna(0.0).to_numpy(dtype=np.float32))
+                if _has("adx_slope_10"):
+                    _set("adx_slope_10", (_adx().diff(10) / 50.0).clip(-1.0, 1.0).fillna(0.0).to_numpy(dtype=np.float32))
+                if _has("ema50_extension_z"):
+                    ema50_dist = score_df["ema_50_dist_atr"].astype(float)
+                    ema50_mean = ema50_dist.rolling(80, min_periods=20).mean()
+                    ema50_std = ema50_dist.rolling(80, min_periods=20).std().replace(0.0, np.nan)
+                    ema50_z = ((ema50_dist - ema50_mean) / (ema50_std + 1e-9)).clip(-4.0, 4.0) / 4.0
+                    _set("ema50_extension_z", ema50_z.fillna(0.0).to_numpy(dtype=np.float32))
+            except Exception as exc:
+                raise RuntimeError(f"_build_feature_matrix: HTF dynamics features failed: {exc}") from exc
+
         structure_score_features = {
             "mss_bull_flag", "mss_bear_flag",
             "mss_bull_bars_ago", "mss_bear_bars_ago", "bars_since_mss",
@@ -1922,6 +1972,30 @@ class RegimeClassifier(BaseModel):
                     )
                     directional_bars_20 = directional_bar.rolling(20, min_periods=1).sum() / 20.0
                     _set("directional_bars_20", directional_bars_20.clip(-1.0, 1.0).to_numpy(dtype=np.float32))
+                if _has("trend_age_40"):
+                    score_df = build_regime_score_frame(df, symbol=symbol, window=regime_n_bar)
+                    di_total = score_df["plus_di"] + score_df["minus_di"] + 1e-9
+                    di_balance = ((score_df["plus_di"] - score_df["minus_di"]) / di_total).clip(-1.0, 1.0)
+                    ema50_slope_s = score_df["ema_50_slope"].astype(float)
+                    state = np.where(
+                        (di_balance > 0.15) & (ema50_slope_s > 0.0),
+                        1,
+                        np.where((di_balance < -0.15) & (ema50_slope_s < 0.0), -1, 0),
+                    ).astype(np.int8)
+                    age = np.zeros(n, dtype=np.float32)
+                    last_state = 0
+                    run_len = 0
+                    for i, state_i in enumerate(state):
+                        if state_i == 0:
+                            last_state = 0
+                            run_len = 0
+                        elif state_i == last_state:
+                            run_len += 1
+                        else:
+                            last_state = int(state_i)
+                            run_len = 1
+                        age[i] = float(state_i) * min(run_len, 40) / 40.0
+                    _set("trend_age_40", age)
             except Exception as exc:
                 raise RuntimeError(f"_build_feature_matrix: time-in-trend features failed: {exc}") from exc
 
@@ -2310,18 +2384,82 @@ class RegimeClassifier(BaseModel):
                     if sample_weight is not None and len(sample_weight) == len(y)
                     else np.ones(len(X_tr), dtype=np.float32)
                 )
+                sw_va = (
+                    np.asarray(sample_weight_val, dtype=np.float32)[val_mask]
+                    if sample_weight_val is not None and len(sample_weight_val) == len(y_val)
+                    else np.ones(len(X_va), dtype=np.float32)
+                )
             else:
                 split = int(len(X) * 0.8)
                 X_tr, X_va = X[:split], X[split:]
                 y_tr, y_va = y[:split], y[split:]
-                sw_tr = (
-                    np.asarray(sample_weight[:split], dtype=np.float32)
+                sw_all = (
+                    np.asarray(sample_weight, dtype=np.float32)
                     if sample_weight is not None and len(sample_weight) == len(X)
-                    else np.ones(len(X_tr), dtype=np.float32)
+                    else np.ones(len(X), dtype=np.float32)
                 )
+                sw_tr = sw_all[:split]
+                sw_va = sw_all[split:]
 
             if len(X_tr) < 50 or len(X_va) < 10:
                 return {"error": "Not enough HTF bias score data after split"}
+
+            min_fit_conf = float(os.getenv(
+                "REGIME_HTF_MIN_FIT_CONFIDENCE",
+                os.getenv("REGIME_MIN_LABEL_CONFIDENCE", "0.4"),
+            ))
+            if min_fit_conf > 0.0:
+                raw_train_n, raw_val_n = len(X_tr), len(X_va)
+                train_clean = np.asarray(sw_tr, dtype=np.float32) >= min_fit_conf
+                val_clean = np.asarray(sw_va, dtype=np.float32) >= min_fit_conf
+
+                def _clean_counts(targets: np.ndarray, mask: np.ndarray) -> dict[str, int]:
+                    ids = self._bias_score_targets_to_labels(targets[mask])
+                    return {
+                        HTF_CLASSES[c]: int((ids == c).sum())
+                        for c in range(len(HTF_CLASSES))
+                    }
+
+                train_counts_clean = _clean_counts(y_tr, train_clean) if train_clean.any() else {}
+                val_counts_clean = _clean_counts(y_va, val_clean) if val_clean.any() else {}
+                train_safe = (
+                    int(train_clean.sum()) >= 100
+                    and train_counts_clean.get("BIAS_UP", 0) > 0
+                    and train_counts_clean.get("BIAS_DOWN", 0) > 0
+                    and train_counts_clean.get("BIAS_NEUTRAL", 0) > 0
+                )
+                val_safe = (
+                    int(val_clean.sum()) >= 30
+                    and val_counts_clean.get("BIAS_UP", 0) > 0
+                    and val_counts_clean.get("BIAS_DOWN", 0) > 0
+                    and val_counts_clean.get("BIAS_NEUTRAL", 0) > 0
+                )
+                if train_safe and val_safe:
+                    X_tr, y_tr, sw_tr = X_tr[train_clean], y_tr[train_clean], sw_tr[train_clean]
+                    X_va, y_va, sw_va = X_va[val_clean], y_va[val_clean], sw_va[val_clean]
+                    logger.info(
+                        "RegimeClassifier[mode=%s]: HTF clean-label fit filter kept "
+                        "train=%d/%d val=%d/%d at conf>=%.2f train_counts=%s val_counts=%s",
+                        self._mode,
+                        len(X_tr),
+                        raw_train_n,
+                        len(X_va),
+                        raw_val_n,
+                        min_fit_conf,
+                        train_counts_clean,
+                        val_counts_clean,
+                    )
+                else:
+                    logger.warning(
+                        "RegimeClassifier[mode=%s]: HTF clean-label filter skipped "
+                        "at conf>=%.2f train_safe=%s val_safe=%s train_counts=%s val_counts=%s",
+                        self._mode,
+                        min_fit_conf,
+                        train_safe,
+                        val_safe,
+                        train_counts_clean,
+                        val_counts_clean,
+                    )
 
             y_tr_labels = self._bias_score_targets_to_labels(y_tr)
             y_va_labels = self._bias_score_targets_to_labels(y_va)
@@ -2385,10 +2523,9 @@ class RegimeClassifier(BaseModel):
                 logger.info("RegimeClassifier HTF score head: DataParallel across %d GPUs",
                             torch.cuda.device_count())
 
-            # Dynamic pos_weight from actual class distribution.
-            # Cap raised from 2.0 to 30.0 — 94% neutral gives ~27× imbalance and
-            # a 2.0 cap was starving the directional classes of gradient.
-            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "20.0"))
+            # Dynamic pos_weight from clean-label distribution. Cap it to avoid
+            # turning rare directional labels into a false-positive flood.
+            max_pos_weight = float(os.getenv("REGIME_HTF_BCE_POS_WEIGHT_MAX", "12.0"))
             pos_weight_np = np.clip(neg_counts / pos_counts, 1.0, max_pos_weight).astype(np.float32)
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF BCE pos_weight=%s",
@@ -2399,7 +2536,8 @@ class RegimeClassifier(BaseModel):
             batch_size = 4096
             X_tr_gpu = torch.from_numpy(X_tr).to(DEVICE)
             y_tr_gpu = torch.from_numpy(y_tr).to(DEVICE)
-            sw_tr_gpu = torch.from_numpy(np.clip(sw_tr, 0.03, 1.0)).to(DEVICE)
+            train_weight_floor = float(os.getenv("REGIME_HTF_MIN_SAMPLE_WEIGHT", "0.0"))
+            sw_tr_gpu = torch.from_numpy(np.clip(sw_tr, train_weight_floor, 1.0)).to(DEVICE)
             X_va_gpu = torch.from_numpy(X_va.astype(np.float32, copy=False)).to(DEVICE)
             y_va_gpu = torch.from_numpy(y_va.astype(np.float32, copy=False)).to(DEVICE)
             pos_weight = torch.from_numpy(pos_weight_np).to(DEVICE)
@@ -2414,14 +2552,18 @@ class RegimeClassifier(BaseModel):
             # that the head learns to flood neutral bars with directional scores.
             _is_dir = (y_tr[:, 0] > 0.5) | (y_tr[:, 1] > 0.5)  # BIAS_UP or BIAS_DOWN
             _n_dir = int(_is_dir.sum())
-            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "5.0"))
-            _htf_sample_weights = np.where(_is_dir, _dir_weight, 1.0).astype(np.float64)
+            _dir_weight = float(os.getenv("REGIME_HTF_DIR_OVERSAMPLE", "3.0"))
+            _base_sample_weights = np.clip(np.asarray(sw_tr, dtype=np.float64), 0.0, 1.0)
+            _htf_sample_weights = np.where(_is_dir, _dir_weight, 1.0).astype(np.float64) * _base_sample_weights
+            if not np.isfinite(_htf_sample_weights).all() or float(_htf_sample_weights.sum()) <= 0.0:
+                _htf_sample_weights = np.where(_is_dir, _dir_weight, 1.0).astype(np.float64)
             _htf_sample_weights /= _htf_sample_weights.sum()
+            _effective_dir_frac = float(_htf_sample_weights[_is_dir].sum()) if _n_dir > 0 else 0.0
             logger.info(
                 "RegimeClassifier[mode=%s]: HTF balanced sampler — dir=%d neutral=%d "
                 "dir_weight=%.0f => dir_frac_per_epoch≈%.1f%%",
                 self._mode, _n_dir, n_tr - _n_dir, _dir_weight,
-                100.0 * _n_dir * _dir_weight / (_n_dir * _dir_weight + (n_tr - _n_dir)),
+                100.0 * _effective_dir_frac,
             )
 
             optimiser = torch.optim.AdamW(
@@ -2472,7 +2614,7 @@ class RegimeClassifier(BaseModel):
                 focal_weight = (1.0 - pt) ** gamma
                 per_cell = focal_weight * per_cell
 
-                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "8.0"))
+                neg_penalty = float(os.getenv("REGIME_HTF_FALSE_POSITIVE_PENALTY", "12.0"))
                 if neg_penalty > 0.0:
                     neutral_target = (target_f < 0.5).float()
                     per_cell = per_cell + neg_penalty * neutral_target * torch.square(pred)
