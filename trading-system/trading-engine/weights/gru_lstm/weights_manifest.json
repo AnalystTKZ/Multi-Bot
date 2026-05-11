@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-05-11T07:59:57.779295+00:00",
+  "saved_at": "2026-05-11T10:56:47.825684+00:00",
   "gru": {
     "n_features": 74,
     "feature_hash": "94755b29698e736f",
@@ -84,8 +84,8 @@
     "sequence_length": 60
   },
   "regime_4h": {
-    "n_features": 28,
-    "feature_hash": "6659b12d3a6d5997",
+    "n_features": 36,
+    "feature_hash": "f231324f9983c13a",
     "feature_names": [
       "adx_14_base",
       "ema_stack_score",
@@ -111,6 +111,14 @@
       "bars_since_last_mss",
       "bars_since_last_bos",
       "directional_bars_20",
+      "candle_body_atr",
+      "candle_range_atr",
+      "candle_close_location",
+      "body_direction_20",
+      "wick_rejection_20",
+      "trend_body_pressure_20",
+      "range_close_position_20",
+      "breakout_close_strength",
       "mss_bull_bars_ago",
       "mss_bear_bars_ago",
       "symbol_group_code",

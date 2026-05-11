@@ -19957,5 +19957,3169 @@
         }
       }
     }
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T08:06:33.985578+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "826f2493f239be6cc6c1c419929b20bcee3f454dfa4dddd1d3679a0f6f4ec9f2",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "1893d5bd399524f6ef5abf9b7f00b567262dd55fea784d0a5a9d4fcc5829f8f6",
+      "gru_lstm/weights_manifest.json": "0a3883477a5b88570e10ab908d93a8fe0c33ec02f8ab4dab316c7501ee58db7c"
+    },
+    "code_commit": "255049c71fa88c56fd7913e269be6036e4da4a92",
+    "status": "complete",
+    "mode": "multi_symbol",
+    "segments": 6,
+    "samples": 971854,
+    "groups_trained": 1,
+    "val_loss_points": 99,
+    "best_val_direction_accuracy": 0.7292473271054595,
+    "best_val_r_mae": 0.7802127465638136,
+    "best_val_positive_r_accuracy": 0.6836578375172959,
+    "symbol_r_thresholds": {
+      "XAUUSD": {
+        "buy": {
+          "q25": 0.5352,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.1997,
+          "pos_rate": 0.4603,
+          "n": 119259,
+          "n_pos": 54899
+        },
+        "sell": {
+          "q25": 0.5282,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.222,
+          "pos_rate": 0.455,
+          "n": 118087,
+          "n_pos": 53734
+        }
+      },
+      "EURUSD": {
+        "buy": {
+          "q25": 0.5414,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2264,
+          "pos_rate": 0.4564,
+          "n": 118751,
+          "n_pos": 54196
+        },
+        "sell": {
+          "q25": 0.5449,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2189,
+          "pos_rate": 0.4565,
+          "n": 117679,
+          "n_pos": 53721
+        }
+      },
+      "USDJPY": {
+        "buy": {
+          "q25": 0.551,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2085,
+          "pos_rate": 0.4623,
+          "n": 118691,
+          "n_pos": 54870
+        },
+        "sell": {
+          "q25": 0.5419,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2675,
+          "pos_rate": 0.4464,
+          "n": 116030,
+          "n_pos": 51793
+        }
+      },
+      "EURJPY": {
+        "buy": {
+          "q25": 0.5301,
+          "q50": 1.4165,
+          "q25_all": -1.0,
+          "q50_all": -0.2074,
+          "pos_rate": 0.4606,
+          "n": 118651,
+          "n_pos": 54654
+        },
+        "sell": {
+          "q25": 0.5246,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.264,
+          "pos_rate": 0.4466,
+          "n": 117320,
+          "n_pos": 52399
+        }
+      },
+      "GBPJPY": {
+        "buy": {
+          "q25": 0.5172,
+          "q50": 1.443,
+          "q25_all": -1.0,
+          "q50_all": -0.2142,
+          "pos_rate": 0.4589,
+          "n": 118277,
+          "n_pos": 54278
+        },
+        "sell": {
+          "q25": 0.5214,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2259,
+          "pos_rate": 0.4532,
+          "n": 116299,
+          "n_pos": 52702
+        }
+      },
+      "GBPUSD": {
+        "buy": {
+          "q25": 0.5239,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2123,
+          "pos_rate": 0.4576,
+          "n": 117764,
+          "n_pos": 53894
+        },
+        "sell": {
+          "q25": 0.5331,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2048,
+          "pos_rate": 0.4581,
+          "n": 117404,
+          "n_pos": 53785
+        }
+      }
+    }
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T08:06:33.994068+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "826f2493f239be6cc6c1c419929b20bcee3f454dfa4dddd1d3679a0f6f4ec9f2",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "1893d5bd399524f6ef5abf9b7f00b567262dd55fea784d0a5a9d4fcc5829f8f6",
+      "gru_lstm/weights_manifest.json": "0a3883477a5b88570e10ab908d93a8fe0c33ec02f8ab4dab316c7501ee58db7c"
+    },
+    "code_commit": "255049c71fa88c56fd7913e269be6036e4da4a92",
+    "trained": true,
+    "segments": 6,
+    "samples": 971854
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T08:07:17.771966+00:00",
+    "model": "regime_classifier_htf",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "826f2493f239be6cc6c1c419929b20bcee3f454dfa4dddd1d3679a0f6f4ec9f2",
+    "artifact_hashes": {},
+    "code_commit": "255049c71fa88c56fd7913e269be6036e4da4a92",
+    "accuracy": 0.8825,
+    "balanced_accuracy": 0.8357,
+    "n_train": 68826,
+    "n_val": 8737,
+    "val_loss": 0.664416,
+    "per_class_accuracy": {
+      "BIAS_UP": 0.83,
+      "BIAS_DOWN": 0.792,
+      "BIAS_NEUTRAL": 0.885
+    },
+    "per_class_precision": {
+      "BIAS_UP": 0.278,
+      "BIAS_DOWN": 0.181,
+      "BIAS_NEUTRAL": 0.991
+    },
+    "per_class_f1": {
+      "BIAS_UP": 0.416,
+      "BIAS_DOWN": 0.294,
+      "BIAS_NEUTRAL": 0.935
+    },
+    "confusion_matrix": [
+      [
+        229,
+        0,
+        47
+      ],
+      [
+        0,
+        80,
+        21
+      ],
+      [
+        596,
+        363,
+        7401
+      ]
+    ],
+    "score_mae": {
+      "bias_up_score": 0.1771,
+      "bias_down_score": 0.1122
+    },
+    "score_outputs": [
+      "bias_up_score",
+      "bias_down_score"
+    ],
+    "decision_threshold": 0.99,
+    "decision_margin": 0.1,
+    "htf_precision_floor_passed": false,
+    "timeframe": "4H",
+    "warnings": [
+      "Regime HTF directional score validation below acceptance floor: precision={'BIAS_UP': 0.278, 'BIAS_DOWN': 0.181, 'BIAS_NEUTRAL': 0.991} min_precision=0.500 recall={'BIAS_UP': 0.83, 'BIAS_DOWN': 0.792, 'BIAS_NEUTRAL': 0.885} min_recall=0.100 f1={'BIAS_UP': 0.416, 'BIAS_DOWN': 0.294, 'BIAS_NEUTRAL': 0.935} min_f1=0.150 min_neutral_recall=0.500 weak_precision=['BIAS_UP', 'BIAS_DOWN'] weak_recall=[] weak_f1=[] weak_neutral=False."
+    ],
+    "status": "complete_with_warnings",
+    "fold_id": "train_all"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T08:07:52.543781+00:00",
+    "model": "regime_classifier_ltf",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "826f2493f239be6cc6c1c419929b20bcee3f454dfa4dddd1d3679a0f6f4ec9f2",
+    "artifact_hashes": {},
+    "code_commit": "255049c71fa88c56fd7913e269be6036e4da4a92",
+    "accuracy": 0.9771,
+    "n_train": 262644,
+    "n_val": 30352,
+    "val_loss": 0.000989,
+    "score_mae": {
+      "trend_score": 0.0206,
+      "range_score": 0.0343,
+      "chop_score": 0.0225,
+      "volatility_percentile": 0.0156,
+      "consolidation_score": 0.0213
+    },
+    "score_mse": {
+      "trend_score": 0.00072,
+      "range_score": 0.00195,
+      "chop_score": 0.00082,
+      "volatility_percentile": 0.00043,
+      "consolidation_score": 0.00102
+    },
+    "score_corr": {
+      "trend_score": 0.9927,
+      "range_score": 0.9514,
+      "chop_score": 0.9891,
+      "volatility_percentile": 0.9955,
+      "consolidation_score": 0.9892
+    },
+    "group_diagnostics": {
+      "train": {
+        "dollar": {
+          "n": 16632,
+          "score_mae": {
+            "trend_score": 0.0198,
+            "range_score": 0.0342,
+            "chop_score": 0.0225,
+            "volatility_percentile": 0.0151,
+            "consolidation_score": 0.0218
+          },
+          "target_score_mean": {
+            "trend_score": 0.491,
+            "range_score": 0.2347,
+            "chop_score": 0.4613,
+            "volatility_percentile": 0.3824,
+            "consolidation_score": 0.186
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4924,
+            "range_score": 0.2354,
+            "chop_score": 0.4593,
+            "volatility_percentile": 0.3808,
+            "consolidation_score": 0.1854
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              3567,
+              65,
+              0,
+              4,
+              0,
+              0,
+              143
+            ],
+            [
+              6,
+              99,
+              0,
+              0,
+              0,
+              0,
+              5
+            ],
+            [
+              0,
+              0,
+              222,
+              10,
+              46,
+              0,
+              182
+            ],
+            [
+              2,
+              0,
+              7,
+              544,
+              36,
+              0,
+              100
+            ],
+            [
+              0,
+              0,
+              56,
+              26,
+              3011,
+              0,
+              223
+            ],
+            [
+              0,
+              24,
+              0,
+              0,
+              7,
+              37,
+              60
+            ],
+            [
+              185,
+              14,
+              134,
+              52,
+              71,
+              0,
+              7694
+            ]
+          ]
+        },
+        "gold": {
+          "n": 8420,
+          "score_mae": {
+            "trend_score": 0.0196,
+            "range_score": 0.0347,
+            "chop_score": 0.0228,
+            "volatility_percentile": 0.0159,
+            "consolidation_score": 0.0221
+          },
+          "target_score_mean": {
+            "trend_score": 0.4883,
+            "range_score": 0.2355,
+            "chop_score": 0.4652,
+            "volatility_percentile": 0.3772,
+            "consolidation_score": 0.1919
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4905,
+            "range_score": 0.2357,
+            "chop_score": 0.4626,
+            "volatility_percentile": 0.3752,
+            "consolidation_score": 0.1906
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              1789,
+              39,
+              0,
+              0,
+              0,
+              0,
+              57
+            ],
+            [
+              3,
+              50,
+              0,
+              0,
+              0,
+              0,
+              3
+            ],
+            [
+              0,
+              0,
+              112,
+              8,
+              24,
+              0,
+              100
+            ],
+            [
+              1,
+              0,
+              4,
+              333,
+              22,
+              0,
+              56
+            ],
+            [
+              0,
+              0,
+              26,
+              26,
+              1527,
+              0,
+              125
+            ],
+            [
+              0,
+              15,
+              0,
+              0,
+              8,
+              30,
+              28
+            ],
+            [
+              83,
+              6,
+              77,
+              24,
+              51,
+              0,
+              3793
+            ]
+          ]
+        },
+        "jpy": {
+          "n": 24948,
+          "score_mae": {
+            "trend_score": 0.0199,
+            "range_score": 0.0342,
+            "chop_score": 0.0224,
+            "volatility_percentile": 0.0158,
+            "consolidation_score": 0.0216
+          },
+          "target_score_mean": {
+            "trend_score": 0.4904,
+            "range_score": 0.2338,
+            "chop_score": 0.4653,
+            "volatility_percentile": 0.3826,
+            "consolidation_score": 0.1905
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4915,
+            "range_score": 0.2344,
+            "chop_score": 0.4626,
+            "volatility_percentile": 0.3808,
+            "consolidation_score": 0.189
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              5301,
+              128,
+              0,
+              3,
+              0,
+              0,
+              214
+            ],
+            [
+              11,
+              166,
+              0,
+              0,
+              0,
+              0,
+              10
+            ],
+            [
+              0,
+              0,
+              283,
+              19,
+              77,
+              0,
+              268
+            ],
+            [
+              3,
+              0,
+              5,
+              1058,
+              76,
+              0,
+              172
+            ],
+            [
+              0,
+              0,
+              71,
+              68,
+              4582,
+              0,
+              394
+            ],
+            [
+              0,
+              44,
+              0,
+              0,
+              18,
+              56,
+              105
+            ],
+            [
+              260,
+              19,
+              207,
+              100,
+              144,
+              0,
+              11086
+            ]
+          ]
+        }
+      },
+      "validation": {
+        "dollar": {
+          "n": 10093,
+          "score_mae": {
+            "trend_score": 0.0208,
+            "range_score": 0.0354,
+            "chop_score": 0.0226,
+            "volatility_percentile": 0.0152,
+            "consolidation_score": 0.0209
+          },
+          "target_score_mean": {
+            "trend_score": 0.4863,
+            "range_score": 0.2392,
+            "chop_score": 0.4622,
+            "volatility_percentile": 0.3804,
+            "consolidation_score": 0.1814
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4879,
+            "range_score": 0.2382,
+            "chop_score": 0.4609,
+            "volatility_percentile": 0.3787,
+            "consolidation_score": 0.1817
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              2287,
+              22,
+              0,
+              3,
+              0,
+              0,
+              100
+            ],
+            [
+              4,
+              48,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            [
+              0,
+              0,
+              143,
+              7,
+              44,
+              0,
+              122
+            ],
+            [
+              1,
+              0,
+              3,
+              336,
+              27,
+              0,
+              56
+            ],
+            [
+              0,
+              0,
+              36,
+              30,
+              1872,
+              0,
+              112
+            ],
+            [
+              0,
+              17,
+              0,
+              0,
+              4,
+              21,
+              35
+            ],
+            [
+              91,
+              6,
+              94,
+              50,
+              48,
+              0,
+              4473
+            ]
+          ]
+        },
+        "gold": {
+          "n": 5117,
+          "score_mae": {
+            "trend_score": 0.0196,
+            "range_score": 0.0333,
+            "chop_score": 0.0224,
+            "volatility_percentile": 0.0157,
+            "consolidation_score": 0.0219
+          },
+          "target_score_mean": {
+            "trend_score": 0.4973,
+            "range_score": 0.2307,
+            "chop_score": 0.4563,
+            "volatility_percentile": 0.3818,
+            "consolidation_score": 0.1828
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4978,
+            "range_score": 0.2338,
+            "chop_score": 0.4556,
+            "volatility_percentile": 0.3797,
+            "consolidation_score": 0.1821
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              1102,
+              15,
+              0,
+              0,
+              0,
+              0,
+              50
+            ],
+            [
+              3,
+              30,
+              0,
+              0,
+              0,
+              0,
+              2
+            ],
+            [
+              0,
+              0,
+              89,
+              2,
+              12,
+              0,
+              68
+            ],
+            [
+              0,
+              0,
+              4,
+              218,
+              10,
+              0,
+              23
+            ],
+            [
+              0,
+              0,
+              17,
+              13,
+              783,
+              0,
+              74
+            ],
+            [
+              0,
+              7,
+              0,
+              0,
+              4,
+              14,
+              25
+            ],
+            [
+              57,
+              3,
+              60,
+              33,
+              28,
+              0,
+              2371
+            ]
+          ]
+        },
+        "jpy": {
+          "n": 15142,
+          "score_mae": {
+            "trend_score": 0.0208,
+            "range_score": 0.034,
+            "chop_score": 0.0225,
+            "volatility_percentile": 0.0158,
+            "consolidation_score": 0.0214
+          },
+          "target_score_mean": {
+            "trend_score": 0.495,
+            "range_score": 0.2297,
+            "chop_score": 0.4582,
+            "volatility_percentile": 0.3808,
+            "consolidation_score": 0.1868
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4952,
+            "range_score": 0.2301,
+            "chop_score": 0.457,
+            "volatility_percentile": 0.3791,
+            "consolidation_score": 0.1857
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              3310,
+              70,
+              0,
+              1,
+              0,
+              0,
+              137
+            ],
+            [
+              9,
+              100,
+              0,
+              0,
+              0,
+              0,
+              6
+            ],
+            [
+              0,
+              0,
+              172,
+              12,
+              53,
+              0,
+              147
+            ],
+            [
+              4,
+              0,
+              12,
+              668,
+              38,
+              0,
+              105
+            ],
+            [
+              0,
+              0,
+              46,
+              35,
+              2506,
+              0,
+              230
+            ],
+            [
+              0,
+              23,
+              0,
+              0,
+              11,
+              32,
+              56
+            ],
+            [
+              139,
+              14,
+              128,
+              53,
+              90,
+              0,
+              6935
+            ]
+          ]
+        }
+      }
+    },
+    "score_outputs": [
+      "trend_score",
+      "range_score",
+      "chop_score",
+      "volatility_percentile",
+      "consolidation_score"
+    ],
+    "timeframe": "1H",
+    "warnings": [],
+    "status": "complete",
+    "fold_id": "train_all"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T08:07:52.547706+00:00",
+    "model": "regime_classifier",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "826f2493f239be6cc6c1c419929b20bcee3f454dfa4dddd1d3679a0f6f4ec9f2",
+    "artifact_hashes": {
+      "regime_htf.pkl": "7820e7b8962b0f9af248f3fe5c339394c4e69f762dd7efe98795a531296d8b77",
+      "regime_ltf.pkl": "eee8af7bb8cf1d9c1d28b38cf5207df9f26af9ecdde9b20d1aba07d234f9def7"
+    },
+    "code_commit": "255049c71fa88c56fd7913e269be6036e4da4a92",
+    "trained": true,
+    "samples": 370559,
+    "folds": [
+      null
+    ],
+    "results": {
+      "train_all": {
+        "HTF": {
+          "accuracy": 0.8825,
+          "balanced_accuracy": 0.8357,
+          "n_train": 68826,
+          "n_val": 8737,
+          "val_loss": 0.664416,
+          "per_class_accuracy": {
+            "BIAS_UP": 0.83,
+            "BIAS_DOWN": 0.792,
+            "BIAS_NEUTRAL": 0.885
+          },
+          "per_class_precision": {
+            "BIAS_UP": 0.278,
+            "BIAS_DOWN": 0.181,
+            "BIAS_NEUTRAL": 0.991
+          },
+          "per_class_f1": {
+            "BIAS_UP": 0.416,
+            "BIAS_DOWN": 0.294,
+            "BIAS_NEUTRAL": 0.935
+          },
+          "confusion_matrix": [
+            [
+              229,
+              0,
+              47
+            ],
+            [
+              0,
+              80,
+              21
+            ],
+            [
+              596,
+              363,
+              7401
+            ]
+          ],
+          "score_mae": {
+            "bias_up_score": 0.1771,
+            "bias_down_score": 0.1122
+          },
+          "score_outputs": [
+            "bias_up_score",
+            "bias_down_score"
+          ],
+          "decision_threshold": 0.99,
+          "decision_margin": 0.1,
+          "htf_precision_floor_passed": false,
+          "timeframe": "4H",
+          "warnings": [
+            "Regime HTF directional score validation below acceptance floor: precision={'BIAS_UP': 0.278, 'BIAS_DOWN': 0.181, 'BIAS_NEUTRAL': 0.991} min_precision=0.500 recall={'BIAS_UP': 0.83, 'BIAS_DOWN': 0.792, 'BIAS_NEUTRAL': 0.885} min_recall=0.100 f1={'BIAS_UP': 0.416, 'BIAS_DOWN': 0.294, 'BIAS_NEUTRAL': 0.935} min_f1=0.150 min_neutral_recall=0.500 weak_precision=['BIAS_UP', 'BIAS_DOWN'] weak_recall=[] weak_f1=[] weak_neutral=False."
+          ],
+          "status": "complete_with_warnings"
+        },
+        "LTF": {
+          "accuracy": 0.9771,
+          "n_train": 262644,
+          "n_val": 30352,
+          "val_loss": 0.000989,
+          "score_mae": {
+            "trend_score": 0.0206,
+            "range_score": 0.0343,
+            "chop_score": 0.0225,
+            "volatility_percentile": 0.0156,
+            "consolidation_score": 0.0213
+          },
+          "score_mse": {
+            "trend_score": 0.00072,
+            "range_score": 0.00195,
+            "chop_score": 0.00082,
+            "volatility_percentile": 0.00043,
+            "consolidation_score": 0.00102
+          },
+          "score_corr": {
+            "trend_score": 0.9927,
+            "range_score": 0.9514,
+            "chop_score": 0.9891,
+            "volatility_percentile": 0.9955,
+            "consolidation_score": 0.9892
+          },
+          "group_diagnostics": {
+            "train": {
+              "dollar": {
+                "n": 16632,
+                "score_mae": {
+                  "trend_score": 0.0198,
+                  "range_score": 0.0342,
+                  "chop_score": 0.0225,
+                  "volatility_percentile": 0.0151,
+                  "consolidation_score": 0.0218
+                },
+                "target_score_mean": {
+                  "trend_score": 0.491,
+                  "range_score": 0.2347,
+                  "chop_score": 0.4613,
+                  "volatility_percentile": 0.3824,
+                  "consolidation_score": 0.186
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4924,
+                  "range_score": 0.2354,
+                  "chop_score": 0.4593,
+                  "volatility_percentile": 0.3808,
+                  "consolidation_score": 0.1854
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    3567,
+                    65,
+                    0,
+                    4,
+                    0,
+                    0,
+                    143
+                  ],
+                  [
+                    6,
+                    99,
+                    0,
+                    0,
+                    0,
+                    0,
+                    5
+                  ],
+                  [
+                    0,
+                    0,
+                    222,
+                    10,
+                    46,
+                    0,
+                    182
+                  ],
+                  [
+                    2,
+                    0,
+                    7,
+                    544,
+                    36,
+                    0,
+                    100
+                  ],
+                  [
+                    0,
+                    0,
+                    56,
+                    26,
+                    3011,
+                    0,
+                    223
+                  ],
+                  [
+                    0,
+                    24,
+                    0,
+                    0,
+                    7,
+                    37,
+                    60
+                  ],
+                  [
+                    185,
+                    14,
+                    134,
+                    52,
+                    71,
+                    0,
+                    7694
+                  ]
+                ]
+              },
+              "gold": {
+                "n": 8420,
+                "score_mae": {
+                  "trend_score": 0.0196,
+                  "range_score": 0.0347,
+                  "chop_score": 0.0228,
+                  "volatility_percentile": 0.0159,
+                  "consolidation_score": 0.0221
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4883,
+                  "range_score": 0.2355,
+                  "chop_score": 0.4652,
+                  "volatility_percentile": 0.3772,
+                  "consolidation_score": 0.1919
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4905,
+                  "range_score": 0.2357,
+                  "chop_score": 0.4626,
+                  "volatility_percentile": 0.3752,
+                  "consolidation_score": 0.1906
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    1789,
+                    39,
+                    0,
+                    0,
+                    0,
+                    0,
+                    57
+                  ],
+                  [
+                    3,
+                    50,
+                    0,
+                    0,
+                    0,
+                    0,
+                    3
+                  ],
+                  [
+                    0,
+                    0,
+                    112,
+                    8,
+                    24,
+                    0,
+                    100
+                  ],
+                  [
+                    1,
+                    0,
+                    4,
+                    333,
+                    22,
+                    0,
+                    56
+                  ],
+                  [
+                    0,
+                    0,
+                    26,
+                    26,
+                    1527,
+                    0,
+                    125
+                  ],
+                  [
+                    0,
+                    15,
+                    0,
+                    0,
+                    8,
+                    30,
+                    28
+                  ],
+                  [
+                    83,
+                    6,
+                    77,
+                    24,
+                    51,
+                    0,
+                    3793
+                  ]
+                ]
+              },
+              "jpy": {
+                "n": 24948,
+                "score_mae": {
+                  "trend_score": 0.0199,
+                  "range_score": 0.0342,
+                  "chop_score": 0.0224,
+                  "volatility_percentile": 0.0158,
+                  "consolidation_score": 0.0216
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4904,
+                  "range_score": 0.2338,
+                  "chop_score": 0.4653,
+                  "volatility_percentile": 0.3826,
+                  "consolidation_score": 0.1905
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4915,
+                  "range_score": 0.2344,
+                  "chop_score": 0.4626,
+                  "volatility_percentile": 0.3808,
+                  "consolidation_score": 0.189
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    5301,
+                    128,
+                    0,
+                    3,
+                    0,
+                    0,
+                    214
+                  ],
+                  [
+                    11,
+                    166,
+                    0,
+                    0,
+                    0,
+                    0,
+                    10
+                  ],
+                  [
+                    0,
+                    0,
+                    283,
+                    19,
+                    77,
+                    0,
+                    268
+                  ],
+                  [
+                    3,
+                    0,
+                    5,
+                    1058,
+                    76,
+                    0,
+                    172
+                  ],
+                  [
+                    0,
+                    0,
+                    71,
+                    68,
+                    4582,
+                    0,
+                    394
+                  ],
+                  [
+                    0,
+                    44,
+                    0,
+                    0,
+                    18,
+                    56,
+                    105
+                  ],
+                  [
+                    260,
+                    19,
+                    207,
+                    100,
+                    144,
+                    0,
+                    11086
+                  ]
+                ]
+              }
+            },
+            "validation": {
+              "dollar": {
+                "n": 10093,
+                "score_mae": {
+                  "trend_score": 0.0208,
+                  "range_score": 0.0354,
+                  "chop_score": 0.0226,
+                  "volatility_percentile": 0.0152,
+                  "consolidation_score": 0.0209
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4863,
+                  "range_score": 0.2392,
+                  "chop_score": 0.4622,
+                  "volatility_percentile": 0.3804,
+                  "consolidation_score": 0.1814
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4879,
+                  "range_score": 0.2382,
+                  "chop_score": 0.4609,
+                  "volatility_percentile": 0.3787,
+                  "consolidation_score": 0.1817
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    2287,
+                    22,
+                    0,
+                    3,
+                    0,
+                    0,
+                    100
+                  ],
+                  [
+                    4,
+                    48,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1
+                  ],
+                  [
+                    0,
+                    0,
+                    143,
+                    7,
+                    44,
+                    0,
+                    122
+                  ],
+                  [
+                    1,
+                    0,
+                    3,
+                    336,
+                    27,
+                    0,
+                    56
+                  ],
+                  [
+                    0,
+                    0,
+                    36,
+                    30,
+                    1872,
+                    0,
+                    112
+                  ],
+                  [
+                    0,
+                    17,
+                    0,
+                    0,
+                    4,
+                    21,
+                    35
+                  ],
+                  [
+                    91,
+                    6,
+                    94,
+                    50,
+                    48,
+                    0,
+                    4473
+                  ]
+                ]
+              },
+              "gold": {
+                "n": 5117,
+                "score_mae": {
+                  "trend_score": 0.0196,
+                  "range_score": 0.0333,
+                  "chop_score": 0.0224,
+                  "volatility_percentile": 0.0157,
+                  "consolidation_score": 0.0219
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4973,
+                  "range_score": 0.2307,
+                  "chop_score": 0.4563,
+                  "volatility_percentile": 0.3818,
+                  "consolidation_score": 0.1828
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4978,
+                  "range_score": 0.2338,
+                  "chop_score": 0.4556,
+                  "volatility_percentile": 0.3797,
+                  "consolidation_score": 0.1821
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    1102,
+                    15,
+                    0,
+                    0,
+                    0,
+                    0,
+                    50
+                  ],
+                  [
+                    3,
+                    30,
+                    0,
+                    0,
+                    0,
+                    0,
+                    2
+                  ],
+                  [
+                    0,
+                    0,
+                    89,
+                    2,
+                    12,
+                    0,
+                    68
+                  ],
+                  [
+                    0,
+                    0,
+                    4,
+                    218,
+                    10,
+                    0,
+                    23
+                  ],
+                  [
+                    0,
+                    0,
+                    17,
+                    13,
+                    783,
+                    0,
+                    74
+                  ],
+                  [
+                    0,
+                    7,
+                    0,
+                    0,
+                    4,
+                    14,
+                    25
+                  ],
+                  [
+                    57,
+                    3,
+                    60,
+                    33,
+                    28,
+                    0,
+                    2371
+                  ]
+                ]
+              },
+              "jpy": {
+                "n": 15142,
+                "score_mae": {
+                  "trend_score": 0.0208,
+                  "range_score": 0.034,
+                  "chop_score": 0.0225,
+                  "volatility_percentile": 0.0158,
+                  "consolidation_score": 0.0214
+                },
+                "target_score_mean": {
+                  "trend_score": 0.495,
+                  "range_score": 0.2297,
+                  "chop_score": 0.4582,
+                  "volatility_percentile": 0.3808,
+                  "consolidation_score": 0.1868
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4952,
+                  "range_score": 0.2301,
+                  "chop_score": 0.457,
+                  "volatility_percentile": 0.3791,
+                  "consolidation_score": 0.1857
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    3310,
+                    70,
+                    0,
+                    1,
+                    0,
+                    0,
+                    137
+                  ],
+                  [
+                    9,
+                    100,
+                    0,
+                    0,
+                    0,
+                    0,
+                    6
+                  ],
+                  [
+                    0,
+                    0,
+                    172,
+                    12,
+                    53,
+                    0,
+                    147
+                  ],
+                  [
+                    4,
+                    0,
+                    12,
+                    668,
+                    38,
+                    0,
+                    105
+                  ],
+                  [
+                    0,
+                    0,
+                    46,
+                    35,
+                    2506,
+                    0,
+                    230
+                  ],
+                  [
+                    0,
+                    23,
+                    0,
+                    0,
+                    11,
+                    32,
+                    56
+                  ],
+                  [
+                    139,
+                    14,
+                    128,
+                    53,
+                    90,
+                    0,
+                    6935
+                  ]
+                ]
+              }
+            }
+          },
+          "score_outputs": [
+            "trend_score",
+            "range_score",
+            "chop_score",
+            "volatility_percentile",
+            "consolidation_score"
+          ],
+          "timeframe": "1H",
+          "warnings": [],
+          "status": "complete"
+        }
+      }
+    }
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T09:47:03.051752+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "37913c13ab29e9150a042538aae9e16dcc437282aa7cd1840ec609643aae1e16",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "a11731185350fb49b409cfba79f73c917528c4d66d43db4846193cecc9131480",
+      "gru_lstm/weights_manifest.json": "6ff09418eda45db1af3380abc571540ab690dcb328625d33dfe2cd38e9436db2"
+    },
+    "code_commit": "4ab34740a04eb28246289df3cf4939f21f3756c8",
+    "status": "complete",
+    "mode": "multi_symbol",
+    "segments": 6,
+    "samples": 971854,
+    "groups_trained": 1,
+    "val_loss_points": 100,
+    "best_val_direction_accuracy": 0.7103328242105637,
+    "best_val_r_mae": 0.7768902847431799,
+    "best_val_positive_r_accuracy": 0.6800936449891283,
+    "symbol_r_thresholds": {
+      "XAUUSD": {
+        "buy": {
+          "q25": 0.5352,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.1997,
+          "pos_rate": 0.4603,
+          "n": 119259,
+          "n_pos": 54899
+        },
+        "sell": {
+          "q25": 0.5282,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.222,
+          "pos_rate": 0.455,
+          "n": 118087,
+          "n_pos": 53734
+        }
+      },
+      "EURUSD": {
+        "buy": {
+          "q25": 0.5414,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2264,
+          "pos_rate": 0.4564,
+          "n": 118751,
+          "n_pos": 54196
+        },
+        "sell": {
+          "q25": 0.5449,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2189,
+          "pos_rate": 0.4565,
+          "n": 117679,
+          "n_pos": 53721
+        }
+      },
+      "USDJPY": {
+        "buy": {
+          "q25": 0.551,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2085,
+          "pos_rate": 0.4623,
+          "n": 118691,
+          "n_pos": 54870
+        },
+        "sell": {
+          "q25": 0.5419,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2675,
+          "pos_rate": 0.4464,
+          "n": 116030,
+          "n_pos": 51793
+        }
+      },
+      "EURJPY": {
+        "buy": {
+          "q25": 0.5301,
+          "q50": 1.4165,
+          "q25_all": -1.0,
+          "q50_all": -0.2074,
+          "pos_rate": 0.4606,
+          "n": 118651,
+          "n_pos": 54654
+        },
+        "sell": {
+          "q25": 0.5246,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.264,
+          "pos_rate": 0.4466,
+          "n": 117320,
+          "n_pos": 52399
+        }
+      },
+      "GBPJPY": {
+        "buy": {
+          "q25": 0.5172,
+          "q50": 1.443,
+          "q25_all": -1.0,
+          "q50_all": -0.2142,
+          "pos_rate": 0.4589,
+          "n": 118277,
+          "n_pos": 54278
+        },
+        "sell": {
+          "q25": 0.5214,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2259,
+          "pos_rate": 0.4532,
+          "n": 116299,
+          "n_pos": 52702
+        }
+      },
+      "GBPUSD": {
+        "buy": {
+          "q25": 0.5239,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2123,
+          "pos_rate": 0.4576,
+          "n": 117764,
+          "n_pos": 53894
+        },
+        "sell": {
+          "q25": 0.5331,
+          "q50": 1.6667,
+          "q25_all": -1.0,
+          "q50_all": -0.2048,
+          "pos_rate": 0.4581,
+          "n": 117404,
+          "n_pos": 53785
+        }
+      }
+    }
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T09:47:03.088434+00:00",
+    "model": "gru_lstm",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "37913c13ab29e9150a042538aae9e16dcc437282aa7cd1840ec609643aae1e16",
+    "artifact_hashes": {
+      "gru_lstm/model.pt": "a11731185350fb49b409cfba79f73c917528c4d66d43db4846193cecc9131480",
+      "gru_lstm/weights_manifest.json": "6ff09418eda45db1af3380abc571540ab690dcb328625d33dfe2cd38e9436db2"
+    },
+    "code_commit": "4ab34740a04eb28246289df3cf4939f21f3756c8",
+    "trained": true,
+    "segments": 6,
+    "samples": 971854
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T09:47:43.153760+00:00",
+    "model": "regime_classifier_htf",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "37913c13ab29e9150a042538aae9e16dcc437282aa7cd1840ec609643aae1e16",
+    "artifact_hashes": {},
+    "code_commit": "4ab34740a04eb28246289df3cf4939f21f3756c8",
+    "accuracy": 0.8356,
+    "balanced_accuracy": 0.404,
+    "n_train": 68826,
+    "n_val": 8737,
+    "val_loss": 1.581224,
+    "per_class_accuracy": {
+      "BIAS_UP": 0.145,
+      "BIAS_DOWN": 0.121,
+      "BIAS_NEUTRAL": 0.945
+    },
+    "per_class_precision": {
+      "BIAS_UP": 0.289,
+      "BIAS_DOWN": 0.272,
+      "BIAS_NEUTRAL": 0.875
+    },
+    "per_class_f1": {
+      "BIAS_UP": 0.193,
+      "BIAS_DOWN": 0.168,
+      "BIAS_NEUTRAL": 0.909
+    },
+    "confusion_matrix": [
+      [
+        121,
+        0,
+        711
+      ],
+      [
+        0,
+        43,
+        312
+      ],
+      [
+        298,
+        115,
+        7137
+      ]
+    ],
+    "score_mae": {
+      "bias_up_score": 0.1684,
+      "bias_down_score": 0.101
+    },
+    "score_outputs": [
+      "bias_up_score",
+      "bias_down_score"
+    ],
+    "decision_threshold": 0.4,
+    "decision_margin": 0.15,
+    "htf_precision_floor_passed": false,
+    "timeframe": "4H",
+    "warnings": [
+      "Regime HTF directional score validation below acceptance floor: precision={'BIAS_UP': 0.289, 'BIAS_DOWN': 0.272, 'BIAS_NEUTRAL': 0.875} min_precision=0.500 recall={'BIAS_UP': 0.145, 'BIAS_DOWN': 0.121, 'BIAS_NEUTRAL': 0.945} min_recall=0.100 f1={'BIAS_UP': 0.193, 'BIAS_DOWN': 0.168, 'BIAS_NEUTRAL': 0.909} min_f1=0.150 min_neutral_recall=0.500 weak_precision=['BIAS_UP', 'BIAS_DOWN'] weak_recall=[] weak_f1=[] weak_neutral=False."
+    ],
+    "status": "complete_with_warnings",
+    "fold_id": "train_all"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T09:48:18.743949+00:00",
+    "model": "regime_classifier_ltf",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "37913c13ab29e9150a042538aae9e16dcc437282aa7cd1840ec609643aae1e16",
+    "artifact_hashes": {},
+    "code_commit": "4ab34740a04eb28246289df3cf4939f21f3756c8",
+    "accuracy": 0.9796,
+    "n_train": 262644,
+    "n_val": 30352,
+    "val_loss": 0.000806,
+    "score_mae": {
+      "trend_score": 0.0174,
+      "range_score": 0.0316,
+      "chop_score": 0.0194,
+      "volatility_percentile": 0.0141,
+      "consolidation_score": 0.0195
+    },
+    "score_mse": {
+      "trend_score": 0.00053,
+      "range_score": 0.00166,
+      "chop_score": 0.00061,
+      "volatility_percentile": 0.00036,
+      "consolidation_score": 0.00087
+    },
+    "score_corr": {
+      "trend_score": 0.9947,
+      "range_score": 0.9597,
+      "chop_score": 0.992,
+      "volatility_percentile": 0.9963,
+      "consolidation_score": 0.9909
+    },
+    "group_diagnostics": {
+      "train": {
+        "dollar": {
+          "n": 16632,
+          "score_mae": {
+            "trend_score": 0.0169,
+            "range_score": 0.0314,
+            "chop_score": 0.0194,
+            "volatility_percentile": 0.0137,
+            "consolidation_score": 0.0199
+          },
+          "target_score_mean": {
+            "trend_score": 0.491,
+            "range_score": 0.2347,
+            "chop_score": 0.4613,
+            "volatility_percentile": 0.3824,
+            "consolidation_score": 0.186
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4937,
+            "range_score": 0.2327,
+            "chop_score": 0.4584,
+            "volatility_percentile": 0.3795,
+            "consolidation_score": 0.1839
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              3602,
+              52,
+              0,
+              3,
+              0,
+              0,
+              122
+            ],
+            [
+              5,
+              98,
+              0,
+              0,
+              0,
+              3,
+              4
+            ],
+            [
+              0,
+              0,
+              193,
+              11,
+              39,
+              0,
+              217
+            ],
+            [
+              2,
+              0,
+              5,
+              551,
+              29,
+              0,
+              102
+            ],
+            [
+              0,
+              0,
+              40,
+              21,
+              3044,
+              0,
+              211
+            ],
+            [
+              0,
+              19,
+              0,
+              0,
+              7,
+              57,
+              45
+            ],
+            [
+              169,
+              12,
+              70,
+              42,
+              46,
+              4,
+              7807
+            ]
+          ]
+        },
+        "gold": {
+          "n": 8420,
+          "score_mae": {
+            "trend_score": 0.0168,
+            "range_score": 0.032,
+            "chop_score": 0.0197,
+            "volatility_percentile": 0.0144,
+            "consolidation_score": 0.0202
+          },
+          "target_score_mean": {
+            "trend_score": 0.4883,
+            "range_score": 0.2355,
+            "chop_score": 0.4652,
+            "volatility_percentile": 0.3772,
+            "consolidation_score": 0.1919
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4918,
+            "range_score": 0.2332,
+            "chop_score": 0.4617,
+            "volatility_percentile": 0.3736,
+            "consolidation_score": 0.1895
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              1802,
+              28,
+              0,
+              0,
+              0,
+              0,
+              55
+            ],
+            [
+              4,
+              51,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            [
+              0,
+              0,
+              91,
+              11,
+              24,
+              0,
+              118
+            ],
+            [
+              1,
+              0,
+              2,
+              336,
+              16,
+              0,
+              61
+            ],
+            [
+              0,
+              0,
+              20,
+              26,
+              1541,
+              0,
+              117
+            ],
+            [
+              0,
+              14,
+              0,
+              0,
+              5,
+              40,
+              22
+            ],
+            [
+              77,
+              4,
+              51,
+              19,
+              32,
+              0,
+              3851
+            ]
+          ]
+        },
+        "jpy": {
+          "n": 24948,
+          "score_mae": {
+            "trend_score": 0.0169,
+            "range_score": 0.0315,
+            "chop_score": 0.0193,
+            "volatility_percentile": 0.0145,
+            "consolidation_score": 0.0197
+          },
+          "target_score_mean": {
+            "trend_score": 0.4904,
+            "range_score": 0.2338,
+            "chop_score": 0.4653,
+            "volatility_percentile": 0.3826,
+            "consolidation_score": 0.1905
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4929,
+            "range_score": 0.2316,
+            "chop_score": 0.4618,
+            "volatility_percentile": 0.3793,
+            "consolidation_score": 0.1876
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              5359,
+              110,
+              0,
+              1,
+              0,
+              0,
+              176
+            ],
+            [
+              10,
+              170,
+              0,
+              0,
+              0,
+              1,
+              6
+            ],
+            [
+              0,
+              0,
+              235,
+              18,
+              74,
+              0,
+              320
+            ],
+            [
+              4,
+              0,
+              3,
+              1075,
+              60,
+              0,
+              172
+            ],
+            [
+              0,
+              0,
+              42,
+              70,
+              4644,
+              0,
+              359
+            ],
+            [
+              0,
+              33,
+              0,
+              0,
+              16,
+              90,
+              84
+            ],
+            [
+              237,
+              13,
+              97,
+              80,
+              101,
+              2,
+              11286
+            ]
+          ]
+        }
+      },
+      "validation": {
+        "dollar": {
+          "n": 10093,
+          "score_mae": {
+            "trend_score": 0.0177,
+            "range_score": 0.0322,
+            "chop_score": 0.0195,
+            "volatility_percentile": 0.0137,
+            "consolidation_score": 0.0191
+          },
+          "target_score_mean": {
+            "trend_score": 0.4863,
+            "range_score": 0.2392,
+            "chop_score": 0.4622,
+            "volatility_percentile": 0.3804,
+            "consolidation_score": 0.1814
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4891,
+            "range_score": 0.2356,
+            "chop_score": 0.4603,
+            "volatility_percentile": 0.3773,
+            "consolidation_score": 0.1801
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              2304,
+              21,
+              0,
+              1,
+              0,
+              0,
+              86
+            ],
+            [
+              4,
+              45,
+              0,
+              0,
+              0,
+              3,
+              1
+            ],
+            [
+              0,
+              0,
+              114,
+              7,
+              39,
+              0,
+              156
+            ],
+            [
+              0,
+              0,
+              1,
+              339,
+              21,
+              0,
+              62
+            ],
+            [
+              0,
+              0,
+              25,
+              29,
+              1893,
+              0,
+              103
+            ],
+            [
+              0,
+              12,
+              0,
+              0,
+              2,
+              36,
+              27
+            ],
+            [
+              76,
+              6,
+              37,
+              42,
+              39,
+              3,
+              4559
+            ]
+          ]
+        },
+        "gold": {
+          "n": 5117,
+          "score_mae": {
+            "trend_score": 0.0165,
+            "range_score": 0.0307,
+            "chop_score": 0.0193,
+            "volatility_percentile": 0.0143,
+            "consolidation_score": 0.0199
+          },
+          "target_score_mean": {
+            "trend_score": 0.4973,
+            "range_score": 0.2307,
+            "chop_score": 0.4563,
+            "volatility_percentile": 0.3818,
+            "consolidation_score": 0.1828
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4994,
+            "range_score": 0.2302,
+            "chop_score": 0.4544,
+            "volatility_percentile": 0.3782,
+            "consolidation_score": 0.1807
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              1113,
+              12,
+              0,
+              0,
+              0,
+              0,
+              42
+            ],
+            [
+              3,
+              30,
+              0,
+              0,
+              0,
+              1,
+              1
+            ],
+            [
+              0,
+              0,
+              66,
+              3,
+              12,
+              0,
+              90
+            ],
+            [
+              0,
+              0,
+              2,
+              225,
+              7,
+              0,
+              21
+            ],
+            [
+              0,
+              0,
+              13,
+              12,
+              791,
+              0,
+              71
+            ],
+            [
+              0,
+              6,
+              0,
+              0,
+              4,
+              23,
+              17
+            ],
+            [
+              57,
+              2,
+              30,
+              27,
+              22,
+              0,
+              2414
+            ]
+          ]
+        },
+        "jpy": {
+          "n": 15142,
+          "score_mae": {
+            "trend_score": 0.0176,
+            "range_score": 0.0314,
+            "chop_score": 0.0193,
+            "volatility_percentile": 0.0144,
+            "consolidation_score": 0.0196
+          },
+          "target_score_mean": {
+            "trend_score": 0.495,
+            "range_score": 0.2297,
+            "chop_score": 0.4582,
+            "volatility_percentile": 0.3808,
+            "consolidation_score": 0.1868
+          },
+          "pred_score_mean": {
+            "trend_score": 0.4966,
+            "range_score": 0.2271,
+            "chop_score": 0.4561,
+            "volatility_percentile": 0.3776,
+            "consolidation_score": 0.1841
+          },
+          "trade_states": [
+            "TRADEABLE_TREND",
+            "TRADEABLE_TREND_HIGH_VOL",
+            "RANGE",
+            "CONSOLIDATION",
+            "NO_TRADE_CHOP",
+            "NO_TRADE_EXTREME_VOL",
+            "NO_TRADE_UNCERTAIN"
+          ],
+          "confusion": [
+            [
+              3354,
+              49,
+              0,
+              1,
+              0,
+              0,
+              114
+            ],
+            [
+              7,
+              100,
+              0,
+              0,
+              0,
+              3,
+              5
+            ],
+            [
+              0,
+              0,
+              148,
+              14,
+              43,
+              0,
+              179
+            ],
+            [
+              4,
+              0,
+              3,
+              688,
+              29,
+              0,
+              103
+            ],
+            [
+              0,
+              0,
+              35,
+              32,
+              2551,
+              0,
+              199
+            ],
+            [
+              0,
+              18,
+              0,
+              0,
+              7,
+              54,
+              43
+            ],
+            [
+              126,
+              10,
+              65,
+              42,
+              62,
+              3,
+              7051
+            ]
+          ]
+        }
+      }
+    },
+    "score_outputs": [
+      "trend_score",
+      "range_score",
+      "chop_score",
+      "volatility_percentile",
+      "consolidation_score"
+    ],
+    "timeframe": "1H",
+    "warnings": [],
+    "status": "complete",
+    "fold_id": "train_all"
+  },
+  {
+    "run_id": "",
+    "timestamp": "2026-05-11T09:48:18.748013+00:00",
+    "model": "regime_classifier",
+    "retrain_data_split": "train",
+    "retrain_rolling_fold": "latest",
+    "regime_rolling_folds": "latest",
+    "split_summary_hash": "2886f4ec73486b28db23f14b1be5e8c9e51f8272018bea56d83ba240088dfbb0",
+    "journal_sha256": "37913c13ab29e9150a042538aae9e16dcc437282aa7cd1840ec609643aae1e16",
+    "artifact_hashes": {
+      "regime_htf.pkl": "f1ccd2bdafed5c6c6c0fe6027f69ba3c863728e0b4b42dbfa72e80164c6fe327",
+      "regime_ltf.pkl": "3628a23f0e2ae7c9ccff613cc5c69cbaed0abb87bb9e26062bf33bb5b90d6852"
+    },
+    "code_commit": "4ab34740a04eb28246289df3cf4939f21f3756c8",
+    "trained": true,
+    "samples": 370559,
+    "folds": [
+      null
+    ],
+    "results": {
+      "train_all": {
+        "HTF": {
+          "accuracy": 0.8356,
+          "balanced_accuracy": 0.404,
+          "n_train": 68826,
+          "n_val": 8737,
+          "val_loss": 1.581224,
+          "per_class_accuracy": {
+            "BIAS_UP": 0.145,
+            "BIAS_DOWN": 0.121,
+            "BIAS_NEUTRAL": 0.945
+          },
+          "per_class_precision": {
+            "BIAS_UP": 0.289,
+            "BIAS_DOWN": 0.272,
+            "BIAS_NEUTRAL": 0.875
+          },
+          "per_class_f1": {
+            "BIAS_UP": 0.193,
+            "BIAS_DOWN": 0.168,
+            "BIAS_NEUTRAL": 0.909
+          },
+          "confusion_matrix": [
+            [
+              121,
+              0,
+              711
+            ],
+            [
+              0,
+              43,
+              312
+            ],
+            [
+              298,
+              115,
+              7137
+            ]
+          ],
+          "score_mae": {
+            "bias_up_score": 0.1684,
+            "bias_down_score": 0.101
+          },
+          "score_outputs": [
+            "bias_up_score",
+            "bias_down_score"
+          ],
+          "decision_threshold": 0.4,
+          "decision_margin": 0.15,
+          "htf_precision_floor_passed": false,
+          "timeframe": "4H",
+          "warnings": [
+            "Regime HTF directional score validation below acceptance floor: precision={'BIAS_UP': 0.289, 'BIAS_DOWN': 0.272, 'BIAS_NEUTRAL': 0.875} min_precision=0.500 recall={'BIAS_UP': 0.145, 'BIAS_DOWN': 0.121, 'BIAS_NEUTRAL': 0.945} min_recall=0.100 f1={'BIAS_UP': 0.193, 'BIAS_DOWN': 0.168, 'BIAS_NEUTRAL': 0.909} min_f1=0.150 min_neutral_recall=0.500 weak_precision=['BIAS_UP', 'BIAS_DOWN'] weak_recall=[] weak_f1=[] weak_neutral=False."
+          ],
+          "status": "complete_with_warnings"
+        },
+        "LTF": {
+          "accuracy": 0.9796,
+          "n_train": 262644,
+          "n_val": 30352,
+          "val_loss": 0.000806,
+          "score_mae": {
+            "trend_score": 0.0174,
+            "range_score": 0.0316,
+            "chop_score": 0.0194,
+            "volatility_percentile": 0.0141,
+            "consolidation_score": 0.0195
+          },
+          "score_mse": {
+            "trend_score": 0.00053,
+            "range_score": 0.00166,
+            "chop_score": 0.00061,
+            "volatility_percentile": 0.00036,
+            "consolidation_score": 0.00087
+          },
+          "score_corr": {
+            "trend_score": 0.9947,
+            "range_score": 0.9597,
+            "chop_score": 0.992,
+            "volatility_percentile": 0.9963,
+            "consolidation_score": 0.9909
+          },
+          "group_diagnostics": {
+            "train": {
+              "dollar": {
+                "n": 16632,
+                "score_mae": {
+                  "trend_score": 0.0169,
+                  "range_score": 0.0314,
+                  "chop_score": 0.0194,
+                  "volatility_percentile": 0.0137,
+                  "consolidation_score": 0.0199
+                },
+                "target_score_mean": {
+                  "trend_score": 0.491,
+                  "range_score": 0.2347,
+                  "chop_score": 0.4613,
+                  "volatility_percentile": 0.3824,
+                  "consolidation_score": 0.186
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4937,
+                  "range_score": 0.2327,
+                  "chop_score": 0.4584,
+                  "volatility_percentile": 0.3795,
+                  "consolidation_score": 0.1839
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    3602,
+                    52,
+                    0,
+                    3,
+                    0,
+                    0,
+                    122
+                  ],
+                  [
+                    5,
+                    98,
+                    0,
+                    0,
+                    0,
+                    3,
+                    4
+                  ],
+                  [
+                    0,
+                    0,
+                    193,
+                    11,
+                    39,
+                    0,
+                    217
+                  ],
+                  [
+                    2,
+                    0,
+                    5,
+                    551,
+                    29,
+                    0,
+                    102
+                  ],
+                  [
+                    0,
+                    0,
+                    40,
+                    21,
+                    3044,
+                    0,
+                    211
+                  ],
+                  [
+                    0,
+                    19,
+                    0,
+                    0,
+                    7,
+                    57,
+                    45
+                  ],
+                  [
+                    169,
+                    12,
+                    70,
+                    42,
+                    46,
+                    4,
+                    7807
+                  ]
+                ]
+              },
+              "gold": {
+                "n": 8420,
+                "score_mae": {
+                  "trend_score": 0.0168,
+                  "range_score": 0.032,
+                  "chop_score": 0.0197,
+                  "volatility_percentile": 0.0144,
+                  "consolidation_score": 0.0202
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4883,
+                  "range_score": 0.2355,
+                  "chop_score": 0.4652,
+                  "volatility_percentile": 0.3772,
+                  "consolidation_score": 0.1919
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4918,
+                  "range_score": 0.2332,
+                  "chop_score": 0.4617,
+                  "volatility_percentile": 0.3736,
+                  "consolidation_score": 0.1895
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    1802,
+                    28,
+                    0,
+                    0,
+                    0,
+                    0,
+                    55
+                  ],
+                  [
+                    4,
+                    51,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1
+                  ],
+                  [
+                    0,
+                    0,
+                    91,
+                    11,
+                    24,
+                    0,
+                    118
+                  ],
+                  [
+                    1,
+                    0,
+                    2,
+                    336,
+                    16,
+                    0,
+                    61
+                  ],
+                  [
+                    0,
+                    0,
+                    20,
+                    26,
+                    1541,
+                    0,
+                    117
+                  ],
+                  [
+                    0,
+                    14,
+                    0,
+                    0,
+                    5,
+                    40,
+                    22
+                  ],
+                  [
+                    77,
+                    4,
+                    51,
+                    19,
+                    32,
+                    0,
+                    3851
+                  ]
+                ]
+              },
+              "jpy": {
+                "n": 24948,
+                "score_mae": {
+                  "trend_score": 0.0169,
+                  "range_score": 0.0315,
+                  "chop_score": 0.0193,
+                  "volatility_percentile": 0.0145,
+                  "consolidation_score": 0.0197
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4904,
+                  "range_score": 0.2338,
+                  "chop_score": 0.4653,
+                  "volatility_percentile": 0.3826,
+                  "consolidation_score": 0.1905
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4929,
+                  "range_score": 0.2316,
+                  "chop_score": 0.4618,
+                  "volatility_percentile": 0.3793,
+                  "consolidation_score": 0.1876
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    5359,
+                    110,
+                    0,
+                    1,
+                    0,
+                    0,
+                    176
+                  ],
+                  [
+                    10,
+                    170,
+                    0,
+                    0,
+                    0,
+                    1,
+                    6
+                  ],
+                  [
+                    0,
+                    0,
+                    235,
+                    18,
+                    74,
+                    0,
+                    320
+                  ],
+                  [
+                    4,
+                    0,
+                    3,
+                    1075,
+                    60,
+                    0,
+                    172
+                  ],
+                  [
+                    0,
+                    0,
+                    42,
+                    70,
+                    4644,
+                    0,
+                    359
+                  ],
+                  [
+                    0,
+                    33,
+                    0,
+                    0,
+                    16,
+                    90,
+                    84
+                  ],
+                  [
+                    237,
+                    13,
+                    97,
+                    80,
+                    101,
+                    2,
+                    11286
+                  ]
+                ]
+              }
+            },
+            "validation": {
+              "dollar": {
+                "n": 10093,
+                "score_mae": {
+                  "trend_score": 0.0177,
+                  "range_score": 0.0322,
+                  "chop_score": 0.0195,
+                  "volatility_percentile": 0.0137,
+                  "consolidation_score": 0.0191
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4863,
+                  "range_score": 0.2392,
+                  "chop_score": 0.4622,
+                  "volatility_percentile": 0.3804,
+                  "consolidation_score": 0.1814
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4891,
+                  "range_score": 0.2356,
+                  "chop_score": 0.4603,
+                  "volatility_percentile": 0.3773,
+                  "consolidation_score": 0.1801
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    2304,
+                    21,
+                    0,
+                    1,
+                    0,
+                    0,
+                    86
+                  ],
+                  [
+                    4,
+                    45,
+                    0,
+                    0,
+                    0,
+                    3,
+                    1
+                  ],
+                  [
+                    0,
+                    0,
+                    114,
+                    7,
+                    39,
+                    0,
+                    156
+                  ],
+                  [
+                    0,
+                    0,
+                    1,
+                    339,
+                    21,
+                    0,
+                    62
+                  ],
+                  [
+                    0,
+                    0,
+                    25,
+                    29,
+                    1893,
+                    0,
+                    103
+                  ],
+                  [
+                    0,
+                    12,
+                    0,
+                    0,
+                    2,
+                    36,
+                    27
+                  ],
+                  [
+                    76,
+                    6,
+                    37,
+                    42,
+                    39,
+                    3,
+                    4559
+                  ]
+                ]
+              },
+              "gold": {
+                "n": 5117,
+                "score_mae": {
+                  "trend_score": 0.0165,
+                  "range_score": 0.0307,
+                  "chop_score": 0.0193,
+                  "volatility_percentile": 0.0143,
+                  "consolidation_score": 0.0199
+                },
+                "target_score_mean": {
+                  "trend_score": 0.4973,
+                  "range_score": 0.2307,
+                  "chop_score": 0.4563,
+                  "volatility_percentile": 0.3818,
+                  "consolidation_score": 0.1828
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4994,
+                  "range_score": 0.2302,
+                  "chop_score": 0.4544,
+                  "volatility_percentile": 0.3782,
+                  "consolidation_score": 0.1807
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    1113,
+                    12,
+                    0,
+                    0,
+                    0,
+                    0,
+                    42
+                  ],
+                  [
+                    3,
+                    30,
+                    0,
+                    0,
+                    0,
+                    1,
+                    1
+                  ],
+                  [
+                    0,
+                    0,
+                    66,
+                    3,
+                    12,
+                    0,
+                    90
+                  ],
+                  [
+                    0,
+                    0,
+                    2,
+                    225,
+                    7,
+                    0,
+                    21
+                  ],
+                  [
+                    0,
+                    0,
+                    13,
+                    12,
+                    791,
+                    0,
+                    71
+                  ],
+                  [
+                    0,
+                    6,
+                    0,
+                    0,
+                    4,
+                    23,
+                    17
+                  ],
+                  [
+                    57,
+                    2,
+                    30,
+                    27,
+                    22,
+                    0,
+                    2414
+                  ]
+                ]
+              },
+              "jpy": {
+                "n": 15142,
+                "score_mae": {
+                  "trend_score": 0.0176,
+                  "range_score": 0.0314,
+                  "chop_score": 0.0193,
+                  "volatility_percentile": 0.0144,
+                  "consolidation_score": 0.0196
+                },
+                "target_score_mean": {
+                  "trend_score": 0.495,
+                  "range_score": 0.2297,
+                  "chop_score": 0.4582,
+                  "volatility_percentile": 0.3808,
+                  "consolidation_score": 0.1868
+                },
+                "pred_score_mean": {
+                  "trend_score": 0.4966,
+                  "range_score": 0.2271,
+                  "chop_score": 0.4561,
+                  "volatility_percentile": 0.3776,
+                  "consolidation_score": 0.1841
+                },
+                "trade_states": [
+                  "TRADEABLE_TREND",
+                  "TRADEABLE_TREND_HIGH_VOL",
+                  "RANGE",
+                  "CONSOLIDATION",
+                  "NO_TRADE_CHOP",
+                  "NO_TRADE_EXTREME_VOL",
+                  "NO_TRADE_UNCERTAIN"
+                ],
+                "confusion": [
+                  [
+                    3354,
+                    49,
+                    0,
+                    1,
+                    0,
+                    0,
+                    114
+                  ],
+                  [
+                    7,
+                    100,
+                    0,
+                    0,
+                    0,
+                    3,
+                    5
+                  ],
+                  [
+                    0,
+                    0,
+                    148,
+                    14,
+                    43,
+                    0,
+                    179
+                  ],
+                  [
+                    4,
+                    0,
+                    3,
+                    688,
+                    29,
+                    0,
+                    103
+                  ],
+                  [
+                    0,
+                    0,
+                    35,
+                    32,
+                    2551,
+                    0,
+                    199
+                  ],
+                  [
+                    0,
+                    18,
+                    0,
+                    0,
+                    7,
+                    54,
+                    43
+                  ],
+                  [
+                    126,
+                    10,
+                    65,
+                    42,
+                    62,
+                    3,
+                    7051
+                  ]
+                ]
+              }
+            }
+          },
+          "score_outputs": [
+            "trend_score",
+            "range_score",
+            "chop_score",
+            "volatility_percentile",
+            "consolidation_score"
+          ],
+          "timeframe": "1H",
+          "warnings": [],
+          "status": "complete"
+        }
+      }
+    }
   }
 ]
